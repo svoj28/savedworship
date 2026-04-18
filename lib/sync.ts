@@ -12,7 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
  * 3. Conflict resolution: Server-side timestamps win (last-write-wins)
  */
 
-const TABLES = ['artists', 'chord_lists', 'songs', 'lineups', 'lineup_items', 'messages']
+const TABLES = ['artists', 'chord_lists', 'songs', 'lineups', 'lineup_items', 'messages', 'file_droppers', 'important_announcements', 'version_droppers']
 
 interface SyncLog {
   table: string

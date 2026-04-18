@@ -22,6 +22,8 @@ import NoteDetailScreen from './screens/NoteDetailScreen'
 import MetronomeScreen from './screens/MetronomeScreen'
 import ManualTransposeScreen from './screens/ManualTransposeScreen'
 import PersonalNotesScreen from './screens/PersonalNotesScreen'
+import ManagementScreen from './screens/ManagementScreen'
+import ConversationScreen from './screens/ConversationScreen'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
@@ -128,7 +130,7 @@ function PersonalNotesStack() {
 }
 
 /**
- * App Tab Navigator - Main authenticated screens (Chords, Notes)
+ * App Tab Navigator - Main authenticated screens (Chords, Notes, Management, Conversation)
  */
 function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean) => void }) {
   return (
@@ -151,6 +153,10 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean)
             iconName = focused ? 'musical-notes' : 'musical-notes-outline'
           } else if (route.name === 'PersonalNotesTab') {
             iconName = focused ? 'shield' : 'shield-outline'
+          } else if (route.name === 'ManagementTab') {
+            iconName = focused ? 'settings' : 'settings-outline'
+          } else if (route.name === 'ConversationTab') {
+            iconName = focused ? 'chatbubbles' : 'chatbubbles-outline'
           } else {
             iconName = 'ellipse'
           }
@@ -173,6 +179,20 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean)
         component={PersonalNotesStack}
         options={{
           title: 'Notes',
+        }}
+      />
+      <Tab.Screen
+        name="ManagementTab"
+        component={ManagementScreen}
+        options={{
+          title: 'Management',
+        }}
+      />
+      <Tab.Screen
+        name="ConversationTab"
+        component={ConversationScreen}
+        options={{
+          title: 'Conversation',
         }}
       />
     </Tab.Navigator>

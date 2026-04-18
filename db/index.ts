@@ -6,7 +6,7 @@
  */
 
 import * as SQLite from 'expo-sqlite'
-import { Artist, ChordList, Song, Lineup, LineupItem, Message } from './models'
+import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper } from './models'
 
 let dbInstance: SQLite.SQLiteDatabase | null = null
 
@@ -75,6 +75,41 @@ export async function initializeDatabase() {
         receiver_id TEXT NOT NULL,
         text TEXT NOT NULL,
         created_at INTEGER,
+        updated_at INTEGER,
+        is_deleted INTEGER DEFAULT 0,
+        edited_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS file_droppers (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        file_url TEXT NOT NULL,
+        description TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS important_announcements (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at INTEGER,
+        updated_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS version_droppers (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        youtube_url TEXT NOT NULL,
+        description TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
         _synced INTEGER DEFAULT 0
       );
 
@@ -85,12 +120,40 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_lineups_user_id ON lineups(user_id);
       CREATE INDEX IF NOT EXISTS idx_lineup_items_lineup_id ON lineup_items(lineup_id);
       CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
+      CREATE INDEX IF NOT EXISTS idx_file_droppers_user_id ON file_droppers(user_id);
+      CREATE INDEX IF NOT EXISTS idx_announcements_user_id ON important_announcements(user_id);
+      CREATE INDEX IF NOT EXISTS idx_version_droppers_user_id ON version_droppers(user_id);
     `)
 
     // Add content column to chord_lists if it doesn't exist (for personal notes)
     try {
       await dbInstance.execAsync(`
         ALTER TABLE chord_lists ADD COLUMN content TEXT;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    // Add missing columns to messages table for edit/delete functionality
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE messages ADD COLUMN updated_at INTEGER;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE messages ADD COLUMN is_deleted INTEGER DEFAULT 0;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE messages ADD COLUMN edited_at INTEGER;
       `)
     } catch (e) {
       // Column already exists, ignore error

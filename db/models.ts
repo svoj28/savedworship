@@ -60,5 +60,40 @@ export interface Message {
   receiverId: string
   text: string
   createdAt: number
+  updatedAt: number
+  isDeleted: boolean
+  editedAt?: number
+  synced: boolean
+}
+
+export interface FileDropper {
+  id: string
+  title: string
+  userId: string
+  fileUrl: string
+  description?: string
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
+export interface ImportantAnnouncement {
+  id: string
+  title: string
+  userId: string
+  content: string
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
+export interface VersionDropper {
+  id: string
+  title: string
+  userId: string
+  youtubeUrl: string
+  description?: string
+  createdAt: number
+  updatedAt: number
   synced: boolean
 }

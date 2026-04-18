@@ -5,7 +5,7 @@
  */
 
 import { getDatabase, execute, query, queryOne, transaction } from './index'
-import { Artist, ChordList, Song, Lineup, LineupItem, Message } from './models'
+import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper } from './models'
 import uuid from 'react-native-uuid'
 
 // Artist queries
@@ -149,10 +149,25 @@ export async function createMessage(data: Omit<Message, 'id'>): Promise<Message>
   const id = uuid.v4()
   const message = { id, ...data }
   await execute(
-    'INSERT INTO messages (id, sender_id, receiver_id, text, created_at, _synced) VALUES (?, ?, ?, ?, ?, ?)',
-    [message.id, message.senderId, message.receiverId, message.text, message.createdAt, message.synced ? 1 : 0]
+    'INSERT INTO messages (id, sender_id, receiver_id, text, created_at, updated_at, is_deleted, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [message.id, message.senderId, message.receiverId, message.text, message.createdAt, message.updatedAt, message.isDeleted ? 1 : 0, message.synced ? 1 : 0]
   )
   return message
+}
+
+export async function editMessage(id: string, newText: string): Promise<void> {
+  const editedAt = Date.now()
+  await execute(
+    'UPDATE messages SET text = ?, updated_at = ?, edited_at = ?, _synced = 0 WHERE id = ?',
+    [newText, editedAt, editedAt, id]
+  )
+}
+
+export async function deleteMessage(id: string): Promise<void> {
+  await execute(
+    'UPDATE messages SET is_deleted = 1, updated_at = ?, _synced = 0 WHERE id = ?',
+    [Date.now(), id]
+  )
 }
 
 export async function getUnsyncedRecords(table: string): Promise<any[]> {
@@ -232,6 +247,162 @@ function mapMessage(row: any): Message {
     receiverId: row.receiver_id,
     text: row.text,
     createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at,
+    isDeleted: Boolean(row.is_deleted),
+    editedAt: row.edited_at || undefined,
     synced: Boolean(row._synced),
   }
 }
+
+// File Dropper queries
+export async function createFileDropper(data: Omit<FileDropper, 'id'>): Promise<FileDropper> {
+  const id = uuid.v4()
+  const file = { id, ...data }
+  await execute(
+    'INSERT INTO file_droppers (id, title, user_id, file_url, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [file.id, file.title, file.userId, file.fileUrl, file.description || '', file.createdAt, file.updatedAt, file.synced ? 1 : 0]
+  )
+  return file
+}
+
+export async function getFileDropperById(id: string): Promise<FileDropper | null> {
+  const result = await queryOne('SELECT * FROM file_droppers WHERE id = ?', [id])
+  return result ? mapFileDropper(result) : null
+}
+
+export async function getFileDroppersByUserId(userId: string): Promise<FileDropper[]> {
+  const results = await query('SELECT * FROM file_droppers WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  return results.map(mapFileDropper)
+}
+
+export async function updateFileDropper(id: string, data: Partial<FileDropper>): Promise<void> {
+  const updates = Object.entries(data)
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  const values = Object.values(data)
+  
+  await execute(
+    `UPDATE file_droppers SET ${updates}, updated_at = ? WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
+export async function deleteFileDropper(id: string): Promise<void> {
+  await execute('DELETE FROM file_droppers WHERE id = ?', [id])
+}
+
+// Important Announcement queries
+export async function createImportantAnnouncement(data: Omit<ImportantAnnouncement, 'id'>): Promise<ImportantAnnouncement> {
+  const id = uuid.v4()
+  const announcement = { id, ...data }
+  await execute(
+    'INSERT INTO important_announcements (id, title, user_id, content, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [announcement.id, announcement.title, announcement.userId, announcement.content, announcement.createdAt, announcement.updatedAt, announcement.synced ? 1 : 0]
+  )
+  return announcement
+}
+
+export async function getAnnouncementById(id: string): Promise<ImportantAnnouncement | null> {
+  const result = await queryOne('SELECT * FROM important_announcements WHERE id = ?', [id])
+  return result ? mapImportantAnnouncement(result) : null
+}
+
+export async function getAnnouncementsByUserId(userId: string): Promise<ImportantAnnouncement[]> {
+  const results = await query('SELECT * FROM important_announcements WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  return results.map(mapImportantAnnouncement)
+}
+
+export async function updateAnnouncement(id: string, data: Partial<ImportantAnnouncement>): Promise<void> {
+  const updates = Object.entries(data)
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  const values = Object.values(data)
+  
+  await execute(
+    `UPDATE important_announcements SET ${updates}, updated_at = ? WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
+export async function deleteAnnouncement(id: string): Promise<void> {
+  await execute('DELETE FROM important_announcements WHERE id = ?', [id])
+}
+
+// Version Dropper queries
+export async function createVersionDropper(data: Omit<VersionDropper, 'id'>): Promise<VersionDropper> {
+  const id = uuid.v4()
+  const version = { id, ...data }
+  await execute(
+    'INSERT INTO version_droppers (id, title, user_id, youtube_url, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [version.id, version.title, version.userId, version.youtubeUrl, version.description || '', version.createdAt, version.updatedAt, version.synced ? 1 : 0]
+  )
+  return version
+}
+
+export async function getVersionDropperById(id: string): Promise<VersionDropper | null> {
+  const result = await queryOne('SELECT * FROM version_droppers WHERE id = ?', [id])
+  return result ? mapVersionDropper(result) : null
+}
+
+export async function getVersionDroppersByUserId(userId: string): Promise<VersionDropper[]> {
+  const results = await query('SELECT * FROM version_droppers WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  return results.map(mapVersionDropper)
+}
+
+export async function updateVersionDropper(id: string, data: Partial<VersionDropper>): Promise<void> {
+  const updates = Object.entries(data)
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  const values = Object.values(data)
+  
+  await execute(
+    `UPDATE version_droppers SET ${updates}, updated_at = ? WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
+export async function deleteVersionDropper(id: string): Promise<void> {
+  await execute('DELETE FROM version_droppers WHERE id = ?', [id])
+}
+
+// Mapper functions
+function mapFileDropper(row: any): FileDropper {
+  return {
+    id: row.id,
+    title: row.title,
+    userId: row.user_id,
+    fileUrl: row.file_url,
+    description: row.description,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+function mapImportantAnnouncement(row: any): ImportantAnnouncement {
+  return {
+    id: row.id,
+    title: row.title,
+    userId: row.user_id,
+    content: row.content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+function mapVersionDropper(row: any): VersionDropper {
+  return {
+    id: row.id,
+    title: row.title,
+    userId: row.user_id,
+    youtubeUrl: row.youtube_url,
+    description: row.description,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+// Re-export database query helpers for use in screens
+export { query, queryOne, execute, transaction }

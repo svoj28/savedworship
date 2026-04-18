@@ -14,9 +14,11 @@ import {
 import { Picker } from '@react-native-picker/picker'
 import { useFocusEffect } from '@react-navigation/native'
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { Song, ChordList } from '../db/models'
+import { Song, ChordList, Playlist, PlaylistItem } from '../db/models'
 import { transposeText, transposeChord, getAllKeys, getTransposeDistance } from '../lib/transpose'
 import { query, queryOne, execute, transaction } from '../db/index'
+import { getPlaylistsByUserId, getPlaylistItems, updatePlaylistItemPosition } from '../db/queries'
+import { getCurrentUser } from '../lib/auth'
 
 interface Props {
   route: any
@@ -24,6 +26,16 @@ interface Props {
 }
 
 type ViewMode = 'lyrics' | 'chords' | 'both'
+type BrowseMode = 'single' | 'artist' | 'playlist'
+
+interface BrowseItem {
+  id: string
+  title: string
+  type: 'song' | 'chord_list'
+  chordListId?: string
+  songId?: string
+  position?: number
+}
 
 export default function ChordListScreen({ route, navigation }: Props) {
   const { chordListId } = route.params
@@ -35,6 +47,17 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true)
   const [editingModalVisible, setEditingModalVisible] = useState(false)
   const [editingContent, setEditingContent] = useState('')
+  
+  // New state for browse features
+  const [browseMode, setBrowseMode] = useState<BrowseMode>('single')
+  const [browseItems, setBrowseItems] = useState<BrowseItem[]>([])
+  const [currentItemIndex, setCurrentItemIndex] = useState(0)
+  const [isReordering, setIsReordering] = useState(false)
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
+  const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false)
+  const [artistId, setArtistId] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
 
   // Load chord list and songs
   useEffect(() => {
@@ -53,6 +76,15 @@ export default function ChordListScreen({ route, navigation }: Props) {
     try {
       setLoading(true)
       
+      // Get current user
+      const user = await getCurrentUser()
+      if (user) {
+        setUserId(user.id)
+        // Load playlists
+        const userPlaylists = await getPlaylistsByUserId(user.id)
+        setPlaylists(userPlaylists)
+      }
+      
       // Load the chord list
       const listRow: any = await queryOne('SELECT * FROM chord_lists WHERE id = ?', [chordListId])
       if (listRow) {
@@ -66,12 +98,11 @@ export default function ChordListScreen({ route, navigation }: Props) {
           updatedAt: listRow.updated_at,
           synced: Boolean(listRow._synced),
         })
+        setArtistId(listRow.artist_id)
       }
 
       // Load songs in this chord list
-      console.log('Loading songs for chord list:', chordListId)
       const songRows: any[] = await query('SELECT * FROM songs WHERE chord_list_id = ? ORDER BY title', [chordListId])
-      console.log('Loaded songs:', (songRows || []).length)
       
       const mapped: Song[] = (songRows || []).map(row => ({
         id: row.id,
@@ -85,8 +116,19 @@ export default function ChordListScreen({ route, navigation }: Props) {
       }))
       setSongs(mapped)
 
+      // Set initial browse items
+      const initialItems: BrowseItem[] = mapped.map(song => ({
+        id: song.id,
+        title: song.title,
+        type: 'song',
+        songId: song.id,
+        chordListId: song.chordListId,
+      }))
+      setBrowseItems(initialItems)
+
       if (mapped.length > 0) {
         setSelectedSongId(mapped[0].id)
+        setCurrentItemIndex(0)
         setTransposeToKey(mapped[0].key || 'C')
       }
     } catch (err) {
@@ -97,7 +139,164 @@ export default function ChordListScreen({ route, navigation }: Props) {
     }
   }
 
+  const loadArtistSongs = async () => {
+    if (!artistId) return
+    try {
+      const songRows: any[] = await query(
+        `SELECT s.* FROM songs s
+         JOIN chord_lists cl ON s.chord_list_id = cl.id
+         WHERE cl.artist_id = ? AND cl.is_private = 0
+         ORDER BY s.title`,
+        [artistId]
+      )
+      
+      const mapped: Song[] = (songRows || []).map(row => ({
+        id: row.id,
+        chordListId: row.chord_list_id,
+        title: row.title,
+        content: row.content,
+        key: row.key,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        synced: Boolean(row._synced),
+      }))
+
+      const items: BrowseItem[] = mapped.map(song => ({
+        id: song.id,
+        title: `${song.title} (${song.key || 'C'})`,
+        type: 'song',
+        songId: song.id,
+        chordListId: song.chordListId,
+      }))
+
+      setBrowseItems(items)
+      if (items.length > 0) {
+        setCurrentItemIndex(0)
+        setSelectedSongId(items[0].id)
+      }
+    } catch (err) {
+      console.error('Error loading artist songs:', err)
+      Alert.alert('Error', 'Failed to load artist songs')
+    }
+  }
+
+  const loadPlaylistSongs = async (playlistId: string) => {
+    try {
+      const playlistItems = await getPlaylistItems(playlistId)
+      
+      // Create browse items with position info
+      const items: BrowseItem[] = playlistItems.map((item, idx) => ({
+        id: item.id,
+        title: `${idx + 1}. ${item.songId ? `Song ${item.songId.substring(0, 8)}` : `Chord List ${item.chordListId?.substring(0, 8)}`}`,
+        type: item.songId ? 'song' : 'chord_list',
+        songId: item.songId,
+        chordListId: item.chordListId,
+        position: item.position,
+      }))
+
+      setBrowseItems(items)
+      setSelectedPlaylistId(playlistId)
+      if (items.length > 0) {
+        setCurrentItemIndex(0)
+        if (items[0].songId) {
+          setSelectedSongId(items[0].songId)
+        }
+      }
+      setShowPlaylistModal(false)
+    } catch (err) {
+      console.error('Error loading playlist songs:', err)
+      Alert.alert('Error', 'Failed to load playlist')
+    }
+  }
+
+  const handleBrowseModeChange = (mode: BrowseMode) => {
+    setBrowseMode(mode)
+    setIsReordering(false)
+    
+    if (mode === 'single') {
+      const initialItems: BrowseItem[] = songs.map(song => ({
+        id: song.id,
+        title: song.title,
+        type: 'song',
+        songId: song.id,
+        chordListId: song.chordListId,
+      }))
+      setBrowseItems(initialItems)
+      if (initialItems.length > 0) {
+        setCurrentItemIndex(0)
+        setSelectedSongId(initialItems[0].id)
+      }
+    } else if (mode === 'artist') {
+      loadArtistSongs()
+    } else if (mode === 'playlist') {
+      setShowPlaylistModal(true)
+    }
+  }
+
+  const handlePreviousItem = () => {
+    if (currentItemIndex > 0) {
+      const newIndex = currentItemIndex - 1
+      setCurrentItemIndex(newIndex)
+      if (browseItems[newIndex].songId) {
+        setSelectedSongId(browseItems[newIndex].songId!)
+      }
+    }
+  }
+
+  const handleNextItem = () => {
+    if (currentItemIndex < browseItems.length - 1) {
+      const newIndex = currentItemIndex + 1
+      setCurrentItemIndex(newIndex)
+      if (browseItems[newIndex].songId) {
+        setSelectedSongId(browseItems[newIndex].songId!)
+      }
+    }
+  }
+
+  const handleMoveUp = async () => {
+    if (currentItemIndex === 0 || !selectedPlaylistId) return
+    
+    try {
+      const currentItem = browseItems[currentItemIndex]
+      const previousItem = browseItems[currentItemIndex - 1]
+      
+      // Swap positions
+      const tempPosition = currentItem.position || currentItemIndex
+      await updatePlaylistItemPosition(currentItem.id, previousItem.position || currentItemIndex - 1)
+      await updatePlaylistItemPosition(previousItem.id, tempPosition)
+      
+      // Reload playlist
+      await loadPlaylistSongs(selectedPlaylistId)
+      setCurrentItemIndex(currentItemIndex - 1)
+    } catch (err) {
+      console.error('Error moving item up:', err)
+      Alert.alert('Error', 'Failed to reorder items')
+    }
+  }
+
+  const handleMoveDown = async () => {
+    if (currentItemIndex >= browseItems.length - 1 || !selectedPlaylistId) return
+    
+    try {
+      const currentItem = browseItems[currentItemIndex]
+      const nextItem = browseItems[currentItemIndex + 1]
+      
+      // Swap positions
+      const tempPosition = currentItem.position || currentItemIndex
+      await updatePlaylistItemPosition(currentItem.id, nextItem.position || currentItemIndex + 1)
+      await updatePlaylistItemPosition(nextItem.id, tempPosition)
+      
+      // Reload playlist
+      await loadPlaylistSongs(selectedPlaylistId)
+      setCurrentItemIndex(currentItemIndex + 1)
+    } catch (err) {
+      console.error('Error moving item down:', err)
+      Alert.alert('Error', 'Failed to reorder items')
+    }
+  }
+
   const selectedSong = songs.find((s) => s.id === selectedSongId)
+  const currentBrowseItem = browseItems[currentItemIndex]
 
   // Process content based on view mode and transpose
   const getDisplayContent = () => {
@@ -106,7 +305,6 @@ export default function ChordListScreen({ route, navigation }: Props) {
     let content = selectedSong.content
     const originalKey = selectedSong.key || 'C'
     
-    // Calculate semitone distance from original key to target key
     const semitones = getTransposeDistance(originalKey, transposeToKey)
     
     if (semitones !== 0) {
@@ -114,10 +312,8 @@ export default function ChordListScreen({ route, navigation }: Props) {
     }
 
     if (viewMode === 'lyrics') {
-      // Remove chords: [chord] -> ""
       return content.replace(/\[([^\]]+)\]/g, '').trim()
     } else if (viewMode === 'chords') {
-      // Show only chords
       const chords: string[] = []
       const chordMatches = content.matchAll(/\[([^\]]+)\]/g)
       for (const match of chordMatches) {
@@ -125,13 +321,11 @@ export default function ChordListScreen({ route, navigation }: Props) {
       }
       return `Chords in this song: ${chords.join(', ')}`
     } else {
-      // 'both' - show lyrics with chords
       return content
     }
   }
 
   const handleAddSong = () => {
-    // Navigate to add song screen
     navigation.navigate('AddSong', { chordListId })
   }
 
@@ -166,7 +360,6 @@ export default function ChordListScreen({ route, navigation }: Props) {
         onPress: async () => {
           try {
             await execute('DELETE FROM songs WHERE id = ?', [selectedSong.id])
-            // Navigate back to ChordListsHomeScreen
             navigation.navigate('ChordListsTab', { screen: 'ChordListsHome' })
           } catch (err) {
             Alert.alert('Error', 'Failed to delete song')
@@ -186,18 +379,86 @@ export default function ChordListScreen({ route, navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header with Title and Position */}
       <View style={styles.header}>
-        <Text style={styles.title}>{chordList?.title || 'Chord List'}</Text>
+        <View>
+          <Text style={styles.title}>{chordList?.title || 'Chord List'}</Text>
+          {browseItems.length > 1 && (
+            <Text style={styles.position}>
+              {currentItemIndex + 1} of {browseItems.length}
+            </Text>
+          )}
+        </View>
       </View>
+
+      {/* Browse Mode Tabs */}
+      <View style={styles.browseModeContainer}>
+        {(['single', 'artist', 'playlist'] as const).map((mode) => (
+          <TouchableOpacity
+            key={mode}
+            style={[styles.browseModeTab, browseMode === mode && styles.browseModeTabActive]}
+            onPress={() => handleBrowseModeChange(mode)}
+          >
+            <Text style={[styles.browseModeText, browseMode === mode && styles.browseModeTextActive]}>
+              {mode === 'single' ? 'Single' : mode === 'artist' ? 'Artist' : 'Playlist'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Navigation Controls for Browse Mode */}
+      {browseItems.length > 1 && (
+        <View style={styles.navigationControls}>
+          <TouchableOpacity
+            style={[styles.navButton, currentItemIndex === 0 && styles.navButtonDisabled]}
+            onPress={handlePreviousItem}
+            disabled={currentItemIndex === 0}
+          >
+            <Ionicons name="chevron-back" size={24} color={currentItemIndex === 0 ? '#ccc' : '#007AFF'} />
+          </TouchableOpacity>
+          
+          <Text style={styles.currentItemTitle}>{currentBrowseItem?.title}</Text>
+          
+          <TouchableOpacity
+            style={[styles.navButton, currentItemIndex >= browseItems.length - 1 && styles.navButtonDisabled]}
+            onPress={handleNextItem}
+            disabled={currentItemIndex >= browseItems.length - 1}
+          >
+            <Ionicons name="chevron-forward" size={24} color={currentItemIndex >= browseItems.length - 1 ? '#ccc' : '#007AFF'} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Reorder Controls for Playlist Mode */}
+      {browseMode === 'playlist' && browseItems.length > 1 && (
+        <View style={styles.reorderControls}>
+          <TouchableOpacity
+            style={[styles.reorderButton, currentItemIndex === 0 && styles.reorderButtonDisabled]}
+            onPress={handleMoveUp}
+            disabled={currentItemIndex === 0}
+          >
+            <Ionicons name="arrow-up" size={20} color={currentItemIndex === 0 ? '#ccc' : '#FF9500'} />
+            <Text style={[styles.reorderButtonText, currentItemIndex === 0 && styles.reorderButtonTextDisabled]}>Move Up</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[styles.reorderButton, currentItemIndex >= browseItems.length - 1 && styles.reorderButtonDisabled]}
+            onPress={handleMoveDown}
+            disabled={currentItemIndex >= browseItems.length - 1}
+          >
+            <Ionicons name="arrow-down" size={20} color={currentItemIndex >= browseItems.length - 1 ? '#ccc' : '#FF9500'} />
+            <Text style={[styles.reorderButtonText, currentItemIndex >= browseItems.length - 1 && styles.reorderButtonTextDisabled]}>Move Down</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* View Mode Buttons */}
       <View style={styles.modeButtons}>
-        {['lyrics', 'chords', 'both'].map((mode) => (
+        {(['lyrics', 'chords', 'both'] as const).map((mode) => (
           <TouchableOpacity
             key={mode}
             style={[styles.modeButton, viewMode === mode && styles.modeButtonActive]}
-            onPress={() => setViewMode(mode as ViewMode)}
+            onPress={() => setViewMode(mode)}
           >
             <Text
               style={[
@@ -229,7 +490,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
         </View>
       </View>
 
-      {/* Song Selection */}
+      {/* Song Selection Picker */}
       {songs.length > 0 && (
         <View style={styles.songPicker}>
           <Picker
@@ -265,6 +526,39 @@ export default function ChordListScreen({ route, navigation }: Props) {
       >
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
+
+      {/* Playlist Selection Modal */}
+      <Modal visible={showPlaylistModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.playlistModalContent}>
+            <Text style={styles.modalTitle}>Select Playlist</Text>
+            <ScrollView style={styles.playlistList}>
+              {playlists.length === 0 ? (
+                <Text style={styles.emptyText}>No playlists available</Text>
+              ) : (
+                playlists.map((playlist) => (
+                  <TouchableOpacity
+                    key={playlist.id}
+                    style={styles.playlistOption}
+                    onPress={() => loadPlaylistSongs(playlist.id)}
+                  >
+                    <Text style={styles.playlistOptionText}>{playlist.title}</Text>
+                  </TouchableOpacity>
+                ))
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={() => {
+                setShowPlaylistModal(false)
+                setBrowseMode('single')
+              }}
+            >
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Edit Modal */}
       <Modal visible={editingModalVisible} animationType="slide">
@@ -310,6 +604,96 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  position: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.7)',
+    marginTop: 4,
+  },
+  browseModeContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    paddingHorizontal: 5,
+    paddingVertical: 8,
+  },
+  browseModeTab: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    marginHorizontal: 3,
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+  },
+  browseModeTabActive: {
+    backgroundColor: '#007AFF',
+  },
+  browseModeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+  },
+  browseModeTextActive: {
+    color: '#fff',
+  },
+  navigationControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    gap: 10,
+  },
+  navButton: {
+    padding: 8,
+    borderRadius: 6,
+  },
+  navButtonDisabled: {
+    opacity: 0.5,
+  },
+  currentItemTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
+    paddingHorizontal: 10,
+  },
+  reorderControls: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    gap: 10,
+  },
+  reorderButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 6,
+    backgroundColor: '#FFF3E0',
+    gap: 6,
+  },
+  reorderButtonDisabled: {
+    opacity: 0.5,
+    backgroundColor: '#f0f0f0',
+  },
+  reorderButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FF9500',
+  },
+  reorderButtonTextDisabled: {
+    color: '#999',
   },
   modeButtons: {
     flexDirection: 'row',
@@ -428,6 +812,52 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  playlistModalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 15,
+    paddingBottom: 20,
+    maxHeight: '70%',
+  },
+  playlistList: {
+    maxHeight: 300,
+    paddingHorizontal: 15,
+  },
+  playlistOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  playlistOptionText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    paddingVertical: 20,
+  },
+  modalCloseButton: {
+    marginHorizontal: 15,
+    marginTop: 15,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+  },
+  modalCloseText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+  },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -448,14 +878,14 @@ const styles = StyleSheet.create({
   },
   modalSave: {
     fontSize: 16,
-    color: '#007AFF',
     fontWeight: 'bold',
+    color: '#007AFF',
   },
   modalInput: {
     flex: 1,
     padding: 15,
     fontSize: 16,
-    textAlignVertical: 'top',
     color: '#333',
+    textAlignVertical: 'top',
   },
 })

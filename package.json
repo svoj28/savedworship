@@ -21,6 +21,8 @@
     "@supabase/supabase-js": "^2.103.3",
     "expo": "~54.0.33",
     "expo-av": "~16.0.8",
+    "expo-document-picker": "^55.0.13",
+    "expo-image-picker": "^55.0.18",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",

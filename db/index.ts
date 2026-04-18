@@ -113,6 +113,50 @@ export async function initializeDatabase() {
         _synced INTEGER DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS contacts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        contact_user_id TEXT NOT NULL,
+        contact_email TEXT,
+        contact_name TEXT,
+        status TEXT DEFAULT 'pending',
+        created_at INTEGER,
+        updated_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL UNIQUE,
+        nickname TEXT,
+        bio TEXT,
+        avatar_url TEXT,
+        instruments TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS playlists (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS playlist_items (
+        id TEXT PRIMARY KEY,
+        playlist_id TEXT NOT NULL,
+        chord_list_id TEXT,
+        song_id TEXT,
+        position INTEGER,
+        created_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
       CREATE INDEX IF NOT EXISTS idx_artists_user_id ON artists(user_id);
       CREATE INDEX IF NOT EXISTS idx_chord_lists_user_id ON chord_lists(user_id);
       CREATE INDEX IF NOT EXISTS idx_chord_lists_artist_id ON chord_lists(artist_id);
@@ -123,6 +167,11 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_file_droppers_user_id ON file_droppers(user_id);
       CREATE INDEX IF NOT EXISTS idx_announcements_user_id ON important_announcements(user_id);
       CREATE INDEX IF NOT EXISTS idx_version_droppers_user_id ON version_droppers(user_id);
+      CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
+      CREATE INDEX IF NOT EXISTS idx_playlists_user_id ON playlists(user_id);
+      CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist_id ON playlist_items(playlist_id);
+      CREATE INDEX IF NOT EXISTS idx_contacts_contact_user_id ON contacts(contact_user_id);
+      CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
     `)
 
     // Add content column to chord_lists if it doesn't exist (for personal notes)

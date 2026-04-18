@@ -97,3 +97,47 @@ export interface VersionDropper {
   updatedAt: number
   synced: boolean
 }
+
+export interface Contact {
+  id: string
+  userId: string
+  contactUserId: string
+  contactEmail?: string
+  contactName?: string
+  status: 'pending' | 'accepted' | 'blocked'
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
+export interface UserProfile {
+  id: string
+  userId: string
+  nickname?: string
+  bio?: string
+  avatarUrl?: string
+  instruments?: string
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
+export interface Playlist {
+  id: string
+  userId: string
+  title: string
+  description?: string
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
+export interface PlaylistItem {
+  id: string
+  playlistId: string
+  chordListId?: string
+  songId?: string
+  position: number
+  createdAt: number
+  synced: boolean
+}

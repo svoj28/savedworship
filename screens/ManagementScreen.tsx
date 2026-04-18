@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native'
+import * as DocumentPicker from 'expo-document-picker'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { getCurrentUser } from '../lib/auth'
 import {
@@ -40,6 +41,7 @@ interface FormData {
   content?: string
   youtubeUrl?: string
   fileUrl?: string
+  fileName?: string
 }
 
 export default function ManagementScreen() {
@@ -57,6 +59,7 @@ export default function ManagementScreen() {
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState<FormData>({})
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [pickingFile, setPickingFile] = useState(false)
 
   useEffect(() => {
     const loadUser = async () => {
@@ -103,8 +106,31 @@ export default function ManagementScreen() {
       content: item.content || '',
       youtubeUrl: item.youtubeUrl || '',
       fileUrl: item.fileUrl || '',
+      fileName: item.fileName || '',
     })
     setShowForm(true)
+  }
+
+  const handlePickFile = async () => {
+    try {
+      setPickingFile(true)
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+      })
+
+      if (result.type === 'success') {
+        setFormData({
+          ...formData,
+          fileUrl: result.uri,
+          fileName: result.name,
+        })
+      }
+    } catch (err) {
+      console.error('Error picking file:', err)
+      Alert.alert('Error', 'Failed to pick file')
+    } finally {
+      setPickingFile(false)
+    }
   }
 
   const handleSubmit = async () => {
@@ -339,13 +365,47 @@ export default function ManagementScreen() {
               )}
 
               {activeSection === 'files' && (
-                <TextInput
-                  style={styles.input}
-                  placeholder="File URL"
-                  value={formData.fileUrl || ''}
-                  onChangeText={(text) => setFormData({ ...formData, fileUrl: text })}
-                  placeholderTextColor="#999"
-                />
+                <>
+                  <View style={styles.filePickerContainer}>
+                    <TouchableOpacity
+                      style={styles.filePickerButton}
+                      onPress={handlePickFile}
+                      disabled={pickingFile}
+                    >
+                      <Ionicons name="folder-open" size={20} color="#fff" />
+                      <Text style={styles.filePickerButtonText}>
+                        {pickingFile ? 'Picking...' : 'Pick File from Device'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {formData.fileName && (
+                    <View style={styles.selectedFileInfo}>
+                      <Ionicons name="document" size={18} color="#007AFF" />
+                      <View style={styles.fileNameContainer}>
+                        <Text style={styles.selectedFileName}>{formData.fileName}</Text>
+                        {formData.fileUrl && (
+                          <Text style={styles.selectedFileUrl} numberOfLines={1}>
+                            {formData.fileUrl}
+                          </Text>
+                        )}
+                      </View>
+                      <TouchableOpacity onPress={() => setFormData({ ...formData, fileUrl: '', fileName: '' })}>
+                        <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  <Text style={styles.orText}>Or enter manually:</Text>
+
+                  <TextInput
+                    style={styles.input}
+                    placeholder="File URL (if not using picker)"
+                    value={formData.fileUrl || ''}
+                    onChangeText={(text) => setFormData({ ...formData, fileUrl: text })}
+                    placeholderTextColor="#999"
+                  />
+                </>
               )}
 
               {activeSection === 'versions' && (
@@ -645,5 +705,54 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     paddingTop: 12,
     minHeight: 100,
+  },
+  filePickerContainer: {
+    marginBottom: 12,
+  },
+  filePickerButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  filePickerButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  selectedFileInfo: {
+    backgroundColor: '#F0F8FF',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  fileNameContainer: {
+    flex: 1,
+  },
+  selectedFileName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 2,
+  },
+  selectedFileUrl: {
+    fontSize: 11,
+    color: '#666',
+  },
+  orText: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 10,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
 })

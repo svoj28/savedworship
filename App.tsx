@@ -21,9 +21,13 @@ import AddSongScreen from './screens/AddSongScreen'
 import NoteDetailScreen from './screens/NoteDetailScreen'
 import MetronomeScreen from './screens/MetronomeScreen'
 import ManualTransposeScreen from './screens/ManualTransposeScreen'
+import KeyPitchChangerScreen from './screens/KeyPitchChangerScreen'
+import VocalRemoverScreen from './screens/VocalRemoverScreen'
 import PersonalNotesScreen from './screens/PersonalNotesScreen'
 import ManagementScreen from './screens/ManagementScreen'
 import ConversationScreen from './screens/ConversationScreen'
+import AddContactsScreen from './screens/AddContactsScreen'
+import EditAccountScreen from './screens/EditAccountScreen'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
@@ -224,7 +228,27 @@ function AppTabs({ drawerVisible, setDrawerVisible }: { drawerVisible: boolean; 
         <Stack.Screen
           name="ManualTranspose"
           component={ManualTransposeScreen}
-          options={{ title: 'Manual Transpose', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
+          options={{ title: 'Transpose Chords', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
+        />
+        <Stack.Screen
+          name="KeyPitchChanger"
+          component={KeyPitchChangerScreen}
+          options={{ title: 'Key/Pitch Changer', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
+        />
+        <Stack.Screen
+          name="VocalRemover"
+          component={VocalRemoverScreen}
+          options={{ title: 'Vocal & Instrument Remover', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
+        />
+        <Stack.Screen
+          name="AddContacts"
+          component={AddContactsScreen}
+          options={{ title: 'Contacts', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
+        />
+        <Stack.Screen
+          name="EditAccount"
+          component={EditAccountScreen}
+          options={{ title: 'Edit Profile', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
         />
       </Stack.Navigator>
 

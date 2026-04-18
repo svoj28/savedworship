@@ -5,7 +5,7 @@
  */
 
 import { getDatabase, execute, query, queryOne, transaction } from './index'
-import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper } from './models'
+import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, Contact, UserProfile, Playlist, PlaylistItem } from './models'
 import uuid from 'react-native-uuid'
 
 // Artist queries
@@ -365,6 +365,89 @@ export async function deleteVersionDropper(id: string): Promise<void> {
   await execute('DELETE FROM version_droppers WHERE id = ?', [id])
 }
 
+// Contact queries
+export async function addContact(data: Omit<Contact, 'id'>): Promise<Contact> {
+  const id = uuid.v4()
+  const contact = { id, ...data }
+  await execute(
+    'INSERT INTO contacts (id, user_id, contact_user_id, contact_email, contact_name, status, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [contact.id, contact.userId, contact.contactUserId, contact.contactEmail || '', contact.contactName || '', contact.status, contact.createdAt, contact.updatedAt, contact.synced ? 1 : 0]
+  )
+  return contact
+}
+
+export async function getContactById(id: string): Promise<Contact | null> {
+  const result = await queryOne('SELECT * FROM contacts WHERE id = ?', [id])
+  return result ? mapContact(result) : null
+}
+
+export async function getContactsByUserId(userId: string): Promise<Contact[]> {
+  const results = await query('SELECT * FROM contacts WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  return results.map(mapContact)
+}
+
+export async function getContactByUserIdAndContactUserId(userId: string, contactUserId: string): Promise<Contact | null> {
+  const result = await queryOne(
+    'SELECT * FROM contacts WHERE user_id = ? AND contact_user_id = ?',
+    [userId, contactUserId]
+  )
+  return result ? mapContact(result) : null
+}
+
+export async function updateContact(id: string, data: Partial<Contact>): Promise<void> {
+  const updates = Object.entries(data)
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  const values = Object.values(data)
+  
+  await execute(
+    `UPDATE contacts SET ${updates}, updated_at = ? WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
+export async function deleteContact(id: string): Promise<void> {
+  await execute('DELETE FROM contacts WHERE id = ?', [id])
+}
+
+// User Profile queries
+export async function createUserProfile(data: Omit<UserProfile, 'id'>): Promise<UserProfile> {
+  const id = uuid.v4()
+  const profile = { id, ...data }
+  await execute(
+    'INSERT INTO user_profiles (id, user_id, nickname, bio, avatar_url, instruments, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [profile.id, profile.userId, profile.nickname || '', profile.bio || '', profile.avatarUrl || '', profile.instruments || '', profile.createdAt, profile.updatedAt, profile.synced ? 1 : 0]
+  )
+  return profile
+}
+
+export async function getUserProfileByUserId(userId: string): Promise<UserProfile | null> {
+  const result = await queryOne('SELECT * FROM user_profiles WHERE user_id = ?', [userId])
+  return result ? mapUserProfile(result) : null
+}
+
+export async function updateUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {
+  const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'synced' && key !== 'createdAt' && key !== 'updatedAt')
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  
+  if (!updates) return
+  
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'synced' && key !== 'createdAt' && key !== 'updatedAt')
+    .map(([, val]) => val)
+  
+  await execute(
+    `UPDATE user_profiles SET ${updates}, updated_at = ? WHERE user_id = ?`,
+    [...values, Date.now(), userId]
+  )
+}
+
+export async function deleteUserProfile(userId: string): Promise<void> {
+  await execute('DELETE FROM user_profiles WHERE user_id = ?', [userId])
+}
+
 // Mapper functions
 function mapFileDropper(row: any): FileDropper {
   return {
@@ -400,6 +483,130 @@ function mapVersionDropper(row: any): VersionDropper {
     description: row.description,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+function mapContact(row: any): Contact {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    contactUserId: row.contact_user_id,
+    contactEmail: row.contact_email,
+    contactName: row.contact_name,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+function mapUserProfile(row: any): UserProfile {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    nickname: row.nickname,
+    bio: row.bio,
+    avatarUrl: row.avatar_url,
+    instruments: row.instruments,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+// Playlist queries
+export async function createPlaylist(data: Omit<Playlist, 'id'>): Promise<Playlist> {
+  const id = uuid.v4()
+  const playlist = { id, ...data }
+  await execute(
+    'INSERT INTO playlists (id, user_id, title, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [playlist.id, playlist.userId, playlist.title, playlist.description || '', playlist.createdAt, playlist.updatedAt, playlist.synced ? 1 : 0]
+  )
+  return playlist
+}
+
+export async function getPlaylistById(id: string): Promise<Playlist | null> {
+  const result = await queryOne('SELECT * FROM playlists WHERE id = ?', [id])
+  return result ? mapPlaylist(result) : null
+}
+
+export async function getPlaylistsByUserId(userId: string): Promise<Playlist[]> {
+  const results = await query('SELECT * FROM playlists WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  return results.map(mapPlaylist)
+}
+
+export async function updatePlaylist(id: string, data: Partial<Playlist>): Promise<void> {
+  const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'synced' && key !== 'createdAt')
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  
+  if (!updates) return
+  
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'synced' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  await execute(
+    `UPDATE playlists SET ${updates}, updated_at = ? WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
+export async function deletePlaylist(id: string): Promise<void> {
+  await transaction(async () => {
+    // Delete all playlist items
+    await execute('DELETE FROM playlist_items WHERE playlist_id = ?', [id])
+    // Delete playlist
+    await execute('DELETE FROM playlists WHERE id = ?', [id])
+  })
+}
+
+// Playlist Item queries
+export async function addToPlaylist(data: Omit<PlaylistItem, 'id'>): Promise<PlaylistItem> {
+  const id = uuid.v4()
+  const item = { id, ...data }
+  await execute(
+    'INSERT INTO playlist_items (id, playlist_id, chord_list_id, song_id, position, created_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [item.id, item.playlistId, item.chordListId || null, item.songId || null, item.position, item.createdAt, item.synced ? 1 : 0]
+  )
+  return item
+}
+
+export async function getPlaylistItems(playlistId: string): Promise<PlaylistItem[]> {
+  const results = await query('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC', [playlistId])
+  return results.map(mapPlaylistItem)
+}
+
+export async function removeFromPlaylist(id: string): Promise<void> {
+  await execute('DELETE FROM playlist_items WHERE id = ?', [id])
+}
+
+export async function updatePlaylistItemPosition(id: string, position: number): Promise<void> {
+  await execute('UPDATE playlist_items SET position = ? WHERE id = ?', [position, id])
+}
+
+function mapPlaylist(row: any): Playlist {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    description: row.description,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+function mapPlaylistItem(row: any): PlaylistItem {
+  return {
+    id: row.id,
+    playlistId: row.playlist_id,
+    chordListId: row.chord_list_id,
+    songId: row.song_id,
+    position: row.position,
+    createdAt: row.created_at,
     synced: Boolean(row._synced),
   }
 }

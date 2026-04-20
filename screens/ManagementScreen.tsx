@@ -36,7 +36,7 @@ import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../d
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
 
 interface FormData {
-  title: string
+  title?: string
   description?: string
   content?: string
   youtubeUrl?: string
@@ -118,12 +118,13 @@ export default function ManagementScreen() {
         type: '*/*',
       })
 
-      if (result.type === 'success') {
-        setFormData({
-          ...formData,
-          fileUrl: result.uri,
-          fileName: result.name,
-        })
+      if (!result.canceled && result.assets.length > 0) {
+        const selectedAsset = result.assets[0]
+        setFormData((prev) => ({
+          ...prev,
+          fileUrl: selectedAsset.uri,
+          fileName: selectedAsset.name,
+        }))
       }
     } catch (err) {
       console.error('Error picking file:', err)

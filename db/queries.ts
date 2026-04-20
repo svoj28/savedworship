@@ -137,6 +137,24 @@ export async function getLineupsByUserId(userId: string): Promise<Lineup[]> {
   return results.map(mapLineup)
 }
 
+export async function updateLineup(id: string, data: Partial<Lineup>): Promise<void> {
+  const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'synced' && key !== 'createdAt')
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+
+  if (!updates) return
+
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'synced' && key !== 'createdAt')
+    .map(([, val]) => val)
+
+  await execute(
+    `UPDATE lineups SET ${updates}, updated_at = ? WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
 export async function deleteLineup(id: string): Promise<void> {
   await transaction(async () => {
     await execute('DELETE FROM lineup_items WHERE lineup_id = ?', [id])

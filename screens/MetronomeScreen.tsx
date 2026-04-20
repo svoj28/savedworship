@@ -17,7 +17,7 @@ export default function MetronomeScreen() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [tapTempo, setTapTempo] = useState<number[]>([])
   const [soundObject, setSoundObject] = useState<Audio.Sound | null>(null)
-  const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const beatCountRef = useRef(0)
 
   // Initialize audio

@@ -43,6 +43,7 @@ function AuthStack() {
 
   return (
     <Stack.Navigator
+      id="auth-stack"
       screenOptions={{
         headerShown: false,
       }}
@@ -84,6 +85,7 @@ function AuthStack() {
 function ChordListsStack() {
   return (
     <Stack.Navigator
+      id="chord-lists-stack"
       screenOptions={{
         headerTintColor: '#007AFF',
         headerShown: true,
@@ -114,6 +116,7 @@ function ChordListsStack() {
 function PersonalNotesStack() {
   return (
     <Stack.Navigator
+      id="personal-notes-stack"
       screenOptions={{
         headerTintColor: '#007AFF',
         headerShown: true,
@@ -139,6 +142,7 @@ function PersonalNotesStack() {
 function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean) => void }) {
   return (
     <Tab.Navigator
+      id="main-tabs"
       screenOptions={({ route }) => ({
         headerShown: true,
         headerTintColor: '#007AFF',
@@ -210,6 +214,7 @@ function AppTabs({ drawerVisible, setDrawerVisible }: { drawerVisible: boolean; 
   return (
     <>
       <Stack.Navigator
+        id="app-stack"
         screenOptions={{
           headerShown: false,
         }}

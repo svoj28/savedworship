@@ -288,4 +288,4 @@ export async function transaction(callback: (tx: SQLite.SQLiteDatabase) => Promi
 }
 
 // Export model types for TypeScript
-export { Artist, ChordList, Song, Lineup, LineupItem, Message }
+export type { Artist, ChordList, Song, Lineup, LineupItem, Message }

@@ -27,6 +27,7 @@ export interface ChordList {
 export interface Song {
   id: string
   chordListId: string
+  userId: string
   title: string
   content: string
   key: string
@@ -49,6 +50,7 @@ export interface LineupItem {
   id: string
   lineupId: string
   songId: string
+  userId: string
   position: number
   createdAt: number
   synced: boolean
@@ -135,6 +137,7 @@ export interface Playlist {
 export interface PlaylistItem {
   id: string
   playlistId: string
+  userId: string
   chordListId?: string
   songId?: string
   position: number

@@ -208,6 +208,56 @@ export async function initializeDatabase() {
       // Column already exists, ignore error
     }
 
+    // Add user_id columns for sync support
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE songs ADD COLUMN user_id TEXT DEFAULT '';
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN user_id TEXT DEFAULT '';
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE messages ADD COLUMN user_id TEXT DEFAULT '';
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE playlist_items ADD COLUMN user_id TEXT DEFAULT '';
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    // Add updated_at columns for proper sync
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN updated_at INTEGER;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE playlist_items ADD COLUMN updated_at INTEGER;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
     console.log('Database initialized successfully')
     return dbInstance
   } catch (err) {

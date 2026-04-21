@@ -1,5 +1,5 @@
 // screens/VocalRemoverScreen.tsx
-import React, { useState, useEffect, useRef, lazy } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   ScrollView,
@@ -20,7 +20,6 @@ import {
   RemovalProgress,
 } from '../lib/audioRemovalService'
 import { Audio } from 'expo-av'
-import VocalRemoverAIScreen from './VocalRemoverAIScreen'
 
 type RemovalMode = 'vocal' | 'instrument'
 
@@ -40,7 +39,7 @@ const instruments: Instrument[] = [
 ]
 
 export default function VocalRemoverScreen() {
-  const [currentTab, setCurrentTab] = useState<'processor' | 'ai' | 'tools'>('processor')
+  const [currentTab, setCurrentTab] = useState<'processor' | 'tools'>('processor')
   const [removalMode, setRemovalMode] = useState<RemovalMode>('vocal')
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentType | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -55,20 +54,14 @@ export default function VocalRemoverScreen() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [playbackPosition, setPlaybackPosition] = useState(0)
   const [playbackDuration, setPlaybackDuration] = useState(0)
-  
-  // Use useRef to persist the service instance across renders
-  const removalServiceRef = useRef(new AudioRemovalService('http://192.168.18.21:3000'))
-  const removalService = removalServiceRef.current
+  const removalService = new AudioRemovalService('http://192.168.18.21:3000')
 
   useEffect(() => {
-    console.log('🎵 VocalRemoverScreen mounted - removalService instance created')
-    
     removalService.setProgressCallback((update) => {
       setProgress(update)
     })
 
     return () => {
-      console.log('🎵 VocalRemoverScreen unmounting - cleaning up removalService')
       removalService.cleanup()
     }
   }, [])
@@ -188,16 +181,6 @@ export default function VocalRemoverScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.tab, currentTab === 'ai' && styles.tabActive]}
-          onPress={() => setCurrentTab('ai')}
-        >
-          <Ionicons name="sparkles" size={18} color={currentTab === 'ai' ? '#9B59B6' : '#999'} />
-          <Text style={[styles.tabText, currentTab === 'ai' && styles.tabTextActive]}>
-            AI Stems
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[styles.tab, currentTab === 'tools' && styles.tabActive]}
           onPress={() => setCurrentTab('tools')}
         >
@@ -307,13 +290,6 @@ export default function VocalRemoverScreen() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                
-                <View style={styles.warningContainer}>
-                  <Ionicons name="alert-circle" size={18} color="#FF9500" />
-                  <Text style={styles.warningText}>
-                    ⚠️ EQ-based removal has limits: instruments with overlapping frequencies may be partially affected. For perfect separation, use AI tools: remove-vocals.com, LALAL.ai, or Demucs.
-                  </Text>
-                </View>
               </View>
             )}
 
@@ -389,10 +365,6 @@ export default function VocalRemoverScreen() {
                 </View>
               </View>
             )}
-          </>
-        ) : currentTab === 'ai' ? (
-          <>
-            <VocalRemoverAIScreen />
           </>
         ) : (
           <>
@@ -703,24 +675,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     lineHeight: 16,
-  },
-  warningContainer: {
-    backgroundColor: '#FFF3E0',
-    borderRadius: 8,
-    padding: 12,
-    marginTop: 12,
-    flexDirection: 'row',
-    gap: 10,
-    alignItems: 'flex-start',
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9500',
-  },
-  warningText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#E65100',
-    lineHeight: 16,
-    fontWeight: '500',
   },
   toolsGrid: {
     gap: 12,

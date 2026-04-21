@@ -20,6 +20,7 @@ import { transposeNote, getNotes } from '../lib/keyDetection'
 import { saveAudioFileLocally, updateAudioFileMetadata } from '../lib/audioFileManager'
 import { pitchShifter } from '../lib/pitchShifter'
 import ProgressBar from '../components/ProgressBar'
+import AIKeyPitchChangerScreen from './AIKeyPitchChangerScreen'
 
 const NOTE_NAMES = getNotes()
 
@@ -66,6 +67,7 @@ export default function KeyPitchChangerScreen() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [fileName, setFileName] = useState<string>('')
   const [localFilePath, setLocalFilePath] = useState<string | null>(null)
+  const [currentTab, setCurrentTab] = useState<'classic' | 'ai'>('classic')
   const [pitchShift, setPitchShift] = useState(0)
   const [tempoAdjustPercent, setTempoAdjustPercent] = useState(0)
   const [currentKey, setCurrentKey] = useState('C')
@@ -630,22 +632,47 @@ export default function KeyPitchChangerScreen() {
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
+      {/* Tab Navigation */}
+      <View style={styles.tabContainer}>
+        <TouchableOpacity
+          style={[styles.tab, currentTab === 'classic' && styles.tabActive]}
+          onPress={() => setCurrentTab('classic')}
+        >
+          <Ionicons name="musical-notes" size={18} color={currentTab === 'classic' ? '#007AFF' : '#999'} />
+          <Text style={[styles.tabText, currentTab === 'classic' && styles.tabTextActive]}>
+            Classic
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tab, currentTab === 'ai' && styles.tabActive]}
+          onPress={() => setCurrentTab('ai')}
+        >
+          <Ionicons name="sparkles" size={18} color={currentTab === 'ai' ? '#FF9800' : '#999'} />
+          <Text style={[styles.tabText, currentTab === 'ai' && styles.tabTextActive]}>
+            AI Shift
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Key/Pitch Changer</Text>
-          <Text style={styles.subtitle}>Import, detect key, and adjust pitch locally</Text>
-        </View>
+        {currentTab === 'classic' ? (
+          <>
+            {/* Header */}
+            <View style={styles.header}>
+              <Text style={styles.title}>Key/Pitch Changer</Text>
+              <Text style={styles.subtitle}>Import, detect key, and adjust pitch locally</Text>
+            </View>
 
-        {/* File Selection Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>1. Import Audio File</Text>
+            {/* File Selection Section */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>1. Import Audio File</Text>
 
-          <TouchableOpacity style={styles.filePickerButton} onPress={handlePickFile} disabled={isProcessing}>
-            <Ionicons name="cloud-download-outline" size={20} color="#fff" />
-            <Text style={styles.filePickerButtonText}>
-              {isProcessing ? 'Importing...' : 'Import Audio File'}
-            </Text>
+              <TouchableOpacity style={styles.filePickerButton} onPress={handlePickFile} disabled={isProcessing}>
+                <Ionicons name="cloud-download-outline" size={20} color="#fff" />
+                <Text style={styles.filePickerButtonText}>
+                  {isProcessing ? 'Importing...' : 'Import Audio File'}
+                </Text>
           </TouchableOpacity>
 
           {isProcessing && (
@@ -765,7 +792,7 @@ export default function KeyPitchChangerScreen() {
         {/* Pitch Shift Section */}
         {selectedFile && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>3. Adjust Pitch</Text>
+            <Text style={styles.sectionTitle}>3. Adjust Pitch (Tempo Preserved)</Text>
 
             {/* Current Pitch Value */}
             <View style={styles.pitchDisplayContainer}>
@@ -783,13 +810,13 @@ export default function KeyPitchChangerScreen() {
               </View>
             </View>
 
-            {/* Slider */}
+            {/* Pitch Slider - Main Control */}
             <View style={styles.sliderContainer}>
-              <Ionicons name="arrow-down-circle" size={20} color="#FF3B30" />
+              <Ionicons name="arrow-down-circle" size={22} color="#FF3B30" />
               <Slider
                 style={styles.slider}
-                minimumValue={-12}
-                maximumValue={12}
+                minimumValue={-6}
+                maximumValue={6}
                 step={1}
                 value={pitchShift}
                 onValueChange={handlePitchSliderChange}
@@ -797,13 +824,13 @@ export default function KeyPitchChangerScreen() {
                 minimumTrackTintColor="#007AFF"
                 maximumTrackTintColor="#ccc"
               />
-              <Ionicons name="arrow-up-circle" size={20} color="#34C759" />
+              <Ionicons name="arrow-up-circle" size={22} color="#34C759" />
             </View>
 
-            {/* Preset Buttons */}
+            {/* Preset Buttons - Quick Pitch Adjustments */}
             <Text style={styles.presetsTitle}>Quick Adjustments</Text>
             <View style={styles.presetsGrid}>
-              {presets.map((preset) => (
+              {presets.slice(2, 8).map((preset) => (
                 <TouchableOpacity
                   key={preset.semitones}
                   style={[
@@ -829,18 +856,25 @@ export default function KeyPitchChangerScreen() {
               ))}
             </View>
 
+            {/* Tempo Adjustment - Optional */}
             <View style={styles.tempoAdjustContainer}>
-              <Text style={styles.presetsTitle}>Manual Tempo Adjustment</Text>
+              <View style={styles.tempoHeaderContainer}>
+                <Ionicons name="speedometer" size={20} color="#FF9500" />
+                <Text style={styles.tempoAdjustTitle}>Optional: Adjust Tempo</Text>
+              </View>
+              <Text style={styles.tempoDescription}>
+                Pitch is preserved by default. Use this to also change speed.
+              </Text>
 
               <View style={styles.tempoValueRow}>
                 <Text style={styles.tempoValueText}>
                   Tempo: {tempoAdjustPercent > 0 ? '+' : ''}{tempoAdjustPercent}%
                 </Text>
-                <Text style={styles.tempoFactorText}>x{(1 + tempoAdjustPercent / 100).toFixed(3)}</Text>
+                <Text style={styles.tempoFactorText}>Speed: x{(1 + tempoAdjustPercent / 100).toFixed(2)}</Text>
               </View>
 
               <View style={styles.sliderContainer}>
-                <Ionicons name="remove-circle-outline" size={20} color="#FF9500" />
+                <Ionicons name="chevron-back" size={20} color="#FF9500" />
                 <Slider
                   style={styles.slider}
                   minimumValue={MANUAL_TEMPO_MIN_PERCENT}
@@ -849,12 +883,13 @@ export default function KeyPitchChangerScreen() {
                   value={tempoAdjustPercent}
                   onValueChange={handleTempoSliderChange}
                   onSlidingComplete={handleTempoSliderComplete}
-                  minimumTrackTintColor="#34C759"
+                  minimumTrackTintColor="#FF9500"
                   maximumTrackTintColor="#ccc"
                 />
-                <Ionicons name="add-circle-outline" size={20} color="#34C759" />
+                <Ionicons name="chevron-forward" size={20} color="#FF9500" />
               </View>
 
+              {/* Tempo Quick Buttons */}
               <View style={styles.tempoQuickButtons}>
                 {[-10, -5, 0, 5, 10].map((tempoPreset) => (
                   <TouchableOpacity
@@ -877,11 +912,13 @@ export default function KeyPitchChangerScreen() {
                 ))}
               </View>
 
-              <Text style={styles.tempoHintText}>
-                {pitchShiftInfo.canDoPurePitchShift
-                  ? 'Tempo changes are applied manually while preserving pitch.'
-                  : 'Fallback mode: tempo adjustment also nudges pitch.'}
-              </Text>
+              <View style={styles.tempoInfoBox}>
+                <Ionicons name="information-circle" size={16} color="#0A84FF" />
+                <Text style={styles.tempoInfoText}>
+                  ✓ Pitch-only changes preserve the original song speed
+                  <Text style={{ fontWeight: 'bold' }}> (recommended)</Text>
+                </Text>
+              </View>
             </View>
           </View>
         )}
@@ -1052,6 +1089,13 @@ export default function KeyPitchChangerScreen() {
             </Text>
           </TouchableOpacity>
         )}
+          </>
+        ) : (
+          <>
+            {/* AI Pitch Changer Tab */}
+            <AIKeyPitchChangerScreen />
+          </>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   )
@@ -1061,6 +1105,32 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 6,
+  },
+  tabActive: {
+    borderBottomWidth: 3,
+    borderBottomColor: '#007AFF',
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#999',
+  },
+  tabTextActive: {
+    color: '#007AFF',
   },
   content: {
     flex: 1,
@@ -1337,56 +1407,88 @@ const styles = StyleSheet.create({
   },
   tempoAdjustContainer: {
     marginTop: 16,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 12,
+    backgroundColor: '#FFF9E6',
+    borderRadius: 12,
+    padding: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9500',
+  },
+  tempoHeaderContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  tempoAdjustTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+  },
+  tempoDescription: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 12,
+    lineHeight: 16,
   },
   tempoValueRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   tempoValueText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#333',
+    color: '#FF9500',
   },
   tempoFactorText: {
-    fontSize: 12,
-    color: '#34C759',
+    fontSize: 13,
+    color: '#FF9500',
     fontWeight: '600',
   },
   tempoQuickButtons: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    marginTop: 8,
+    marginVertical: 12,
   },
   tempoQuickButton: {
-    backgroundColor: '#F4F6F8',
-    borderRadius: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: '#D0D7DE',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 2,
+    borderColor: '#FF9500',
+    flex: 1,
+    minWidth: '18%',
+    alignItems: 'center',
   },
   tempoQuickButtonActive: {
-    backgroundColor: '#34C759',
-    borderColor: '#34C759',
+    backgroundColor: '#FF9500',
+    borderColor: '#FF9500',
   },
   tempoQuickButtonText: {
     fontSize: 12,
-    color: '#333',
-    fontWeight: '500',
+    color: '#FF9500',
+    fontWeight: '600',
   },
   tempoQuickButtonTextActive: {
     color: '#fff',
   },
-  tempoHintText: {
-    marginTop: 10,
+  tempoInfoBox: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'flex-start',
+  },
+  tempoInfoText: {
+    flex: 1,
     fontSize: 11,
-    color: '#666',
+    color: '#555',
+    lineHeight: 15,
   },
   instructionsSection: {
     backgroundColor: '#FFF3E0',

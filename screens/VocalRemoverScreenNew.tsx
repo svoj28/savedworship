@@ -1,5 +1,5 @@
-// screens/VocalRemoverScreen.tsx
-import React, { useState, useEffect, useRef, lazy } from 'react'
+// screens/VocalRemoverScreenNew.tsx
+import React, { useState, useEffect } from 'react'
 import {
   View,
   ScrollView,
@@ -8,7 +8,9 @@ import {
   TouchableOpacity,
   Alert,
   Linking,
+  Modal,
   ActivityIndicator,
+  Dimensions,
   SafeAreaView,
 } from 'react-native'
 import Slider from '@react-native-community/slider'
@@ -20,7 +22,6 @@ import {
   RemovalProgress,
 } from '../lib/audioRemovalService'
 import { Audio } from 'expo-av'
-import VocalRemoverAIScreen from './VocalRemoverAIScreen'
 
 type RemovalMode = 'vocal' | 'instrument'
 
@@ -39,8 +40,8 @@ const instruments: Instrument[] = [
   { id: 'keyboard', name: 'Keyboard', icon: 'square', color: '#9B59B6' },
 ]
 
-export default function VocalRemoverScreen() {
-  const [currentTab, setCurrentTab] = useState<'processor' | 'ai' | 'tools'>('processor')
+export default function VocalRemoverScreenNew() {
+  const [currentTab, setCurrentTab] = useState<'processor' | 'tools'>('processor')
   const [removalMode, setRemovalMode] = useState<RemovalMode>('vocal')
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentType | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -55,22 +56,18 @@ export default function VocalRemoverScreen() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [playbackPosition, setPlaybackPosition] = useState(0)
   const [playbackDuration, setPlaybackDuration] = useState(0)
-  
-  // Use useRef to persist the service instance across renders
-  const removalServiceRef = useRef(new AudioRemovalService('http://192.168.18.21:3000'))
-  const removalService = removalServiceRef.current
+  const removalService = new AudioRemovalService('http://192.168.18.21:3000')
 
   useEffect(() => {
-    console.log('🎵 VocalRemoverScreen mounted - removalService instance created')
-    
+    return () => {
+      removalService.cleanup()
+    }
+  }, [])
+
+  useEffect(() => {
     removalService.setProgressCallback((update) => {
       setProgress(update)
     })
-
-    return () => {
-      console.log('🎵 VocalRemoverScreen unmounting - cleaning up removalService')
-      removalService.cleanup()
-    }
   }, [])
 
   const handlePickAudio = async () => {
@@ -188,16 +185,6 @@ export default function VocalRemoverScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.tab, currentTab === 'ai' && styles.tabActive]}
-          onPress={() => setCurrentTab('ai')}
-        >
-          <Ionicons name="sparkles" size={18} color={currentTab === 'ai' ? '#9B59B6' : '#999'} />
-          <Text style={[styles.tabText, currentTab === 'ai' && styles.tabTextActive]}>
-            AI Stems
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[styles.tab, currentTab === 'tools' && styles.tabActive]}
           onPress={() => setCurrentTab('tools')}
         >
@@ -307,13 +294,6 @@ export default function VocalRemoverScreen() {
                     </TouchableOpacity>
                   ))}
                 </View>
-                
-                <View style={styles.warningContainer}>
-                  <Ionicons name="alert-circle" size={18} color="#FF9500" />
-                  <Text style={styles.warningText}>
-                    ⚠️ EQ-based removal has limits: instruments with overlapping frequencies may be partially affected. For perfect separation, use AI tools: remove-vocals.com, LALAL.ai, or Demucs.
-                  </Text>
-                </View>
               </View>
             )}
 
@@ -382,17 +362,13 @@ export default function VocalRemoverScreen() {
                 </View>
 
                 <View style={styles.infoContainer}>
-                  <Ionicons name="information-circle" size={20} color="#FF9500" />
+                  <Ionicons name="information-circle" size={20} color="#17C" />
                   <Text style={styles.infoText}>
-                    The quality of removal depends on your audio file and the processing quality.
+                    The quality of removal depends on your audio file and the tool used.
                   </Text>
                 </View>
               </View>
             )}
-          </>
-        ) : currentTab === 'ai' ? (
-          <>
-            <VocalRemoverAIScreen />
           </>
         ) : (
           <>
@@ -403,6 +379,7 @@ export default function VocalRemoverScreen() {
                 description="Simple & fast vocal removal"
                 features={['Free', 'No signup', 'Fast']}
                 color="#FF6B6B"
+                url="https://www.remove-vocals.com/"
                 onPress={() => handleOpenTool('https://www.remove-vocals.com/')}
               />
 
@@ -411,6 +388,7 @@ export default function VocalRemoverScreen() {
                 description="AI-powered vocal extraction"
                 features={['AI tech', 'High quality', 'Batch']}
                 color="#4ECDC4"
+                url="https://www.vocal-remover.org/"
                 onPress={() => handleOpenTool('https://www.vocal-remover.org/')}
               />
 
@@ -419,6 +397,7 @@ export default function VocalRemoverScreen() {
                 description="Advanced stem separation"
                 features={['Pro quality', 'Multiple stems', 'API']}
                 color="#45B7D1"
+                url="https://www.splitter.ai/"
                 onPress={() => handleOpenTool('https://www.splitter.ai/')}
               />
 
@@ -427,6 +406,7 @@ export default function VocalRemoverScreen() {
                 description="Neural network stem splitter"
                 features={['Neural AI', 'High quality', 'API']}
                 color="#1ABC9C"
+                url="https://www.lalal.ai/"
                 onPress={() => handleOpenTool('https://www.lalal.ai/')}
               />
 
@@ -435,6 +415,7 @@ export default function VocalRemoverScreen() {
                 description="Dedicated karaoke platform"
                 features={['Massive library', 'Pro quality', 'Premium']}
                 color="#F39C12"
+                url="https://www.karaoke-version.com/"
                 onPress={() => handleOpenTool('https://www.karaoke-version.com/')}
               />
 
@@ -443,6 +424,7 @@ export default function VocalRemoverScreen() {
                 description="Professional audio editing"
                 features={['Pro tool', 'Voice isolation', 'Premium']}
                 color="#9B59B6"
+                url="https://www.izotope.com/en/products/rx.html"
                 onPress={() => handleOpenTool('https://www.izotope.com/en/products/rx.html')}
               />
             </View>
@@ -458,10 +440,11 @@ interface ToolCardProps {
   description: string
   features: string[]
   color: string
+  url: string
   onPress: () => void
 }
 
-function ToolCard({ title, description, features, color, onPress }: ToolCardProps) {
+function ToolCard({ title, description, features, color, url, onPress }: ToolCardProps) {
   return (
     <TouchableOpacity style={styles.toolCard} onPress={onPress}>
       <View style={[styles.toolColorBar, { backgroundColor: color }]} />
@@ -703,24 +686,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     lineHeight: 16,
-  },
-  warningContainer: {
-    backgroundColor: '#FFF3E0',
-    borderRadius: 8,
-    padding: 12,
-    marginTop: 12,
-    flexDirection: 'row',
-    gap: 10,
-    alignItems: 'flex-start',
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9500',
-  },
-  warningText: {
-    flex: 1,
-    fontSize: 12,
-    color: '#E65100',
-    lineHeight: 16,
-    fontWeight: '500',
   },
   toolsGrid: {
     gap: 12,

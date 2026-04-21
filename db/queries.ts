@@ -14,9 +14,28 @@ export async function createArtist(data: Omit<Artist, 'id'>): Promise<Artist> {
   const artist = { id, ...data }
   await execute(
     'INSERT INTO artists (id, name, user_id, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?)',
-    [artist.id, artist.name, artist.userId, artist.createdAt, artist.updatedAt, artist.synced ? 1 : 0]
+    [artist.id, artist.name, artist.userId, artist.createdAt, artist.updatedAt, 0]
   )
   return artist
+}
+
+export async function updateArtist(id: string, data: Partial<Artist>): Promise<void> {
+  const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([key]) => `${camelToSnake(key)} = ?`)
+    .join(', ')
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  await execute(
+    `UPDATE artists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
+    [...values, Date.now(), id]
+  )
+}
+
+export async function deleteArtist(id: string): Promise<void> {
+  await execute('DELETE FROM artists WHERE id = ?', [id])
 }
 
 export async function getArtistById(id: string): Promise<Artist | null> {
@@ -35,7 +54,7 @@ export async function createChordList(data: Omit<ChordList, 'id'>): Promise<Chor
   const list = { id, ...data }
   await execute(
     'INSERT INTO chord_lists (id, title, artist_id, user_id, is_private, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [list.id, list.title, list.artistId, list.userId, list.isPrivate ? 1 : 0, list.createdAt, list.updatedAt, list.synced ? 1 : 0]
+    [list.id, list.title, list.artistId, list.userId, list.isPrivate ? 1 : 0, list.createdAt, list.updatedAt, 0]
   )
   return list
 }
@@ -60,12 +79,17 @@ export async function getPrivateChordLists(userId: string): Promise<ChordList[]>
 
 export async function updateChordList(id: string, data: Partial<ChordList>): Promise<void> {
   const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
     .map(([key]) => `${camelToSnake(key)} = ?`)
     .join(', ')
-  const values = Object.values(data)
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  if (!updates) return
   
   await execute(
-    `UPDATE chord_lists SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE chord_lists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -84,8 +108,8 @@ export async function createSong(data: Omit<Song, 'id'>): Promise<Song> {
   const id = uuid.v4()
   const song = { id, ...data }
   await execute(
-    'INSERT INTO songs (id, chord_list_id, title, content, key, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [song.id, song.chordListId, song.title, song.content, song.key, song.createdAt, song.updatedAt, song.synced ? 1 : 0]
+    'INSERT INTO songs (id, chord_list_id, user_id, title, content, key, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [song.id, song.chordListId, song.userId || '', song.title, song.content, song.key, song.createdAt, song.updatedAt, 0]
   )
   return song
 }
@@ -102,12 +126,17 @@ export async function getSongsByChordListId(chordListId: string): Promise<Song[]
 
 export async function updateSong(id: string, data: Partial<Song>): Promise<void> {
   const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'chordListId' && key !== 'createdAt')
     .map(([key]) => `${camelToSnake(key)} = ?`)
     .join(', ')
-  const values = Object.values(data)
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'chordListId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  if (!updates) return
   
   await execute(
-    `UPDATE songs SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE songs SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -122,7 +151,7 @@ export async function createLineup(data: Omit<Lineup, 'id'>): Promise<Lineup> {
   const lineup = { id, ...data }
   await execute(
     'INSERT INTO lineups (id, title, user_id, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [lineup.id, lineup.title, lineup.userId, lineup.description || '', lineup.createdAt, lineup.updatedAt, lineup.synced ? 1 : 0]
+    [lineup.id, lineup.title, lineup.userId, lineup.description || '', lineup.createdAt, lineup.updatedAt, 0]
   )
   return lineup
 }
@@ -150,7 +179,7 @@ export async function updateLineup(id: string, data: Partial<Lineup>): Promise<v
     .map(([, val]) => val)
 
   await execute(
-    `UPDATE lineups SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE lineups SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -167,8 +196,8 @@ export async function createMessage(data: Omit<Message, 'id'>): Promise<Message>
   const id = uuid.v4()
   const message = { id, ...data }
   await execute(
-    'INSERT INTO messages (id, sender_id, receiver_id, text, created_at, updated_at, is_deleted, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [message.id, message.senderId, message.receiverId, message.text, message.createdAt, message.updatedAt, message.isDeleted ? 1 : 0, message.synced ? 1 : 0]
+    'INSERT INTO messages (id, sender_id, receiver_id, user_id, text, created_at, updated_at, is_deleted, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [message.id, message.senderId, message.receiverId, message.senderId, message.text, message.createdAt, message.updatedAt, message.isDeleted ? 1 : 0, 0]
   )
   return message
 }
@@ -226,6 +255,7 @@ function mapSong(row: any): Song {
   return {
     id: row.id,
     chordListId: row.chord_list_id,
+    userId: row.user_id,
     title: row.title,
     content: row.content,
     key: row.key,
@@ -252,6 +282,7 @@ function mapLineupItem(row: any): LineupItem {
     id: row.id,
     lineupId: row.lineup_id,
     songId: row.song_id,
+    userId: row.user_id,
     position: row.position,
     createdAt: row.created_at,
     synced: Boolean(row._synced),
@@ -278,7 +309,7 @@ export async function createFileDropper(data: Omit<FileDropper, 'id'>): Promise<
   const file = { id, ...data }
   await execute(
     'INSERT INTO file_droppers (id, title, user_id, file_url, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [file.id, file.title, file.userId, file.fileUrl, file.description || '', file.createdAt, file.updatedAt, file.synced ? 1 : 0]
+    [file.id, file.title, file.userId, file.fileUrl, file.description || '', file.createdAt, file.updatedAt, 0]
   )
   return file
 }
@@ -295,12 +326,17 @@ export async function getFileDroppersByUserId(userId: string): Promise<FileDropp
 
 export async function updateFileDropper(id: string, data: Partial<FileDropper>): Promise<void> {
   const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
     .map(([key]) => `${camelToSnake(key)} = ?`)
     .join(', ')
-  const values = Object.values(data)
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  if (!updates) return
   
   await execute(
-    `UPDATE file_droppers SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE file_droppers SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -315,7 +351,7 @@ export async function createImportantAnnouncement(data: Omit<ImportantAnnounceme
   const announcement = { id, ...data }
   await execute(
     'INSERT INTO important_announcements (id, title, user_id, content, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [announcement.id, announcement.title, announcement.userId, announcement.content, announcement.createdAt, announcement.updatedAt, announcement.synced ? 1 : 0]
+    [announcement.id, announcement.title, announcement.userId, announcement.content, announcement.createdAt, announcement.updatedAt, 0]
   )
   return announcement
 }
@@ -332,12 +368,17 @@ export async function getAnnouncementsByUserId(userId: string): Promise<Importan
 
 export async function updateAnnouncement(id: string, data: Partial<ImportantAnnouncement>): Promise<void> {
   const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
     .map(([key]) => `${camelToSnake(key)} = ?`)
     .join(', ')
-  const values = Object.values(data)
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  if (!updates) return
   
   await execute(
-    `UPDATE important_announcements SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE important_announcements SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -352,7 +393,7 @@ export async function createVersionDropper(data: Omit<VersionDropper, 'id'>): Pr
   const version = { id, ...data }
   await execute(
     'INSERT INTO version_droppers (id, title, user_id, youtube_url, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [version.id, version.title, version.userId, version.youtubeUrl, version.description || '', version.createdAt, version.updatedAt, version.synced ? 1 : 0]
+    [version.id, version.title, version.userId, version.youtubeUrl, version.description || '', version.createdAt, version.updatedAt, 0]
   )
   return version
 }
@@ -369,12 +410,17 @@ export async function getVersionDroppersByUserId(userId: string): Promise<Versio
 
 export async function updateVersionDropper(id: string, data: Partial<VersionDropper>): Promise<void> {
   const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
     .map(([key]) => `${camelToSnake(key)} = ?`)
     .join(', ')
-  const values = Object.values(data)
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  if (!updates) return
   
   await execute(
-    `UPDATE version_droppers SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE version_droppers SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -389,7 +435,7 @@ export async function addContact(data: Omit<Contact, 'id'>): Promise<Contact> {
   const contact = { id, ...data }
   await execute(
     'INSERT INTO contacts (id, user_id, contact_user_id, contact_email, contact_name, status, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [contact.id, contact.userId, contact.contactUserId, contact.contactEmail || '', contact.contactName || '', contact.status, contact.createdAt, contact.updatedAt, contact.synced ? 1 : 0]
+    [contact.id, contact.userId, contact.contactUserId, contact.contactEmail || '', contact.contactName || '', contact.status, contact.createdAt, contact.updatedAt, 0]
   )
   return contact
 }
@@ -414,12 +460,17 @@ export async function getContactByUserIdAndContactUserId(userId: string, contact
 
 export async function updateContact(id: string, data: Partial<Contact>): Promise<void> {
   const updates = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
     .map(([key]) => `${camelToSnake(key)} = ?`)
     .join(', ')
-  const values = Object.values(data)
+  const values = Object.entries(data)
+    .filter(([key]) => key !== 'id' && key !== 'userId' && key !== 'createdAt')
+    .map(([, val]) => val)
+  
+  if (!updates) return
   
   await execute(
-    `UPDATE contacts SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE contacts SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -434,7 +485,7 @@ export async function createUserProfile(data: Omit<UserProfile, 'id'>): Promise<
   const profile = { id, ...data }
   await execute(
     'INSERT INTO user_profiles (id, user_id, nickname, bio, avatar_url, instruments, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [profile.id, profile.userId, profile.nickname || '', profile.bio || '', profile.avatarUrl || '', profile.instruments || '', profile.createdAt, profile.updatedAt, profile.synced ? 1 : 0]
+    [profile.id, profile.userId, profile.nickname || '', profile.bio || '', profile.avatarUrl || '', profile.instruments || '', profile.createdAt, profile.updatedAt, 0]
   )
   return profile
 }
@@ -457,7 +508,7 @@ export async function updateUserProfile(userId: string, data: Partial<UserProfil
     .map(([, val]) => val)
   
   await execute(
-    `UPDATE user_profiles SET ${updates}, updated_at = ? WHERE user_id = ?`,
+    `UPDATE user_profiles SET ${updates}, updated_at = ?, _synced = 0 WHERE user_id = ?`,
     [...values, Date.now(), userId]
   )
 }
@@ -539,7 +590,7 @@ export async function createPlaylist(data: Omit<Playlist, 'id'>): Promise<Playli
   const playlist = { id, ...data }
   await execute(
     'INSERT INTO playlists (id, user_id, title, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [playlist.id, playlist.userId, playlist.title, playlist.description || '', playlist.createdAt, playlist.updatedAt, playlist.synced ? 1 : 0]
+    [playlist.id, playlist.userId, playlist.title, playlist.description || '', playlist.createdAt, playlist.updatedAt, 0]
   )
   return playlist
 }
@@ -567,7 +618,7 @@ export async function updatePlaylist(id: string, data: Partial<Playlist>): Promi
     .map(([, val]) => val)
   
   await execute(
-    `UPDATE playlists SET ${updates}, updated_at = ? WHERE id = ?`,
+    `UPDATE playlists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
 }
@@ -586,8 +637,8 @@ export async function addToPlaylist(data: Omit<PlaylistItem, 'id'>): Promise<Pla
   const id = uuid.v4()
   const item = { id, ...data }
   await execute(
-    'INSERT INTO playlist_items (id, playlist_id, chord_list_id, song_id, position, created_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [item.id, item.playlistId, item.chordListId || null, item.songId || null, item.position, item.createdAt, item.synced ? 1 : 0]
+    'INSERT INTO playlist_items (id, playlist_id, user_id, chord_list_id, song_id, position, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [item.id, item.playlistId, item.userId || '', item.chordListId || null, item.songId || null, item.position, item.createdAt, item.createdAt, 0]
   )
   return item
 }
@@ -621,6 +672,7 @@ function mapPlaylistItem(row: any): PlaylistItem {
   return {
     id: row.id,
     playlistId: row.playlist_id,
+    userId: row.user_id,
     chordListId: row.chord_list_id,
     songId: row.song_id,
     position: row.position,

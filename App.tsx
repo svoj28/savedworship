@@ -12,6 +12,9 @@ import { initializeDatabase } from './db/index'
 // Auth
 import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
 
+// Sync
+import { startPeriodicSync } from './lib/sync'
+
 // Screens
 import SignInScreen from './screens/SignInScreen'
 import SignUpScreen from './screens/SignUpScreen'
@@ -289,6 +292,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [dbError, setDbError] = useState<string | null>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
+  const periodicSyncCleanupRef = React.useRef<(() => void) | null>(null)
 
   useEffect(() => {
     // Initialize database and auth sequentially
@@ -321,6 +325,39 @@ export default function App() {
       unsubscribe()
     }
   }, [])
+
+  // Start periodic sync when user is authenticated
+  useEffect(() => {
+    if (!user) {
+      // Clean up sync when user logs out
+      if (periodicSyncCleanupRef.current) {
+        periodicSyncCleanupRef.current()
+        periodicSyncCleanupRef.current = null
+      }
+      return
+    }
+
+    // Start periodic sync when user logs in
+    const startSync = async () => {
+      try {
+        console.log('Starting periodic sync for user:', user.id)
+        const cleanup = await startPeriodicSync(user.id, 60000) // Sync every 60 seconds
+        periodicSyncCleanupRef.current = cleanup
+      } catch (err) {
+        console.error('Failed to start periodic sync:', err)
+      }
+    }
+
+    startSync()
+
+    // Cleanup on unmount or user change
+    return () => {
+      if (periodicSyncCleanupRef.current) {
+        periodicSyncCleanupRef.current()
+        periodicSyncCleanupRef.current = null
+      }
+    }
+  }, [user])
 
   if (dbError) {
     return (

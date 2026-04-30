@@ -22,9 +22,11 @@ export class AudioRemovalService {
   private statusUpdateCallback: ((progress: RemovalProgress) => void) | null = null
   private apiBaseUrl: string
 
-  constructor(apiBaseUrl: string = 'http://192.168.18.21:3000') {
+  constructor(apiBaseUrl: string = '') {
+    // Backend removed by user request; default to empty.
     this.apiBaseUrl = apiBaseUrl
   }
+  
 
   /**
    * Set callback for progress updates
@@ -75,6 +77,12 @@ export class AudioRemovalService {
     options: RemovalOptions
   ): Promise<string> {
     try {
+      // If no backend URL is configured, the vocal removal API is unavailable.
+      if (!this.apiBaseUrl) {
+        const msg = 'Vocal removal backend removed — feature unavailable.'
+        this.notifyProgress({ status: 'error', progress: 0, message: msg })
+        throw new Error(msg)
+      }
       // Read the audio file
       this.notifyProgress({
         status: 'uploading',

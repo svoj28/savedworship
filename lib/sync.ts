@@ -3,19 +3,8 @@ import { supabase } from './supabase'
 import { query, execute, transaction } from '../db/index'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-/**
- * Comprehensive Sync System for expo-sqlite and Supabase
- * 
- * Features:
- * - Bidirectional sync (push & pull)
- * - Offline queue with automatic retry
- * - Conflict resolution (server-side timestamps win)
- * - Real-time subscriptions
- * - Sync status tracking
- * - All entity types: artists, chord_lists, songs, lineups, messages, contacts, user profiles, etc.
- */
-
 const TABLES = [
+  'user_profiles',
   'artists',
   'chord_lists',
   'songs',
@@ -26,7 +15,6 @@ const TABLES = [
   'important_announcements',
   'version_droppers',
   'contacts',
-  'user_profiles',
   'playlists',
   'playlist_items'
 ]
@@ -44,7 +32,6 @@ interface SyncStatus {
   pendingChanges: number
 }
 
-// Global sync status
 let syncStatus: SyncStatus = {
   isSyncing: false,
   lastSyncTime: 0,
@@ -52,7 +39,6 @@ let syncStatus: SyncStatus = {
   pendingChanges: 0,
 }
 
-// Sync status listeners
 const syncListeners: Set<(status: SyncStatus) => void> = new Set()
 
 interface SyncLog {
@@ -61,45 +47,38 @@ interface SyncLog {
   recordsCount: number
 }
 
-/**
- * Register listener for sync status changes
- */
 export function onSyncStatusChange(listener: (status: SyncStatus) => void): () => void {
   syncListeners.add(listener)
   return () => syncListeners.delete(listener)
 }
 
-/**
- * Get current sync status
- */
 export function getSyncStatus(): SyncStatus {
   return { ...syncStatus }
 }
 
-/**
- * Notify all listeners of sync status change
- */
 function notifySyncStatusChange() {
   syncListeners.forEach(listener => listener({ ...syncStatus }))
 }
 
-/**
- * Update sync status
- */
 function updateSyncStatus(partial: Partial<SyncStatus>) {
   syncStatus = { ...syncStatus, ...partial }
   notifySyncStatusChange()
 }
 
 /**
- * Check if there are unsynced records for a given table and user
+ * Strip local-only SQLite fields before sending to Supabase
  */
+function toSupabasePayload(record: any) {
+  const { _synced, ...rest } = record
+  return rest
+}
+
 async function countUnsyncedRecords(tableName: string, userId: string): Promise<number> {
   try {
     const results = await query(
       `SELECT COUNT(*) as count FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
       [userId]
-    )
+    ) as { count: number }[]
     return results[0]?.count || 0
   } catch (err) {
     console.error(`Error counting unsynced records in ${tableName}:`, err)
@@ -107,9 +86,6 @@ async function countUnsyncedRecords(tableName: string, userId: string): Promise<
   }
 }
 
-/**
- * Count total pending changes across all tables
- */
 export async function countPendingChanges(userId: string): Promise<number> {
   let total = 0
   for (const tableName of TABLES) {
@@ -118,12 +94,30 @@ export async function countPendingChanges(userId: string): Promise<number> {
   return total
 }
 
-/**
- * Push local changes to Supabase
- * Sends all records where _synced = 0
- */
 export async function syncPushToSupabase(userId: string, options: SyncOptions = {}) {
-  const { maxRetries = 3, conflictResolution = 'server-wins' } = options
+  
+  const { maxRetries = 3 } = options
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) return
+
+  // Verify role exists before attempting sync
+  const { data: profile } = await supabase
+    .from('user_profiles')
+    .select('role')
+    .eq('user_id', userId)
+    .single()
+
+  if (!profile?.role) {
+    console.warn('No role found for user — skipping push sync. Profile may not be initialized.')
+    return
+  }
+
+  const canWrite = ['superadmin', 'admin'].includes(profile.role)
+  
+  if (!session) {
+    console.warn('No Supabase session found, skipping push sync')
+    return
+  }
 
   try {
     for (const tableName of TABLES) {
@@ -140,32 +134,30 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
 
         while (retries < maxRetries && !success) {
           try {
-            // Convert snake_case to camelCase for Supabase
-            const data = convertToCamelCase(record)
-            
-            // Use BIGINT timestamp, not ISO string
+            const data = toSupabasePayload(record)
             const timestamp = record.updated_at || Date.now()
 
-            // Use upsert: insert if not exists, update if exists
+            const { data: { session } } = await supabase.auth.getSession()
+            console.log('Session UID:', session?.user?.id)
+            console.log('Record user_id:', record.user_id)
+
             const { error } = await supabase.from(tableName).upsert(
-              {
-                ...data,
-                user_id: userId,
-                updated_at: timestamp,
-                updated_at_iso: new Date(timestamp).toISOString(),
-                _synced: true,
-              },
-              { onConflict: 'id' }
-            )
+            {
+              ...data,
+              user_id: userId,
+              updated_at: timestamp,
+              updated_at_iso: new Date(timestamp).toISOString(),
+            },
+            { onConflict: 'id' }
+          )
 
             if (error) {
               console.warn(`Attempt ${retries + 1}: Failed to sync ${tableName}/${record.id}:`, error)
               retries++
               if (retries < maxRetries) {
-                await new Promise(resolve => setTimeout(resolve, 1000 * retries)) // Exponential backoff
+                await new Promise(resolve => setTimeout(resolve, 1000 * retries))
               }
             } else {
-              // Mark as synced in local database
               await execute(
                 `UPDATE ${tableName} SET _synced = 1 WHERE id = ?`,
                 [record.id]
@@ -192,29 +184,23 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
   }
 }
 
-/**
- * Pull changes from Supabase and update local database
- * Fetches records updated after the last sync time
- */
 export async function syncPullFromSupabase(userId: string, lastSyncTime: number = 0, options: SyncOptions = {}) {
   const { conflictResolution = 'server-wins' } = options
 
   try {
     for (const tableName of TABLES) {
       try {
-        // Build query with proper user_id filter
-        let query = supabase
+        let supabaseQuery = supabase
           .from(tableName)
           .select('*')
           .eq('user_id', userId)
 
-        // Only filter by updated_at if we have a lastSyncTime
         if (lastSyncTime > 0) {
           const lastSyncIso = new Date(lastSyncTime).toISOString()
-          query = query.gt('updated_at_iso', lastSyncIso)
+          supabaseQuery = supabaseQuery.gt('updated_at_iso', lastSyncIso)
         }
 
-        const { data, error } = await query
+        const { data, error } = await supabaseQuery
 
         if (error) {
           console.error(`Failed to fetch ${tableName}:`, error)
@@ -223,11 +209,9 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
 
         if (!data || data.length === 0) continue
 
-        // Batch write to database
         await transaction(async () => {
           for (const serverRecord of data) {
             try {
-              // Check if record exists locally
               const localRecord: any = await query(
                 `SELECT * FROM ${tableName} WHERE id = ?`,
                 [serverRecord.id]
@@ -236,12 +220,10 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
               const snakeCaseRecord = convertToSnakeCase(serverRecord)
 
               if (localRecord && localRecord.length > 0) {
-                // Check for conflicts based on timestamps
                 const localTime = localRecord[0].updated_at || 0
                 const serverTime = serverRecord.updated_at || 0
 
                 if (conflictResolution === 'server-wins' || serverTime >= localTime) {
-                  // Update existing record (server wins on conflicts)
                   const updates = Object.keys(snakeCaseRecord)
                     .map((key) => `${key} = ?`)
                     .join(', ')
@@ -253,7 +235,6 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
                   )
                 }
               } else {
-                // Create new record
                 const columns = Object.keys(snakeCaseRecord).join(', ')
                 const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
                 const values = Object.values(snakeCaseRecord)
@@ -278,31 +259,29 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
   }
 }
 
-/**
- * Full sync cycle: pull first, then push
- * Optimized to minimize conflicts
- */
 export async function fullSync(userId: string, options: SyncOptions = {}): Promise<boolean> {
   if (syncStatus.isSyncing) {
     console.warn('Sync already in progress')
     return false
   }
 
+  // Guard: ensure Supabase has an active session before pushing
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) {
+    console.warn('No Supabase session found, skipping push sync')
+    return
+  }
+
   try {
     updateSyncStatus({ isSyncing: true, syncError: null })
     console.log('Starting full sync...')
 
-    // Pull first to get latest server state
     const lastSync = await getLastSyncTime()
     await syncPullFromSupabase(userId, lastSync, options)
-
-    // Then push local changes
     await syncPushToSupabase(userId, options)
 
-    // Update last sync time
     await setLastSyncTime(Date.now())
 
-    // Count pending changes
     const pending = await countPendingChanges(userId)
     updateSyncStatus({
       isSyncing: false,
@@ -324,9 +303,6 @@ export async function fullSync(userId: string, options: SyncOptions = {}): Promi
   }
 }
 
-/**
- * Sync specific entity type
- */
 export async function syncTable(tableName: string, userId: string, options: SyncOptions = {}): Promise<boolean> {
   if (!TABLES.includes(tableName)) {
     console.error(`Unknown table: ${tableName}`)
@@ -336,30 +312,29 @@ export async function syncTable(tableName: string, userId: string, options: Sync
   try {
     updateSyncStatus({ isSyncing: true, syncError: null })
 
-    // Pull changes from server
     const lastSync = await getLastSyncTime()
-    let query = supabase
+    let supabaseQuery = supabase
       .from(tableName)
       .select('*')
       .eq('user_id', userId)
 
     if (lastSync > 0) {
       const lastSyncIso = new Date(lastSync).toISOString()
-      query = query.gt('updated_at_iso', lastSyncIso)
+      supabaseQuery = supabaseQuery.gt('updated_at_iso', lastSyncIso)
     }
 
-    const { data, error } = await query
+    const { data, error } = await supabaseQuery
 
-    if (error) {
-      throw error
-    }
+    if (error) throw error
 
-    // Update local records
     if (data && data.length > 0) {
       await transaction(async () => {
         for (const serverRecord of data) {
           const snakeCaseRecord = convertToSnakeCase(serverRecord)
-          const localRecord: any = await query(`SELECT id FROM ${tableName} WHERE id = ?`, [serverRecord.id])
+          const localRecord: any = await query(
+            `SELECT id FROM ${tableName} WHERE id = ?`,
+            [serverRecord.id]
+          )
 
           if (localRecord && localRecord.length > 0) {
             const updates = Object.keys(snakeCaseRecord).map(key => `${key} = ?`).join(', ')
@@ -381,26 +356,25 @@ export async function syncTable(tableName: string, userId: string, options: Sync
       })
     }
 
-    // Push local changes
     const unsyncedRecords: any[] = await query(
       `SELECT * FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
       [userId]
     )
 
     for (const record of unsyncedRecords) {
-      const data = convertToCamelCase(record)
+      const data = toSupabasePayload(record)
       const timestamp = record.updated_at || Date.now()
-      
+
       const { error } = await supabase.from(tableName).upsert(
         {
           ...data,
           user_id: userId,
           updated_at: timestamp,
           updated_at_iso: new Date(timestamp).toISOString(),
-          _synced: true
         },
         { onConflict: 'id' }
       )
+
       if (!error) {
         await execute(`UPDATE ${tableName} SET _synced = 1 WHERE id = ?`, [record.id])
       }
@@ -415,10 +389,6 @@ export async function syncTable(tableName: string, userId: string, options: Sync
   }
 }
 
-/**
- * Listen for real-time changes from Supabase using Realtime subscriptions
- * This keeps local DB in sync without requiring manual syncs
- */
 export function subscribeToChanges(userId: string, onUpdate: () => void) {
   const channels: any[] = []
 
@@ -434,7 +404,6 @@ export function subscribeToChanges(userId: string, onUpdate: () => void) {
           filter: `user_id=eq.${userId}`,
         },
         async () => {
-          // When changes arrive, pull from server
           await syncPullFromSupabase(userId, Date.now() - 60000)
           onUpdate()
         }
@@ -444,31 +413,21 @@ export function subscribeToChanges(userId: string, onUpdate: () => void) {
     channels.push(channel)
   }
 
-  // Return unsubscribe function
   return () => {
     channels.forEach((ch) => supabase.removeChannel(ch))
   }
 }
 
-/**
- * Periodic sync - call this from app startup or on a timer
- */
 export async function startPeriodicSync(userId: string, intervalMs: number = 60000) {
-  // Initial sync
   await fullSync(userId)
 
-  // Periodic sync
   const syncInterval = setInterval(async () => {
     await fullSync(userId)
   }, intervalMs)
 
-  // Return cleanup function
   return () => clearInterval(syncInterval)
 }
 
-/**
- * Get all unsynced records for a specific table
- */
 export async function getUnsyncedRecords(tableName: string, userId: string): Promise<any[]> {
   try {
     return await query(
@@ -481,9 +440,6 @@ export async function getUnsyncedRecords(tableName: string, userId: string): Pro
   }
 }
 
-/**
- * Manually mark record as unsynced (after local modification)
- */
 export async function markAsUnsynced(tableName: string, recordId: string): Promise<void> {
   try {
     await execute(
@@ -495,16 +451,10 @@ export async function markAsUnsynced(tableName: string, recordId: string): Promi
   }
 }
 
-/**
- * Clear sync status errors
- */
 export function clearSyncError(): void {
   updateSyncStatus({ syncError: null })
 }
 
-/**
- * Helper: Convert snake_case to camelCase
- */
 function convertToCamelCase(obj: any): any {
   const result: any = {}
   for (const [key, value] of Object.entries(obj)) {
@@ -514,9 +464,6 @@ function convertToCamelCase(obj: any): any {
   return result
 }
 
-/**
- * Helper: Convert camelCase to snake_case
- */
 function convertToSnakeCase(obj: any): any {
   const result: any = {}
   for (const [key, value] of Object.entries(obj)) {
@@ -526,9 +473,6 @@ function convertToSnakeCase(obj: any): any {
   return result
 }
 
-/**
- * Store last sync time in AsyncStorage
- */
 export async function getLastSyncTime(): Promise<number> {
   try {
     const time = await AsyncStorage.getItem('lastSyncTime')
@@ -544,5 +488,17 @@ export async function setLastSyncTime(time: number) {
     await AsyncStorage.setItem('lastSyncTime', time.toString())
   } catch (err) {
     console.error('Error setting lastSyncTime:', err)
+  }
+}
+export async function stampUserIdOnUnsyncedRows(userId: string) {
+  for (const tableName of TABLES) {
+    try {
+      await execute(
+        `UPDATE ${tableName} SET user_id = ? WHERE user_id IS NULL OR user_id = ''`,
+        [userId]
+      )
+    } catch (err) {
+      console.error(`Failed to stamp user_id on ${tableName}:`, err)
+    }
   }
 }

@@ -173,6 +173,114 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_contacts_contact_user_id ON contacts(contact_user_id);
       CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);
     `)
+    // Add iso timestamp columns for sync support
+try {
+  await dbInstance.execAsync(`ALTER TABLE user_profiles ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE user_profiles ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE artists ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE artists ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE chord_lists ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE chord_lists ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE songs ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE songs ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE lineups ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE lineups ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE lineup_items ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE lineup_items ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE messages ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE messages ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE file_droppers ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE file_droppers ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE important_announcements ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE important_announcements ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE version_droppers ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE version_droppers ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE contacts ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE contacts ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE playlists ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE playlists ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE playlist_items ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE playlist_items ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE user_profiles ADD COLUMN role TEXT DEFAULT 'user';`)
+} catch (e) {}
 
     // Add content column to chord_lists if it doesn't exist (for personal notes)
     try {

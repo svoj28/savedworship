@@ -13,7 +13,7 @@ import { initializeDatabase } from './db/index'
 import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
 
 // Sync
-import { startPeriodicSync } from './lib/sync'
+import { stampUserIdOnUnsyncedRows, startPeriodicSync } from './lib/sync'
 
 // Screens
 import SignInScreen from './screens/SignInScreen'
@@ -295,6 +295,12 @@ export default function App() {
   const periodicSyncCleanupRef = React.useRef<(() => void) | null>(null)
 
   useEffect(() => {
+
+    const startSync = async () => {
+  await stampUserIdOnUnsyncedRows(user.id) // fix any rows missing user_id
+  const cleanup = await startPeriodicSync(user.id, 60000)
+  periodicSyncCleanupRef.current = cleanup
+}
     // Initialize database and auth sequentially
     const initializeApp = async () => {
       try {

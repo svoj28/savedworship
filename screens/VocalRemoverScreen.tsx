@@ -20,7 +20,6 @@ import {
   RemovalProgress,
 } from '../lib/audioRemovalService'
 import { Audio } from 'expo-av'
-import VocalRemoverAIScreen from './VocalRemoverAIScreen'
 
 type RemovalMode = 'vocal' | 'instrument'
 
@@ -40,7 +39,7 @@ const instruments: Instrument[] = [
 ]
 
 export default function VocalRemoverScreen() {
-  const [currentTab, setCurrentTab] = useState<'processor' | 'ai' | 'tools'>('processor')
+  const [currentTab, setCurrentTab] = useState<'processor' | 'tools'>('processor')
   const [removalMode, setRemovalMode] = useState<RemovalMode>('vocal')
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentType | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
@@ -57,7 +56,8 @@ export default function VocalRemoverScreen() {
   const [playbackDuration, setPlaybackDuration] = useState(0)
   
   // Use useRef to persist the service instance across renders
-  const removalServiceRef = useRef(new AudioRemovalService('http://192.168.18.21:3000'))
+  // No backend URL provided — vocal removal API disabled (graceful fallback)
+  const removalServiceRef = useRef(new AudioRemovalService())
   const removalService = removalServiceRef.current
 
   useEffect(() => {
@@ -187,15 +187,7 @@ export default function VocalRemoverScreen() {
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.tab, currentTab === 'ai' && styles.tabActive]}
-          onPress={() => setCurrentTab('ai')}
-        >
-          <Ionicons name="sparkles" size={18} color={currentTab === 'ai' ? '#9B59B6' : '#999'} />
-          <Text style={[styles.tabText, currentTab === 'ai' && styles.tabTextActive]}>
-            AI Stems
-          </Text>
-        </TouchableOpacity>
+        {/* AI tab removed */}
 
         <TouchableOpacity
           style={[styles.tab, currentTab === 'tools' && styles.tabActive]}
@@ -389,10 +381,6 @@ export default function VocalRemoverScreen() {
                 </View>
               </View>
             )}
-          </>
-        ) : currentTab === 'ai' ? (
-          <>
-            <VocalRemoverAIScreen />
           </>
         ) : (
           <>

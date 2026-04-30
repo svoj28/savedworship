@@ -6,6 +6,7 @@
 
 import { getDatabase, execute, query, queryOne, transaction } from './index'
 import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, Contact, UserProfile, Playlist, PlaylistItem } from './models'
+import { syncRowToSupabase, deleteRowFromSupabase } from '../lib/syncToSupabase'
 import uuid from 'react-native-uuid'
 
 // Artist queries
@@ -16,6 +17,7 @@ export async function createArtist(data: Omit<Artist, 'id'>): Promise<Artist> {
     'INSERT INTO artists (id, name, user_id, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?)',
     [artist.id, artist.name, artist.userId, artist.createdAt, artist.updatedAt, 0]
   )
+  await syncRowToSupabase('artists', artist)
   return artist
 }
 
@@ -32,10 +34,13 @@ export async function updateArtist(id: string, data: Partial<Artist>): Promise<v
     `UPDATE artists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
+  const updated = await getArtistById(id)
+  if (updated) await syncRowToSupabase('artists', updated)
 }
 
 export async function deleteArtist(id: string): Promise<void> {
   await execute('DELETE FROM artists WHERE id = ?', [id])
+  await deleteRowFromSupabase('artists', id)
 }
 
 export async function getArtistById(id: string): Promise<Artist | null> {
@@ -56,6 +61,7 @@ export async function createChordList(data: Omit<ChordList, 'id'>): Promise<Chor
     'INSERT INTO chord_lists (id, title, artist_id, user_id, is_private, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [list.id, list.title, list.artistId, list.userId, list.isPrivate ? 1 : 0, list.createdAt, list.updatedAt, 0]
   )
+  await syncRowToSupabase('chord_lists', list)
   return list
 }
 
@@ -92,6 +98,8 @@ export async function updateChordList(id: string, data: Partial<ChordList>): Pro
     `UPDATE chord_lists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
+  const updated = await getChordListById(id)
+  if (updated) await syncRowToSupabase('chord_lists', updated)
 }
 
 export async function deleteChordList(id: string): Promise<void> {
@@ -101,6 +109,7 @@ export async function deleteChordList(id: string): Promise<void> {
     // Delete chord list
     await execute('DELETE FROM chord_lists WHERE id = ?', [id])
   })
+  await deleteRowFromSupabase('chord_lists', id)
 }
 
 // Song queries
@@ -111,6 +120,7 @@ export async function createSong(data: Omit<Song, 'id'>): Promise<Song> {
     'INSERT INTO songs (id, chord_list_id, user_id, title, content, key, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [song.id, song.chordListId, song.userId || '', song.title, song.content, song.key, song.createdAt, song.updatedAt, 0]
   )
+  await syncRowToSupabase('songs', song)
   return song
 }
 
@@ -139,10 +149,13 @@ export async function updateSong(id: string, data: Partial<Song>): Promise<void>
     `UPDATE songs SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
+  const updated = await getSongById(id)
+  if (updated) await syncRowToSupabase('songs', updated)
 }
 
 export async function deleteSong(id: string): Promise<void> {
   await execute('DELETE FROM songs WHERE id = ?', [id])
+  await deleteRowFromSupabase('songs', id)
 }
 
 // Lineup queries
@@ -153,6 +166,7 @@ export async function createLineup(data: Omit<Lineup, 'id'>): Promise<Lineup> {
     'INSERT INTO lineups (id, title, user_id, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [lineup.id, lineup.title, lineup.userId, lineup.description || '', lineup.createdAt, lineup.updatedAt, 0]
   )
+  await syncRowToSupabase('lineups', lineup)
   return lineup
 }
 
@@ -182,6 +196,8 @@ export async function updateLineup(id: string, data: Partial<Lineup>): Promise<v
     `UPDATE lineups SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
     [...values, Date.now(), id]
   )
+  const updated = await getLineupById(id)
+  if (updated) await syncRowToSupabase('lineups', updated)
 }
 
 export async function deleteLineup(id: string): Promise<void> {
@@ -189,6 +205,7 @@ export async function deleteLineup(id: string): Promise<void> {
     await execute('DELETE FROM lineup_items WHERE lineup_id = ?', [id])
     await execute('DELETE FROM lineups WHERE id = ?', [id])
   })
+  await deleteRowFromSupabase('lineups', id)
 }
 
 // Message queries

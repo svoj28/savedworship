@@ -20,7 +20,6 @@ import { transposeNote, getNotes } from '../lib/keyDetection'
 import { saveAudioFileLocally, updateAudioFileMetadata } from '../lib/audioFileManager'
 import { pitchShifter } from '../lib/pitchShifter'
 import ProgressBar from '../components/ProgressBar'
-import AIKeyPitchChangerScreen from './AIKeyPitchChangerScreen'
 
 const NOTE_NAMES = getNotes()
 
@@ -67,7 +66,7 @@ export default function KeyPitchChangerScreen() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [fileName, setFileName] = useState<string>('')
   const [localFilePath, setLocalFilePath] = useState<string | null>(null)
-  const [currentTab, setCurrentTab] = useState<'classic' | 'ai'>('classic')
+  const [currentTab, setCurrentTab] = useState<'classic'>('classic')
   const [pitchShift, setPitchShift] = useState(0)
   const [tempoAdjustPercent, setTempoAdjustPercent] = useState(0)
   const [currentKey, setCurrentKey] = useState('C')
@@ -634,25 +633,10 @@ export default function KeyPitchChangerScreen() {
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.container}>
       {/* Tab Navigation */}
       <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tab, currentTab === 'classic' && styles.tabActive]}
-          onPress={() => setCurrentTab('classic')}
-        >
-          <Ionicons name="musical-notes" size={18} color={currentTab === 'classic' ? '#007AFF' : '#999'} />
-          <Text style={[styles.tabText, currentTab === 'classic' && styles.tabTextActive]}>
-            Classic
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tab, currentTab === 'ai' && styles.tabActive]}
-          onPress={() => setCurrentTab('ai')}
-        >
-          <Ionicons name="sparkles" size={18} color={currentTab === 'ai' ? '#FF9800' : '#999'} />
-          <Text style={[styles.tabText, currentTab === 'ai' && styles.tabTextActive]}>
-            AI Shift
-          </Text>
-        </TouchableOpacity>
+        <View style={[styles.tab, styles.tabActive]}>
+          <Ionicons name="musical-notes" size={18} color={'#007AFF'} />
+          <Text style={[styles.tabText, styles.tabTextActive]}>Classic</Text>
+        </View>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -1090,12 +1074,7 @@ export default function KeyPitchChangerScreen() {
           </TouchableOpacity>
         )}
           </>
-        ) : (
-          <>
-            {/* AI Pitch Changer Tab */}
-            <AIKeyPitchChangerScreen />
-          </>
-        )}
+        ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
   )

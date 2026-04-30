@@ -56,7 +56,8 @@ export default function VocalRemoverScreenNew() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [playbackPosition, setPlaybackPosition] = useState(0)
   const [playbackDuration, setPlaybackDuration] = useState(0)
-  const removalService = new AudioRemovalService('http://192.168.18.21:3000')
+  // Backend removed: instantiate without remote backend URL
+  const removalService = new AudioRemovalService()
 
   useEffect(() => {
     return () => {

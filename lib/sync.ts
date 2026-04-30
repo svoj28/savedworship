@@ -141,15 +141,17 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
             console.log('Session UID:', session?.user?.id)
             console.log('Record user_id:', record.user_id)
 
+            const conflictColumn = tableName === 'user_profiles' ? 'user_id' : 'id'
+
             const { error } = await supabase.from(tableName).upsert(
-            {
-              ...data,
-              user_id: userId,
-              updated_at: timestamp,
-              updated_at_iso: new Date(timestamp).toISOString(),
-            },
-            { onConflict: 'id' }
-          )
+              {
+                ...data,
+                user_id: userId,
+                updated_at: timestamp,
+                updated_at_iso: new Date(timestamp).toISOString(),
+              },
+              { onConflict: conflictColumn }
+            )
 
             if (error) {
               console.warn(`Attempt ${retries + 1}: Failed to sync ${tableName}/${record.id}:`, error)
@@ -282,7 +284,12 @@ export async function fullSync(userId: string, options: SyncOptions = {}): Promi
 
     await setLastSyncTime(Date.now())
 
-    const pending = await countPendingChanges(userId)
+    let pending = 0
+    try {
+      pending = await countPendingChanges(userId)
+    } catch (err) {
+      console.warn('Could not count pending changes, defaulting to 0:', err)
+    }
     updateSyncStatus({
       isSyncing: false,
       lastSyncTime: Date.now(),
@@ -365,6 +372,8 @@ export async function syncTable(tableName: string, userId: string, options: Sync
       const data = toSupabasePayload(record)
       const timestamp = record.updated_at || Date.now()
 
+      const conflictColumn = tableName === 'user_profiles' ? 'user_id' : 'id'
+
       const { error } = await supabase.from(tableName).upsert(
         {
           ...data,
@@ -372,7 +381,7 @@ export async function syncTable(tableName: string, userId: string, options: Sync
           updated_at: timestamp,
           updated_at_iso: new Date(timestamp).toISOString(),
         },
-        { onConflict: 'id' }
+        { onConflict: conflictColumn }
       )
 
       if (!error) {

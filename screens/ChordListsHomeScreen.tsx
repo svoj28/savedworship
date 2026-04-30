@@ -278,6 +278,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                                       position: maxPosition,
                                       createdAt: Date.now(),
                                       synced: false,
+                                      userId,
                                     })
                                     await loadPlaylistItems(selectedPlaylist.id)
                                     Alert.alert('Success', 'Song added to playlist!')

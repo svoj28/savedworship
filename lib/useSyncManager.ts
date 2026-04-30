@@ -60,7 +60,12 @@ export function useSyncManager(options: UseSyncManagerOptions) {
   // Update sync state from status
   const updateSyncState = useCallback(async () => {
     const status = getSyncStatus()
-    const pending = await countPendingChanges(userId)
+    let pending = 0
+    try {
+      pending = await countPendingChanges(userId)
+    } catch (err) {
+      console.warn('Could not count pending changes, defaulting to 0:', err)
+    }
     setSyncState({
       isSyncing: status.isSyncing,
       lastSyncTime: status.lastSyncTime,

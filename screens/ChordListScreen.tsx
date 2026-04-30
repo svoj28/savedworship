@@ -97,6 +97,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
           createdAt: listRow.created_at,
           updatedAt: listRow.updated_at,
           synced: Boolean(listRow._synced),
+          
         })
         setArtistId(listRow.artist_id)
       }
@@ -113,6 +114,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         synced: Boolean(row._synced),
+        userId: row.user_id ?? '',
       }))
       setSongs(mapped)
 
@@ -159,6 +161,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         synced: Boolean(row._synced),
+        userId: row.user_id ?? '',
       }))
 
       const items: BrowseItem[] = mapped.map(song => ({

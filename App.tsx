@@ -97,7 +97,7 @@ function ChordListsStack() {
       <Stack.Screen
         name="ChordListsHome"
         component={ChordListsHomeScreen}
-        options={{ title: 'Chord Lists' }}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="ChordList"
@@ -128,7 +128,7 @@ function PersonalNotesStack() {
       <Stack.Screen
         name="PersonalNotesHome"
         component={PersonalNotesScreen}
-        options={{ title: 'Notes' }}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="NoteDetail"
@@ -293,20 +293,22 @@ export default function App() {
   const [dbError, setDbError] = useState<string | null>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
   const periodicSyncCleanupRef = React.useRef<(() => void) | null>(null)
+  const [dbReady, setDbReady] = useState(false)
 
   useEffect(() => {
 
-    const startSync = async () => {
-  await stampUserIdOnUnsyncedRows(user.id) // fix any rows missing user_id
-  const cleanup = await startPeriodicSync(user.id, 60000)
-  periodicSyncCleanupRef.current = cleanup
-}
+//     const startSync = async () => {
+//   await stampUserIdOnUnsyncedRows(user.id) // fix any rows missing user_id
+//   const cleanup = await startPeriodicSync(user.id, 60000)
+//   periodicSyncCleanupRef.current = cleanup
+// }
     // Initialize database and auth sequentially
     const initializeApp = async () => {
       try {
         console.log('Initializing database...')
         await initializeDatabase()
         console.log('Database ready')
+        setDbReady(true)
 
         // Check current auth state
         const authUser = await getCurrentUser()
@@ -334,7 +336,7 @@ export default function App() {
 
   // Start periodic sync when user is authenticated
   useEffect(() => {
-    if (!user) {
+    if (!user || !dbReady) {
       // Clean up sync when user logs out
       if (periodicSyncCleanupRef.current) {
         periodicSyncCleanupRef.current()
@@ -344,17 +346,17 @@ export default function App() {
     }
 
     // Start periodic sync when user logs in
-    const startSync = async () => {
-      try {
-        console.log('Starting periodic sync for user:', user.id)
-        const cleanup = await startPeriodicSync(user.id, 60000) // Sync every 60 seconds
-        periodicSyncCleanupRef.current = cleanup
-      } catch (err) {
-        console.error('Failed to start periodic sync:', err)
-      }
-    }
+    // const startSync = async () => {
+    //   try {
+    //     console.log('Starting periodic sync for user:', user.id)
+    //     const cleanup = await startPeriodicSync(user.id, 60000) // Sync every 60 seconds
+    //     periodicSyncCleanupRef.current = cleanup
+    //   } catch (err) {
+    //     console.error('Failed to start periodic sync:', err)
+    //   }
+    // }
 
-    startSync()
+    // startSync()
 
     // Cleanup on unmount or user change
     return () => {
@@ -363,7 +365,7 @@ export default function App() {
         periodicSyncCleanupRef.current = null
       }
     }
-  }, [user])
+  }, [user, dbReady])
 
   if (dbError) {
     return (

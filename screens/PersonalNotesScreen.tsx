@@ -183,9 +183,9 @@ export default function PersonalNotesScreen({ navigation }: Props) {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      {/* <View style={styles.header}>
         <Text style={styles.title}>Notes</Text>
-      </View>
+      </View> */}
 
       {/* Search */}
       <View style={styles.searchContainer}>

@@ -9,11 +9,13 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 // Initialize database
 import { initializeDatabase } from './db/index'
 
+
 // Auth
 import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
 
 // Sync
-import { stampUserIdOnUnsyncedRows, startPeriodicSync } from './lib/sync'
+import { stampUserIdOnUnsyncedRows, startPeriodicSync, removeOrphanedUnsyncedRows } from './lib/sync'
+import { startNetworkSync, stopNetworkSync } from './lib/networkSync'
 
 // Screens
 import SignInScreen from './screens/SignInScreen'
@@ -91,7 +93,7 @@ function ChordListsStack() {
       id="chord-lists-stack"
       screenOptions={{
         headerTintColor: '#007AFF',
-        headerShown: true,
+        headerShown: false,
       }}
     >
       <Stack.Screen
@@ -336,36 +338,38 @@ export default function App() {
 
   // Start periodic sync when user is authenticated
   useEffect(() => {
-    if (!user || !dbReady) {
-      // Clean up sync when user logs out
-      if (periodicSyncCleanupRef.current) {
-        periodicSyncCleanupRef.current()
-        periodicSyncCleanupRef.current = null
-      }
-      return
+  if (!user || !dbReady) {
+    if (periodicSyncCleanupRef.current) {
+      periodicSyncCleanupRef.current()
+      periodicSyncCleanupRef.current = null
     }
+    stopNetworkSync()
+    return
+  }
 
-    // Start periodic sync when user logs in
-    // const startSync = async () => {
-    //   try {
-    //     console.log('Starting periodic sync for user:', user.id)
-    //     const cleanup = await startPeriodicSync(user.id, 60000) // Sync every 60 seconds
-    //     periodicSyncCleanupRef.current = cleanup
-    //   } catch (err) {
-    //     console.error('Failed to start periodic sync:', err)
-    //   }
-    // }
-
-    // startSync()
-
-    // Cleanup on unmount or user change
-    return () => {
-      if (periodicSyncCleanupRef.current) {
-        periodicSyncCleanupRef.current()
-        periodicSyncCleanupRef.current = null
-      }
+  const startSync = async () => {
+    try {
+      console.log('Starting periodic sync for user:', user.id)
+      await removeOrphanedUnsyncedRows(user.id)
+      await stampUserIdOnUnsyncedRows(user.id)
+      const cleanup = await startPeriodicSync(user.id, 60000)
+      periodicSyncCleanupRef.current = cleanup
+      startNetworkSync()
+    } catch (err) {
+      console.error('Failed to start periodic sync:', err)
     }
-  }, [user, dbReady])
+  }
+
+  startSync()
+
+  return () => {
+    if (periodicSyncCleanupRef.current) {
+      periodicSyncCleanupRef.current()
+      periodicSyncCleanupRef.current = null
+    }
+    stopNetworkSync()
+  }
+}, [user, dbReady])
 
   if (dbError) {
     return (

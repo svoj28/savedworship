@@ -366,8 +366,21 @@ try {
       // Column already exists, ignore error
     }
 
+  // Add deleted_at column for offline delete queue
+    // const tablesForDeletedAt = [
+    //   'artists', 'chord_lists', 'songs', 'lineups', 'lineup_items',
+    //   'messages', 'file_droppers', 'important_announcements', 'version_droppers',
+    //   'contacts', 'playlists', 'playlist_items', 'user_profiles'
+    // ]
+    // for (const table of tablesForDeletedAt) {
+    //   try {
+    //     await dbInstance.execAsync(`ALTER TABLE ${table} ADD COLUMN deleted_at INTEGER`)
+    //   } catch (e) {}
+    // }
+
     console.log('Database initialized successfully')
     return dbInstance
+
   } catch (err) {
     console.error('Error initializing database:', err)
     throw err
@@ -384,7 +397,7 @@ export function getDatabase() {
 // Simple query helpers
 export async function query(sql: string, params: any[] = []) {
   try {
-    const db = getDatabase()
+    const db = await getOrInitDatabase() 
     if (!db) {
       throw new Error('Database is not initialized')
     }
@@ -443,6 +456,13 @@ export async function transaction(callback: (tx: SQLite.SQLiteDatabase) => Promi
     }
     throw err
   }
+}
+
+export async function getOrInitDatabase() {
+  if (!dbInstance) {
+    await initializeDatabase()
+  }
+  return dbInstance!
 }
 
 // Export model types for TypeScript

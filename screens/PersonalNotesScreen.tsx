@@ -248,7 +248,7 @@ export default function PersonalNotesScreen({ navigation }: Props) {
       {showCreateModal && (
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Create New Chord List</Text>
+            <Text style={styles.modalTitle}>Add Note</Text>
 
             <TextInput
               style={styles.input}

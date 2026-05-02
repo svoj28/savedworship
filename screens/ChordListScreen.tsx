@@ -523,12 +523,12 @@ export default function ChordListScreen({ route, navigation }: Props) {
       </View>
 
       {/* Floating Action Button */}
-      <TouchableOpacity
+      {/* <TouchableOpacity
         style={styles.fab}
         onPress={handleAddSong}
       >
         <Ionicons name="add" size={28} color="#fff" />
-      </TouchableOpacity>
+      </TouchableOpacity> */}
 
       {/* Playlist Selection Modal */}
       <Modal visible={showPlaylistModal} transparent animationType="fade">

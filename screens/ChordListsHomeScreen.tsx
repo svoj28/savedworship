@@ -23,7 +23,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { getCurrentUser } from '../lib/auth'
 import { query } from '../db/index'
 import { getPlaylistsByUserId, createPlaylist, deletePlaylist, getPlaylistItems, addToPlaylist, removeFromPlaylist } from '../db/queries'
-
+import { PlaylistSongViewerModal } from '../components/PlaylistSongViewerModal'
 interface Props {
   navigation: any
 }
@@ -62,6 +62,11 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
   const [newPlaylistDesc, setNewPlaylistDesc] = useState('')
   const [showAddToPlaylistModal, setShowAddToPlaylistModal] = useState(false)
   const [userId, setUserId] = useState<string>('')
+  const [showAddSongModal, setShowAddSongModal] = useState(false)
+  const [addSongExpandedArtists, setAddSongExpandedArtists] = useState<Set<string>>(new Set())
+  const [showSongViewer, setShowSongViewer] = useState(false)
+  const [viewerStartIndex, setViewerStartIndex] = useState(0)
+  const [viewerSongs, setViewerSongs] = useState<any[]>([])
 
   useFocusEffect(
     React.useCallback(() => {
@@ -106,6 +111,24 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
       console.error('Error loading artists:', err)
     }
   }
+
+  const handleOpenSongViewer = async (startIndex: number) => {
+  try {
+    // Load full song content for all playlist items
+    const songs = await Promise.all(
+      playlistItems.map(async (item) => {
+        if (!item.songId) return null
+        const rows: any[] = await query('SELECT * FROM songs WHERE id = ?', [item.songId])
+        return rows[0] ?? null
+      })
+    )
+    setViewerSongs(songs.filter(Boolean))
+    setViewerStartIndex(startIndex)
+    setShowSongViewer(true)
+  } catch (err) {
+    Alert.alert('Error', 'Failed to load songs')
+  }
+}
 
   const loadPlaylists = async (userId: string) => {
     try {
@@ -353,14 +376,21 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                 <FlatList
                   data={playlistItems}
                   keyExtractor={(item) => item.id}
-                  renderItem={({ item, index }) => (
-                    <View style={styles.playlistItemRow}>
+                  contentContainerStyle={{ paddingBottom: 100 }}
+                  renderItem={({ item, index }) => {
+                  const song = Object.values(artistSongs).flat().find(s => s.id === item.songId)
+                  return (
+                    <TouchableOpacity
+                      style={styles.playlistItemRow}
+                      onPress={() => handleOpenSongViewer(index)}  // ← make the whole row tappable
+                    >
                       <Text style={styles.playlistItemNumber}>{index + 1}</Text>
                       <Text style={styles.playlistItemText}>
-                        {item.songId ? `Song ${item.songId.substring(0, 8)}` : `Chord List ${item.chordListId?.substring(0, 8)}`}
+                        {song?.title ?? (item.songId ? `Song ${item.songId.substring(0, 8)}` : `Chord List ${item.chordListId?.substring(0, 8)}`)}
                       </Text>
                       <TouchableOpacity
-                        onPress={async () => {
+                        onPress={async (e) => {
+                          e.stopPropagation()
                           try {
                             await removeFromPlaylist(item.id)
                             await loadPlaylistItems(selectedPlaylist.id)
@@ -371,10 +401,19 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                       >
                         <Ionicons name="close" size={20} color="#FF3B30" />
                       </TouchableOpacity>
-                    </View>
-                  )}
+                    </TouchableOpacity>
+                  )
+                }}
                 />
               )}
+
+              {/* Floating Add Song Button */}
+              <TouchableOpacity
+                style={styles.fab}
+                onPress={() => setShowAddSongModal(true)}
+              >
+                <Ionicons name="add" size={28} color="#fff" />
+              </TouchableOpacity>
             </View>
           )}
         </>
@@ -438,11 +477,101 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+      <Modal visible={showAddSongModal} transparent animationType="slide">
+  <View style={styles.modalContainer}>
+    <View style={styles.modalContent}>
+      <View style={styles.modalHeader}>
+        <TouchableOpacity onPress={() => setShowAddSongModal(false)}>
+          <Text style={styles.cancelButton}>Cancel</Text>
+        </TouchableOpacity>
+        <Text style={styles.modalTitle}>Add Song</Text>
+        <View style={{ width: 50 }} />
+      </View>
+
+      <ScrollView style={styles.modalBody}>
+        {artists.filter(artist => (artistSongs[artist.id] || []).length > 0).map((artist) => (
+          <View key={artist.id}>
+            <TouchableOpacity
+              style={styles.artistHeader}
+              onPress={() => {
+                setAddSongExpandedArtists(prev => {
+                  const next = new Set(prev)
+                  next.has(artist.id) ? next.delete(artist.id) : next.add(artist.id)
+                  return next
+                })
+              }}
+            >
+              <Text style={styles.artistName}>{artist.name}</Text>
+              <Ionicons
+                name={addSongExpandedArtists.has(artist.id) ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color="#007AFF"
+              />
+            </TouchableOpacity>
+
+            {addSongExpandedArtists.has(artist.id) && (
+              <View style={styles.artistSongsContainer}>
+                {(artistSongs[artist.id] || []).map((song) => (
+                  <TouchableOpacity
+                    key={song.id}
+                    style={styles.modalSongItem}
+                    onPress={async () => {
+                      if (!selectedPlaylist) return
+                      try {
+                        const maxPosition = playlistItems.length > 0
+                          ? Math.max(...playlistItems.map(i => i.position)) + 1
+                          : 0
+                        await addToPlaylist({
+                          playlistId: selectedPlaylist.id,
+                          songId: song.id,
+                          position: maxPosition,
+                          createdAt: Date.now(),
+                          synced: false,
+                          userId,
+                        })
+                        await loadPlaylistItems(selectedPlaylist.id)
+                        setShowAddSongModal(false)
+                        Alert.alert('Success', `"${song.title}" added to playlist!`)
+                      } catch (err) {
+                        Alert.alert('Error', 'Failed to add song')
+                      }
+                    }}
+                  >
+                    <Text style={styles.songItemTitle}>{song.title}</Text>
+                    <Ionicons name="add-circle-outline" size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        ))}
+      </ScrollView>
     </View>
+  </View>
+</Modal>
+<PlaylistSongViewerModal
+  visible={showSongViewer}
+  songs={viewerSongs}
+  startIndex={viewerStartIndex}
+  onClose={() => setShowSongViewer(false)}
+/>
+    </View>
+    
   )
 }
 
 const styles = StyleSheet.create({
+    modalSongItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+    backgroundColor: '#fff',
+  },
+  
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',

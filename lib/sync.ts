@@ -145,7 +145,7 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
 
             const { error } = await supabase.from(tableName).upsert(
               {
-                ...data,
+                ...convertToSnakeCase(data),
                 user_id: userId,
                 updated_at: timestamp,
                 updated_at_iso: new Date(timestamp).toISOString(),
@@ -376,7 +376,7 @@ export async function syncTable(tableName: string, userId: string, options: Sync
 
       const { error } = await supabase.from(tableName).upsert(
         {
-          ...data,
+          ...convertToSnakeCase(data),
           user_id: userId,
           updated_at: timestamp,
           updated_at_iso: new Date(timestamp).toISOString(),
@@ -509,5 +509,28 @@ export async function stampUserIdOnUnsyncedRows(userId: string) {
     } catch (err) {
       console.error(`Failed to stamp user_id on ${tableName}:`, err)
     }
+  }
+}
+export async function removeOrphanedUnsyncedRows(userId: string) {
+  for (const tableName of TABLES) {
+    try {
+      // Delete unsynced rows that don't belong to the current user
+      await execute(
+        `DELETE FROM ${tableName} WHERE _synced = 0 AND user_id != ? AND user_id != ''`,
+        [userId]
+      )
+    } catch (err) {
+      console.error(`Failed to clean orphaned rows in ${tableName}:`, err)
+    }
+  }
+  
+  // Special case for messages — check sender_id too
+  try {
+    await execute(
+      `DELETE FROM messages WHERE _synced = 0 AND sender_id != ? AND sender_id != ''`,
+      [userId]
+    )
+  } catch (err) {
+    console.error('Failed to clean orphaned messages:', err)
   }
 }

@@ -122,6 +122,7 @@ export interface UserProfile {
   createdAt: number
   updatedAt: number
   synced: boolean
+  role?: string
 }
 
 export interface Playlist {

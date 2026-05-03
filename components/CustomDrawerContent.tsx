@@ -232,36 +232,19 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.menuItem, styles.highlightedMenuItem]}
+          style={[styles.menuItem]}
           onPress={() => handleNavigate('ManualTranspose')}
         >
           <Ionicons name="git-compare" size={24} color="#007AFF" />
-          <View style={styles.keyChangerContent}>
-            <Text style={styles.menuItemText}>Transpose Chords</Text>
-            <Text style={styles.menuItemSubtext}>Change chord keys</Text>
-          </View>
+          <Text style={styles.menuItemText}>Transpose Chords</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.menuItem, styles.keyPitchHighlight]}
-          onPress={() => handleNavigate('KeyPitchChanger')}
+          style={[styles.menuItem]}
+          onPress={() => handleNavigate('AudioTools')}
         >
-          <Ionicons name="musical-note" size={24} color="#FF9500" />
-          <View style={styles.keyChangerContent}>
-            <Text style={styles.menuItemText}>Key/Pitch Changer</Text>
-            <Text style={styles.menuItemSubtext}>Adjust audio pitch</Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.menuItem, styles.vocalRemoverMenuItem]}
-          onPress={() => handleNavigate('VocalRemover')}
-        >
-          <Ionicons name="mic-off" size={24} color="#FF6B6B" />
-          <View style={styles.keyChangerContent}>
-            <Text style={styles.menuItemText}>Vocal/Instrument Remover</Text>
-            <Text style={styles.menuItemSubtext}>Remove vocals or instruments</Text>
-          </View>
+          <Ionicons name="musical-note" size={24} color="#007AFF" />
+            <Text style={styles.menuItemText}>Audio Tools</Text>
         </TouchableOpacity>
 
         <View style={styles.divider} />

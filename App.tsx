@@ -26,13 +26,13 @@ import AddSongScreen from './screens/AddSongScreen'
 import NoteDetailScreen from './screens/NoteDetailScreen'
 import MetronomeScreen from './screens/MetronomeScreen'
 import ManualTransposeScreen from './screens/ManualTransposeScreen'
-import KeyPitchChangerScreen from './screens/KeyPitchChangerScreen'
-import VocalRemoverScreen from './screens/VocalRemoverScreen'
 import PersonalNotesScreen from './screens/PersonalNotesScreen'
 import ManagementScreen from './screens/ManagementScreen'
 import ConversationScreen from './screens/ConversationScreen'
 import AddContactsScreen from './screens/AddContactsScreen'
 import EditAccountScreen from './screens/EditAccountScreen'
+import { useRole } from '../SavedWorshipMusicTool/lib/useRole'
+import AudioToolsScreen from './screens/AudioToolsScreen'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
@@ -88,6 +88,7 @@ function AuthStack() {
  * Chord Lists Stack - Browse and view chord lists
  */
 function ChordListsStack() {
+  const { canManageChords } = useRole()
   return (
     <Stack.Navigator
       id="chord-lists-stack"
@@ -106,11 +107,13 @@ function ChordListsStack() {
         component={ChordListScreen}
         options={{ title: 'Song', headerLeft: () => null }}
       />
+      {canManageChords && (
       <Stack.Screen
         name="AddSong"
         component={AddSongScreen}
         options={{ title: 'Add Song', headerLeft: () => null }}
       />
+      )}
     </Stack.Navigator>
   )
 }
@@ -241,14 +244,9 @@ function AppTabs({ drawerVisible, setDrawerVisible }: { drawerVisible: boolean; 
           options={{ title: 'Transpose Chords', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
         />
         <Stack.Screen
-          name="KeyPitchChanger"
-          component={KeyPitchChangerScreen}
-          options={{ title: 'Key/Pitch Changer', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
-        />
-        <Stack.Screen
-          name="VocalRemover"
-          component={VocalRemoverScreen}
-          options={{ title: 'Vocal & Instrument Remover', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
+          name="AudioTools"
+          component={AudioToolsScreen}
+          options={{ title: 'Audio Tools', headerShown: true, headerTintColor: '#007AFF', headerLeft: () => null }}
         />
         <Stack.Screen
           name="AddContacts"

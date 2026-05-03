@@ -127,9 +127,10 @@ export async function syncAllUnsyncedRows() {
       }
 
       // 2. Push unsynced upserts — skip orphaned rows from other users
-      const unsynced: any[] = await query(
-        `SELECT * FROM ${table} WHERE _synced = 0 AND (deleted_at IS NULL OR deleted_at = '')`
-      )
+      const unsynced: any[] = table === 'chord_lists'
+  ? await query(`SELECT * FROM ${table} WHERE _synced = 0 AND (is_private = 0 OR is_private IS NULL) AND (deleted_at IS NULL OR deleted_at = '')`)
+  : await query(`SELECT * FROM ${table} WHERE _synced = 0 AND (deleted_at IS NULL OR deleted_at = '')`)
+
 
       for (const row of unsynced) {
         const conflictColumn = table === 'user_profiles' ? 'user_id' : 'id'

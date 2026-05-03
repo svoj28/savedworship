@@ -19,6 +19,7 @@ import { transposeText, transposeChord, getAllKeys, getTransposeDistance } from 
 import { query, queryOne, execute, transaction } from '../db/index'
 import { getPlaylistsByUserId, getPlaylistItems, updatePlaylistItemPosition } from '../db/queries'
 import { getCurrentUser } from '../lib/auth'
+import { useRole } from '../lib/useRole'
 
 interface Props {
   route: any
@@ -47,6 +48,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true)
   const [editingModalVisible, setEditingModalVisible] = useState(false)
   const [editingContent, setEditingContent] = useState('')
+  const { canManageChords } = useRole()
   
   // New state for browse features
   const [browseMode, setBrowseMode] = useState<BrowseMode>('single')
@@ -513,6 +515,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
       </ScrollView>
 
       {/* Action Buttons */}
+      {canManageChords && (
       <View style={styles.actionButtons}>
         <TouchableOpacity style={styles.actionButton} onPress={handleEditSong}>
           <Text style={styles.actionButtonText}>Edit</Text>
@@ -521,7 +524,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
           <Text style={styles.actionButtonText}>Delete</Text>
         </TouchableOpacity>
       </View>
-
+       )}
       {/* Floating Action Button */}
       {/* <TouchableOpacity
         style={styles.fab}

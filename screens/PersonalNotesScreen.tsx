@@ -16,6 +16,10 @@ import { ChordList, Artist } from '../db/models'
 import { getCurrentUser } from '../lib/auth'
 import { query, execute } from '../db/index'
 import uuid from 'react-native-uuid'
+import { useRole } from '../lib/useRole'
+import { syncRowToSupabase } from '../lib/syncToSupabase'
+import { getChordListById } from '../db/queries'
+import Ionicons from '@expo/vector-icons/Ionicons'
 
 interface Props {
   navigation: any
@@ -31,6 +35,8 @@ export default function PersonalNotesScreen({ navigation }: Props) {
   const [newListTitle, setNewListTitle] = useState('')
   const [selectedArtist, setSelectedArtist] = useState<string | null>(null)
   const [artists, setArtists] = useState<Artist[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [uploadedToCloud, setUploadedToCloud] = useState(false)
 
   // Load personal notes on screen focus
   useFocusEffect(
@@ -38,6 +44,34 @@ export default function PersonalNotesScreen({ navigation }: Props) {
       loadPersonalNotes()
     }, [])
   )
+
+const handleUploadToCloud = async (noteId: string) => {
+  Alert.alert(
+    'Upload to Cloud',
+    'This note will be backed up to the cloud. Are you sure?',
+    [
+      { text: 'Cancel' },
+      {
+        text: 'Upload',
+        onPress: async () => {
+          try {
+            setUploading(true)
+            const note = await getChordListById(noteId)
+            if (note) {
+              await syncRowToSupabase('chord_lists', note)
+              await loadPersonalNotes()  // ← reload to reflect new synced state
+              Alert.alert('Success', 'Note backed up to cloud!')
+            }
+          } catch (err) {
+            Alert.alert('Error', 'Failed to upload note')
+          } finally {
+            setUploading(false)
+          }
+        }
+      }
+    ]
+  )
+}
 
   const loadPersonalNotes = async () => {
     try {
@@ -211,28 +245,60 @@ export default function PersonalNotesScreen({ navigation }: Props) {
           data={filteredLists}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContainer}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.noteCard}
-              onPress={() => handleSelectList(item)}
-            >
-              <View style={styles.noteCardContent}>
-                <Text style={styles.noteTitle}>{item.title}</Text>
-                <Text style={styles.noteDate}>
-                  {new Date(item.createdAt).toLocaleDateString()}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.noteDeleteButton}
-                onPress={(e) => {
-                  e.stopPropagation()
-                  handleDeleteList(item.id)
-                }}
-              >
-                <Text style={styles.noteDeleteIcon}>✕</Text>
-              </TouchableOpacity>
-            </TouchableOpacity>
-          )}
+renderItem={({ item }) => (
+  <TouchableOpacity
+    style={styles.noteCard}
+    onPress={() => handleSelectList(item)}
+  >
+    <View style={styles.noteCardContent}>
+      <Text style={styles.noteTitle}>{item.title}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+        <Text style={styles.noteDate}>
+          {new Date(item.createdAt).toLocaleDateString()}
+        </Text>
+        {/* Cloud sync indicator */}
+        <View style={[styles.syncBadge, item.synced ? styles.syncBadgeSynced : styles.syncBadgeLocal]}>
+          <Ionicons
+            name={item.synced ? 'cloud-done-outline' : 'phone-portrait-outline'}
+            size={11}
+            color={item.synced ? '#34C759' : '#FF9500'}
+          />
+          <Text style={[styles.syncBadgeText, { color: item.synced ? '#34C759' : '#FF9500' }]}>
+            {item.synced ? 'Cloud' : 'Local only'}
+          </Text>
+        </View>
+      </View>
+    </View>
+
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      {/* Hide upload button if already synced */}
+      {!item.synced && (
+        <TouchableOpacity
+          style={styles.cloudButton}
+          onPress={(e) => {
+            e.stopPropagation()
+            handleUploadToCloud(item.id)
+          }}
+          disabled={uploading}
+        >
+          {uploading
+            ? <ActivityIndicator size="small" color="#007AFF" />
+            : <Ionicons name="cloud-upload-outline" size={20} color="#007AFF" />
+          }
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity
+        style={styles.noteDeleteButton}
+        onPress={(e) => {
+          e.stopPropagation()
+          handleDeleteList(item.id)
+        }}
+      >
+        <Text style={styles.noteDeleteIcon}>✕</Text>
+      </TouchableOpacity>
+    </View>
+  </TouchableOpacity>
+)}
         />
       )}
 
@@ -274,6 +340,8 @@ export default function PersonalNotesScreen({ navigation }: Props) {
               >
                 <Text style={styles.createButtonText}>Create</Text>
               </TouchableOpacity>
+
+              
             </View>
           </View>
         </View>
@@ -283,6 +351,32 @@ export default function PersonalNotesScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
+  syncBadge: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 3,
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 10,
+  backgroundColor: '#f5f5f5',
+},
+syncBadgeSynced: {
+  backgroundColor: '#f0fff4',
+},
+syncBadgeLocal: {
+  backgroundColor: '#fff8f0',
+},
+syncBadgeText: {
+  fontSize: 10,
+  fontWeight: '600',
+},
+  cloudButton: {
+  padding: 8,
+  borderRadius: 6,
+  backgroundColor: '#f0f0f0',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
   container: {
     flex: 1,
     backgroundColor: '#fafafa',

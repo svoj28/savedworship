@@ -54,7 +54,10 @@ export async function createChordList(data: Omit<ChordList, 'id'>): Promise<Chor
     'INSERT INTO chord_lists (id, title, artist_id, user_id, is_private, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [list.id, list.title, list.artistId, list.userId, list.isPrivate ? 1 : 0, list.createdAt, list.updatedAt, 0]
   )
-  await syncRowToSupabase('chord_lists', list)
+  // Only sync if not private
+  if (!list.isPrivate) {
+    await syncRowToSupabase('chord_lists', list)
+  }
   return list
 }
 
@@ -80,17 +83,24 @@ export async function updateChordList(id: string, data: Partial<ChordList>): Pro
   if (!updates) return
   await execute(`UPDATE chord_lists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
   const updated = await getChordListById(id)
-  if (updated) await syncRowToSupabase('chord_lists', updated)
+  // Only sync if not private
+  if (updated && !updated.isPrivate) {
+    await syncRowToSupabase('chord_lists', updated)
+  }
 }
 
 export async function deleteChordList(id: string): Promise<void> {
+  const list = await getChordListById(id)
   const songs = await query('SELECT id FROM songs WHERE chord_list_id = ?', [id]) as { id: string }[]
-  for (const song of songs) {
-    await deleteRowFromSupabase('songs', song.id)
+  // Only delete from Supabase if it was a public chord list
+  if (list && !list.isPrivate) {
+    for (const song of songs) {
+      await deleteRowFromSupabase('songs', song.id)
+    }
+    await deleteRowFromSupabase('chord_lists', id)
   }
   await execute('DELETE FROM songs WHERE chord_list_id = ?', [id])
   await execute('DELETE FROM chord_lists WHERE id = ?', [id])
-  await deleteRowFromSupabase('chord_lists', id)
 }
 
 // ─── SONGS ────────────────────────────────────────────────────────────────────
@@ -606,6 +616,7 @@ function mapUserProfile(row: any): UserProfile {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     synced: Boolean(row._synced),
+    role: row.role ?? 'user',
   }
 }
 

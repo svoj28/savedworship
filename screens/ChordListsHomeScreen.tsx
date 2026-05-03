@@ -24,6 +24,8 @@ import { getCurrentUser } from '../lib/auth'
 import { query } from '../db/index'
 import { getPlaylistsByUserId, createPlaylist, deletePlaylist, getPlaylistItems, addToPlaylist, removeFromPlaylist } from '../db/queries'
 import { PlaylistSongViewerModal } from '../components/PlaylistSongViewerModal'
+import { useRole } from '../lib/useRole'
+
 interface Props {
   navigation: any
 }
@@ -67,6 +69,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
   const [showSongViewer, setShowSongViewer] = useState(false)
   const [viewerStartIndex, setViewerStartIndex] = useState(0)
   const [viewerSongs, setViewerSongs] = useState<any[]>([])
+  const { canManageChords } = useRole()
 
   useFocusEffect(
     React.useCallback(() => {
@@ -429,7 +432,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
             <Ionicons name="add" size={28} color="#fff" />
           </TouchableOpacity>
         )}
-        {activeTab === 'artists' && (
+        {activeTab === 'artists' && canManageChords && (
           <TouchableOpacity
             style={styles.fab}
             onPress={handleCreateSong}

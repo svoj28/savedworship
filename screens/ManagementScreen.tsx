@@ -32,6 +32,7 @@ import {
   deleteVersionDropper,
 } from '../db/queries'
 import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
+import { useRole } from '../lib/useRole'
 
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
 
@@ -48,6 +49,7 @@ export default function ManagementScreen() {
   const [activeSection, setActiveSection] = useState<Section>(null)
   const [userId, setUserId] = useState<string>('')
   const [loading, setLoading] = useState(false)
+  const { canManageContent } = useRole()
 
   // Data states
   const [lineups, setLineups] = useState<Lineup[]>([])
@@ -290,10 +292,12 @@ export default function ManagementScreen() {
       return (
         <View style={styles.centerContent}>
           <Text style={styles.emptyText}>{emptyMessage}</Text>
+          {canManageContent && (
           <TouchableOpacity style={styles.addButton} onPress={handleAddNew}>
             <Ionicons name="add-circle" size={40} color="#007AFF" />
             <Text style={styles.addButtonText}>Add New</Text>
           </TouchableOpacity>
+          )}
         </View>
       )
     }
@@ -309,6 +313,8 @@ export default function ManagementScreen() {
               {item.youtubeUrl && <Text style={styles.itemUrl}>{item.youtubeUrl}</Text>}
               {item.fileUrl && <Text style={styles.itemUrl}>{item.fileUrl}</Text>}
             </View>
+
+            {canManageContent && (
             <View style={styles.itemActions}>
               <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionButton}>
                 <Ionicons name="pencil" size={20} color="#007AFF" />
@@ -317,12 +323,16 @@ export default function ManagementScreen() {
                 <Ionicons name="trash" size={20} color="#FF3B30" />
               </TouchableOpacity>
             </View>
+            )}
           </View>
         ))}
+
+         {canManageContent && (
         <TouchableOpacity style={styles.addMoreButton} onPress={handleAddNew}>
           <Ionicons name="add-circle" size={30} color="#007AFF" />
           <Text style={styles.addMoreText}>Add Another</Text>
         </TouchableOpacity>
+        )}
       </View>
     )
   }
@@ -507,9 +517,12 @@ export default function ManagementScreen() {
           {activeSection === 'announcements' && 'Important Announcements'}
           {activeSection === 'versions' && 'Version Dropper'}
         </Text>
+        {canManageContent && (
         <TouchableOpacity onPress={handleAddNew}>
           <Ionicons name="add" size={28} color="#007AFF" />
         </TouchableOpacity>
+        )}
+        {!canManageContent && <View style={{ width: 28 }} />}
       </View>
 
       {renderSectionContent()}

@@ -37,6 +37,25 @@ export async function signUpWithEmail(
     }
 
     if (data.user) {
+      // Create local profile immediately so role is available without waiting for sync
+      try {
+        const { createUserProfile } = await import('../db/queries')
+        await createUserProfile({
+          userId: data.user.id,
+          nickname: displayName || '',
+          bio: '',
+          avatarUrl: '',
+          instruments: '',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          synced: false,
+          role: 'user',  // always user — trigger enforces this on Supabase side too
+        })
+      } catch (profileErr) {
+        // Profile may already exist — safe to ignore
+        console.warn('Profile creation skipped:', profileErr)
+      }
+
       return {
         user: {
           id: data.user.id,

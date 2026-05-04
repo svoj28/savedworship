@@ -73,24 +73,24 @@ interface Instrument {
   id: InstrumentType
   name: string
   icon: string
-  color: string
 }
 
+// Monochrome instruments — no colors
 const instruments: Instrument[] = [
-  { id: 'drums', name: 'Drums', icon: 'musical-notes', color: '#FF6B6B' },
-  { id: 'bass', name: 'Bass Guitar', icon: 'guitar', color: '#4ECDC4' },
-  { id: 'electric_guitar', name: 'Electric Guitar', icon: 'bolt', color: '#FFE66D' },
-  { id: 'acoustic_guitar', name: 'Acoustic Guitar', icon: 'musical-note', color: '#95E1D3' },
-  { id: 'keyboard', name: 'Keyboard', icon: 'square', color: '#9B59B6' },
+  { id: 'drums', name: 'Drums', icon: 'musical-notes' },
+  { id: 'bass', name: 'Bass Guitar', icon: 'radio' },
+  { id: 'electric_guitar', name: 'Electric Guitar', icon: 'flash' },
+  { id: 'acoustic_guitar', name: 'Acoustic Guitar', icon: 'musical-note' },
+  { id: 'keyboard', name: 'Keyboard', icon: 'apps' },
 ]
 
 const onlineTools = [
-  { title: 'Remove-Vocals.com', description: 'Simple & fast vocal removal', features: ['Free', 'No signup', 'Fast'], color: '#FF6B6B', url: 'https://www.remove-vocals.com/' },
-  { title: 'Vocal-Remover.org', description: 'AI-powered vocal extraction', features: ['AI tech', 'High quality', 'Batch'], color: '#4ECDC4', url: 'https://www.vocal-remover.org/' },
-  { title: 'Splitter AI', description: 'Advanced stem separation', features: ['Pro quality', 'Multiple stems', 'API'], color: '#45B7D1', url: 'https://www.splitter.ai/' },
-  { title: 'LALAL.AI', description: 'Neural network stem splitter', features: ['Neural AI', 'High quality', 'API'], color: '#1ABC9C', url: 'https://www.lalal.ai/' },
-  { title: 'Karaoke Version', description: 'Dedicated karaoke platform', features: ['Massive library', 'Pro quality', 'Premium'], color: '#F39C12', url: 'https://www.karaoke-version.com/' },
-  { title: 'iZotope RX', description: 'Professional audio editing', features: ['Pro tool', 'Voice isolation', 'Premium'], color: '#9B59B6', url: 'https://www.izotope.com/en/products/rx.html' },
+  { title: 'Remove-Vocals.com', description: 'Simple & fast vocal removal', features: ['Free', 'No signup', 'Fast'], url: 'https://www.remove-vocals.com/' },
+  { title: 'Vocal-Remover.org', description: 'AI-powered vocal extraction', features: ['AI tech', 'High quality', 'Batch'], url: 'https://www.vocal-remover.org/' },
+  { title: 'Splitter AI', description: 'Advanced stem separation', features: ['Pro quality', 'Multiple stems', 'API'], url: 'https://www.splitter.ai/' },
+  { title: 'LALAL.AI', description: 'Neural network stem splitter', features: ['Neural AI', 'High quality', 'API'], url: 'https://www.lalal.ai/' },
+  { title: 'Karaoke Version', description: 'Dedicated karaoke platform', features: ['Massive library', 'Pro quality', 'Premium'], url: 'https://www.karaoke-version.com/' },
+  { title: 'iZotope RX', description: 'Professional audio editing', features: ['Pro tool', 'Voice isolation', 'Premium'], url: 'https://www.izotope.com/en/products/rx.html' },
 ]
 
 const pitchPresets: PitchShiftStep[] = [
@@ -104,6 +104,40 @@ const pitchPresets: PitchShiftStep[] = [
   { semitones: 7, displayName: 'Up Perfect 5th', icon: 'arrow-up' },
   { semitones: 12, displayName: 'Up 1 Octave', icon: 'arrow-up' },
 ]
+
+// ─── Reusable Step Label ──────────────────────────────────────────────────────
+function StepLabel({ step, label }: { step: string; label: string }) {
+  return (
+    <View style={stepStyles.row}>
+      <View style={stepStyles.badge}>
+        <Text style={stepStyles.badgeText}>{step}</Text>
+      </View>
+      <Text style={stepStyles.label}>{label}</Text>
+    </View>
+  )
+}
+
+const stepStyles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
+  badge: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: '#1A1A1A',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  badgeText: { fontSize: 11, fontWeight: '700', color: '#FFF' },
+  label: { fontSize: 13, fontWeight: '700', color: '#1A1A1A', letterSpacing: 1, textTransform: 'uppercase' },
+})
+
+// ─── Divider ─────────────────────────────────────────────────────────────────
+function Divider() {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 20, gap: 8 }}>
+      <View style={{ flex: 1, height: 1, backgroundColor: '#E4E4E4' }} />
+      <View style={{ width: 4, height: 4, backgroundColor: '#C8C8C8', transform: [{ rotate: '45deg' }] }} />
+      <View style={{ flex: 1, height: 1, backgroundColor: '#E4E4E4' }} />
+    </View>
+  )
+}
 
 export default function AudioToolsScreen() {
   const [activeTab, setActiveTab] = useState<MainTab>('pitch')
@@ -154,7 +188,6 @@ export default function AudioToolsScreen() {
     Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: true })
     setPitchShiftInfo(pitchShifter.getPitchShiftInfo())
     removalService.setProgressCallback((update) => setProgress(update))
-
     return () => {
       if (sound) sound.unloadAsync()
       if (playbackIntervalRef.current) clearInterval(playbackIntervalRef.current)
@@ -454,25 +487,38 @@ export default function AudioToolsScreen() {
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Audio Tools</Text>
-        <Text style={styles.headerSubtitle}>Pitch · Vocal Remover · Online Tools</Text>
-      </View>
 
-      {/* Main Tabs */}
+      {/* ── Header ── */}
+      <View style={styles.header}>
+<View style={styles.headerInner}>
+          <View style={styles.headerTitleRow}>
+            <View style={styles.headerAccent} />
+            <View>
+                      <Text style={styles.headerTitle}>Audio Tools</Text>
+              <Text style={styles.headerSubtitle}>Key · Vocal · Resources</Text>
+</View>
+          </View>
+        </View>
+                  </View>
+
+      {/* ── Tab Bar ── */}
       <View style={styles.tabBar}>
         {([
-          { key: 'pitch', label: 'Key/Pitch', icon: 'musical-notes' },
+          { key: 'pitch', label: 'Key / Pitch', icon: 'musical-notes' },
           { key: 'vocal', label: 'Vocal', icon: 'mic' },
-          { key: 'tools', label: 'Online', icon: 'globe' },
+          { key: 'tools', label: 'Online', icon: 'globe-outline' },
         ] as const).map(tab => (
           <TouchableOpacity
             key={tab.key}
             style={[styles.tab, activeTab === tab.key && styles.tabActive]}
             onPress={() => setActiveTab(tab.key)}
-          >
-            <Ionicons name={tab.icon} size={18} color={activeTab === tab.key ? '#007AFF' : '#999'} />
+activeOpacity={0.7}
+                      >
+            <Ionicons
+name={tab.icon}
+size={16}
+color={activeTab === tab.key ? '#1A1A1A' : '#AAAAAA'}
+/>
             <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
               {tab.label}
             </Text>
@@ -480,32 +526,44 @@ export default function AudioToolsScreen() {
         ))}
       </View>
 
-      {/* ─── KEY/PITCH TAB ─── */}
+      {/* ─────────────────────── KEY / PITCH TAB ─────────────────────── */}
       {activeTab === 'pitch' && (
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-          <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-            {/* File Import */}
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>1. Import Audio File</Text>
-              <TouchableOpacity style={styles.filePickerButton} onPress={handlePickFile} disabled={isProcessing}>
-                <Ionicons name="cloud-download-outline" size={20} color="#fff" />
-                <Text style={styles.filePickerButtonText}>{isProcessing ? 'Importing...' : 'Import Audio File'}</Text>
+          <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollPad}>
+
+            {/* 1. Import */}
+            <View style={styles.card}>
+              <StepLabel step="1" label="Import Audio File" />
+              <TouchableOpacity
+style={styles.importBtn}
+onPress={handlePickFile}
+disabled={isProcessing}
+                activeOpacity={0.8}
+>
+                <Ionicons name="cloud-download-outline" size={18} color="#FAFAFA" />
+                <Text style={styles.importBtnText}>
+{isProcessing ? 'Importing…' : 'Choose File'}
+</Text>
               </TouchableOpacity>
+
               {isProcessing && (
-                <View style={styles.processingContainer}>
-                  <ActivityIndicator size="large" color="#007AFF" />
-                  <Text style={styles.processingText}>Processing audio file...</Text>
+                <View style={styles.processingRow}>
+                  <ActivityIndicator size="small" color="#1A1A1A" />
+                  <Text style={styles.processingText}>Processing audio…</Text>
                 </View>
               )}
+
               {selectedFile && (
-                <View style={styles.selectedFileInfo}>
-                  <Ionicons name="musical-notes" size={20} color="#007AFF" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fileInfoName}>{fileName}</Text>
-                    <Text style={styles.fileInfoPath}>Saved locally</Text>
+                <View style={styles.fileChip}>
+                  <View style={styles.fileChipIconBox}>
+                    <Ionicons name="musical-notes" size={16} color="#1A1A1A" />
+</View>
+                                    <View style={{ flex: 1 }}>
+                    <Text style={styles.fileChipName} numberOfLines={1}>{fileName}</Text>
+                    <Text style={styles.fileChipSub}>Saved locally</Text>
                   </View>
-                  <TouchableOpacity onPress={handleClearFile}>
-                    <Ionicons name="close" size={24} color="#FF3B30" />
+                  <TouchableOpacity onPress={handleClearFile} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={20} color="#999" />
                   </TouchableOpacity>
                 </View>
               )}
@@ -513,77 +571,111 @@ export default function AudioToolsScreen() {
 
             {/* Playback */}
             {selectedFile && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Playback</Text>
-                <View style={styles.playbackControls}>
-                  <TouchableOpacity style={styles.playBtn} onPress={handlePitchPlayPause}>
-                    <Ionicons name={pitchPlaybackState.isPlaying ? 'pause' : 'play'} size={24} color="#fff" />
+              <View style={styles.card}>
+                <View style={styles.cardLabelRow}>
+<View style={styles.cardLabelBar} />
+                  <Text style={styles.cardLabel}>Playback</Text>
+</View>
+
+                                <View style={styles.playbackRow}>
+                  <TouchableOpacity
+style={[styles.playCircle, pitchPlaybackState.isPlaying && styles.playCircleActive]}
+onPress={handlePitchPlayPause}
+                    activeOpacity={0.85}
+>
+                    <Ionicons
+name={pitchPlaybackState.isPlaying ? 'pause' : 'play'}
+size={22}
+color={pitchPlaybackState.isPlaying ? '#FAFAFA' : '#1A1A1A'}
+/>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.stopBtn} onPress={handlePitchStop}>
-                    <Ionicons name="stop" size={24} color="#fff" />
+                  <TouchableOpacity style={styles.stopCircle} onPress={handlePitchStop} activeOpacity={0.85}>
+                    <Ionicons name="stop" size={18} color="#1A1A1A" />
                   </TouchableOpacity>
-                </View>
-                {pitchPlaybackState.duration > 0 && (
-                  <>
-                    <Slider
-                      style={{ height: 40 }}
-                      minimumValue={0}
-                      maximumValue={pitchPlaybackState.duration}
-                      value={pitchPlaybackState.position}
-                      onValueChange={async (v) => { if (currentSoundRef.current) await currentSoundRef.current.setPositionAsync(v) }}
-                      minimumTrackTintColor="#007AFF"
-                      maximumTrackTintColor="#e0e0e0"
-                    />
-                    <View style={styles.timeRow}>
+{pitchPlaybackState.duration > 0 && (
+                    <View style={styles.playbackTimeRow}>
                       <Text style={styles.timeText}>{formatTime(pitchPlaybackState.position)}</Text>
-                      <Text style={styles.timeText}>{formatTime(pitchPlaybackState.duration)}</Text>
-                    </View>
-                  </>
+                      <Text style={styles.timeSep}>/</Text>
+                      <Text style={styles.timeDuration}>{formatTime(pitchPlaybackState.duration)}</Text>
+                                      </View>
+)}
+                </View>
+
+                                  {pitchPlaybackState.duration > 0 && (
+                  <Slider
+                    style={{ height: 36, marginTop: 4 }}
+                    minimumValue={0}
+                    maximumValue={pitchPlaybackState.duration}
+                    value={pitchPlaybackState.position}
+                    onValueChange={async (v) => { if (currentSoundRef.current) await currentSoundRef.current.setPositionAsync(v) }}
+                    minimumTrackTintColor="#1A1A1A"
+                    maximumTrackTintColor="#DEDEDE"
+                    thumbTintColor="#1A1A1A"
+                  />
                 )}
               </View>
             )}
 
-            {/* Original Key */}
+            {/* 2. Original Key */}
             {selectedFile && (
-              <View style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>2. Original Key</Text>
-                  {isDetectingKey && <ActivityIndicator size="small" color="#007AFF" />}
+              <View style={styles.card}>
+                <View style={styles.stepLabelDetectRow}>
+                  <StepLabel step="2" label="Original Key" />
+                  {isDetectingKey && <ActivityIndicator size="small" color="#1A1A1A" />}
                 </View>
+
                 {detectionConfidence > 0 && (
                   <View style={styles.confidenceRow}>
-                    <ProgressBar progress={detectionConfidence / 100} color="#34C759" backgroundColor="#e0e0e0" height={6} />
-                    <Text style={styles.confidenceText}>Confidence: {Math.round(detectionConfidence)}%</Text>
+                    <View style={styles.confidenceBarBg}>
+                      <View style={[styles.confidenceBarFill, { width: `${detectionConfidence}%` }]} />
+</View>
+                                        <Text style={styles.confidenceText}>{Math.round(detectionConfidence)}% confidence</Text>
                   </View>
                 )}
+
                 <View style={styles.keyGrid}>
                   {NOTE_NAMES.map(note => (
                     <TouchableOpacity
                       key={note}
-                      style={[styles.keyButton, currentKey === note && styles.keyButtonActive]}
+                      style={[styles.keyBtn, currentKey === note && styles.keyBtnActive]}
                       onPress={() => { setCurrentKey(note); setTargetKey(transposeNote(note, pitchShift)) }}
-                    >
-                      <Text style={[styles.keyButtonText, currentKey === note && styles.keyButtonTextActive]}>{note}</Text>
+activeOpacity={0.7}
+                                          >
+                      <Text style={[styles.keyBtnText, currentKey === note && styles.keyBtnTextActive]}>
+{note}
+</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </View>
             )}
 
-            {/* Pitch Shift */}
+            {/* 3. Pitch Shift */}
             {selectedFile && (
-              <View style={styles.section}>
-                <Text style={styles.sectionTitle}>3. Adjust Pitch</Text>
+              <View style={styles.card}>
+                <StepLabel step="3" label="Adjust Pitch" />
+
+                {/* Key transition display */}
                 <View style={styles.pitchDisplay}>
-                  <Text style={styles.pitchValue}>{pitchShift > 0 ? '+' : ''}{pitchShift} semitones</Text>
-                  <View style={styles.keyTransition}>
-                    <Text style={styles.keyLabel}>{currentKey}</Text>
-                    <Ionicons name="arrow-forward" size={18} color="#007AFF" />
-                    <Text style={styles.keyLabel}>{targetKey}</Text>
+                  <View style={styles.keyPill}>
+                    <Text style={styles.keyPillLabel}>FROM</Text>
+                    <Text style={styles.keyPillKey}>{currentKey}</Text>
+                  </View>
+<View style={styles.pitchArrowCol}>
+                    <Text style={styles.pitchSemitones}>
+                      {pitchShift > 0 ? '+' : ''}{pitchShift}
+                    </Text>
+                    <Text style={styles.pitchSemiLabel}>semitones</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#888" style={{ marginTop: 2 }} />
+                                    </View>
+<View style={[styles.keyPill, styles.keyPillTarget]}>
+                    <Text style={styles.keyPillLabel}>TO</Text>
+                    <Text style={[styles.keyPillKey, styles.keyPillKeyTarget]}>{targetKey}</Text>
                   </View>
                 </View>
-                <View style={styles.sliderRow}>
-                  <Ionicons name="arrow-down-circle" size={22} color="#FF3B30" />
+
+                                  <View style={styles.sliderRow}>
+                  <Ionicons name="remove-circle-outline" size={20} color="#888" />
                   <Slider
                     style={styles.slider}
                     minimumValue={-6}
@@ -592,21 +684,30 @@ export default function AudioToolsScreen() {
                     value={pitchShift}
                     onValueChange={(v) => { setPitchShift(Math.round(v)); setTargetKey(transposeNote(currentKey, Math.round(v))) }}
                     onSlidingComplete={(v) => { const r = Math.round(v); setPitchShift(r); setTargetKey(transposeNote(currentKey, r)); requestPitchShift(r) }}
-                    minimumTrackTintColor="#007AFF"
-                    maximumTrackTintColor="#ccc"
+                    minimumTrackTintColor="#1A1A1A"
+                    maximumTrackTintColor="#DEDEDE"
+                    thumbTintColor="#1A1A1A"
                   />
-                  <Ionicons name="arrow-up-circle" size={22} color="#34C759" />
+                  <Ionicons name="add-circle-outline" size={20} color="#888" />
                 </View>
 
-                <Text style={styles.presetsLabel}>Quick Adjustments</Text>
+<Divider />
+
+                {/* Presets */}
+                                <Text style={styles.minorLabel}>Quick Adjustments</Text>
                 <View style={styles.presetsGrid}>
                   {pitchPresets.slice(2, 8).map(preset => (
                     <TouchableOpacity
                       key={preset.semitones}
                       style={[styles.presetBtn, pitchShift === preset.semitones && styles.presetBtnActive]}
                       onPress={() => handlePresetPress(preset.semitones)}
-                    >
-                      <Ionicons name={preset.icon as any} size={14} color={pitchShift === preset.semitones ? '#fff' : '#007AFF'} />
+activeOpacity={0.75}
+                                          >
+                      <Ionicons
+name={preset.icon as any}
+size={11}
+color={pitchShift === preset.semitones ? '#FAFAFA' : '#555'}
+/>
                       <Text style={[styles.presetBtnText, pitchShift === preset.semitones && styles.presetBtnTextActive]}>
                         {preset.displayName}
                       </Text>
@@ -614,12 +715,19 @@ export default function AudioToolsScreen() {
                   ))}
                 </View>
 
+                <Divider />
+
                 {/* Tempo */}
                 <View style={styles.tempoBox}>
-                  <Text style={styles.tempoTitle}>Optional: Adjust Tempo</Text>
-                  <Text style={styles.tempoValue}>Tempo: {tempoAdjustPercent > 0 ? '+' : ''}{tempoAdjustPercent}% · Speed: x{(1 + tempoAdjustPercent / 100).toFixed(2)}</Text>
-                  <View style={styles.sliderRow}>
-                    <Ionicons name="chevron-back" size={18} color="#FF9500" />
+<View style={styles.tempoHeaderRow}>
+                    <Ionicons name="timer-outline" size={15} color="#555" />
+                                      <Text style={styles.tempoTitle}>Tempo Adjustment</Text>
+                    <Text style={styles.tempoValue}>
+{tempoAdjustPercent > 0 ? '+' : ''}{tempoAdjustPercent}% · ×{(1 + tempoAdjustPercent / 100).toFixed(2)}
+</Text>
+</View>
+                                    <View style={styles.sliderRow}>
+                    <Ionicons name="play-back-outline" size={16} color="#888" />
                     <Slider
                       style={styles.slider}
                       minimumValue={MANUAL_TEMPO_MIN_PERCENT}
@@ -628,10 +736,11 @@ export default function AudioToolsScreen() {
                       value={tempoAdjustPercent}
                       onValueChange={(v) => updateTempoAdjust(v)}
                       onSlidingComplete={(v) => { updateTempoAdjust(v); void applyManualTempoToCurrentSound() }}
-                      minimumTrackTintColor="#FF9500"
-                      maximumTrackTintColor="#ccc"
+                      minimumTrackTintColor="#555"
+                      maximumTrackTintColor="#DEDEDE"
+                      thumbTintColor="#555"
                     />
-                    <Ionicons name="chevron-forward" size={18} color="#FF9500" />
+                    <Ionicons name="play-forward-outline" size={16} color="#888" />
                   </View>
                   <View style={styles.tempoQuickRow}>
                     {[-10, -5, 0, 5, 10].map(v => (
@@ -639,7 +748,8 @@ export default function AudioToolsScreen() {
                         key={v}
                         style={[styles.tempoQuickBtn, tempoAdjustPercent === v && styles.tempoQuickBtnActive]}
                         onPress={() => { updateTempoAdjust(v); void applyManualTempoToCurrentSound() }}
-                      >
+activeOpacity={0.7}
+                                              >
                         <Text style={[styles.tempoQuickText, tempoAdjustPercent === v && styles.tempoQuickTextActive]}>
                           {v > 0 ? '+' : ''}{v}%
                         </Text>
@@ -651,15 +761,25 @@ export default function AudioToolsScreen() {
             )}
 
             {selectedFile && (
-              <TouchableOpacity style={styles.applyBtn} onPress={async () => {
-                setIsProcessing(true)
-                try {
-                  await updateAudioFileMetadata(localFilePath?.split('/').pop() || '', { originalKey: currentKey, targetKey, pitchShift, tempoAdjustPercent, tempoAdjustFactor: 1 + tempoAdjustPercent / 100 })
-                  Alert.alert('Saved', `Pitch settings saved.\nKey: ${currentKey} → ${targetKey}\nShift: ${pitchShift > 0 ? '+' : ''}${pitchShift} semitones`)
-                } finally { setIsProcessing(false) }
-              }} disabled={isProcessing}>
-                <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                <Text style={styles.applyBtnText}>{isProcessing ? 'Saving...' : 'Save Pitch Settings'}</Text>
+              <TouchableOpacity
+style={styles.saveBtn}
+onPress={async () => {
+                  setIsProcessing(true)
+                  try {
+                    await updateAudioFileMetadata(localFilePath?.split('/').pop() || '', {
+originalKey: currentKey, targetKey, pitchShift, tempoAdjustPercent,
+tempoAdjustFactor: 1 + tempoAdjustPercent / 100,
+})
+                    Alert.alert('Saved', `Pitch settings saved.\nKey: ${currentKey} → ${targetKey}\nShift: ${pitchShift > 0 ? '+' : ''}${pitchShift} semitones`)
+                  } finally { setIsProcessing(false) }
+                }}
+disabled={isProcessing}
+                activeOpacity={0.85}
+>
+                <Ionicons name="checkmark" size={18} color="#FAFAFA" />
+                <Text style={styles.saveBtnText}>
+{isProcessing ? 'Saving…' : 'Save Pitch Settings'}
+</Text>
               </TouchableOpacity>
             )}
 
@@ -668,58 +788,78 @@ export default function AudioToolsScreen() {
         </KeyboardAvoidingView>
       )}
 
-      {/* ─── VOCAL REMOVER TAB ─── */}
+      {/* ─────────────────────── VOCAL REMOVER TAB ─────────────────────── */}
       {activeTab === 'vocal' && (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {/* File */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>1. Select Audio File</Text>
-            <TouchableOpacity style={styles.vocalFileBtn} onPress={handlePickVocalAudio}>
-              <Ionicons name="cloud-upload" size={24} color="#007AFF" />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.vocalFileBtnTitle}>{selectedVocalAudioName || 'Choose Audio File'}</Text>
-                <Text style={styles.vocalFileBtnSub}>{selectedVocalAudioName ? 'File selected' : 'MP3, WAV, M4A, AAC'}</Text>
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollPad}>
+
+          {/* 1. Select file */}
+          <View style={styles.card}>
+            <StepLabel step="1" label="Select Audio File" />
+            <TouchableOpacity style={styles.uploadZone} onPress={handlePickVocalAudio} activeOpacity={0.75}>
+<View style={styles.uploadIconBox}>
+                              <Ionicons name="cloud-upload-outline" size={28} color="#555" />
+</View>
+                            <View style={{ flex: 1 }}>
+                <Text style={styles.uploadTitle}>
+{selectedVocalAudioName || 'Choose Audio File'}
+</Text>
+                <Text style={styles.uploadSub}>
+{selectedVocalAudioName ? 'Tap to change file' : 'MP3, WAV, M4A, AAC'}
+</Text>
               </View>
-            </TouchableOpacity>
+<Ionicons name="chevron-forward" size={18} color="#AAAAAA" />
+                          </TouchableOpacity>
           </View>
 
-          {/* Removal Type */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>2. Select Removal Type</Text>
-            <View style={styles.removalTypeRow}>
+          {/* 2. Removal type */}
+          <View style={styles.card}>
+            <StepLabel step="2" label="Removal Type" />
+            <View style={styles.removalRow}>
               {([
-                { key: 'vocal', label: 'Remove Vocals', sub: 'Get instrumental version', icon: 'mic' },
-                { key: 'instrument', label: 'Remove Instrument', sub: 'Select specific instrument', icon: 'musical-notes' },
+                { key: 'vocal', label: 'Remove Vocals', sub: 'Get instrumental track', icon: 'mic-outline' },
+                { key: 'instrument', label: 'Remove Instrument', sub: 'Isolate specific part', icon: 'musical-notes-outline' },
               ] as const).map(item => (
                 <TouchableOpacity
                   key={item.key}
-                  style={[styles.removalTypeBtn, removalMode === item.key && styles.removalTypeBtnActive]}
+                  style={[styles.removalBtn, removalMode === item.key && styles.removalBtnActive]}
                   onPress={() => { setRemovalMode(item.key); if (item.key === 'vocal') setSelectedInstrument(null) }}
-                >
-                  <Ionicons name={item.icon} size={28} color={removalMode === item.key ? '#007AFF' : '#999'} />
-                  <Text style={[styles.removalTypeBtnTitle, removalMode === item.key && styles.removalTypeBtnTitleActive]}>{item.label}</Text>
-                  <Text style={styles.removalTypeBtnSub}>{item.sub}</Text>
+activeOpacity={0.75}
+                                  >
+                  <Ionicons
+name={item.icon}
+size={26}
+color={removalMode === item.key ? '#1A1A1A' : '#BBBBBB'}
+/>
+                  <Text style={[styles.removalBtnTitle, removalMode === item.key && styles.removalBtnTitleActive]}>
+{item.label}
+</Text>
+                  <Text style={styles.removalBtnSub}>{item.sub}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
-          {/* Instruments */}
+          {/* 3. Instrument picker */}
           {removalMode === 'instrument' && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>3. Choose Instrument</Text>
+            <View style={styles.card}>
+              <StepLabel step="3" label="Choose Instrument" />
               <View style={styles.instrumentGrid}>
                 {instruments.map(inst => (
                   <TouchableOpacity
                     key={inst.id}
-                    style={[styles.instrumentCard, selectedInstrument === inst.id && styles.instrumentCardActive, { borderLeftColor: inst.color }]}
+                    style={[styles.instrumentCard, selectedInstrument === inst.id && styles.instrumentCardActive]}
                     onPress={() => setSelectedInstrument(inst.id)}
-                  >
-                    <View style={[styles.instrumentIcon, { backgroundColor: inst.color }]}>
-                      <Ionicons name={inst.icon as any} size={24} color="#fff" />
+activeOpacity={0.75}
+                                      >
+                    <View style={[styles.instrumentIconBox, selectedInstrument === inst.id && styles.instrumentIconBoxActive]}>
+                      <Ionicons name={inst.icon as any} size={22} color={selectedInstrument === inst.id ? '#FAFAFA' : '#555'} />
                     </View>
-                    <Text style={styles.instrumentName}>{inst.name}</Text>
-                    {selectedInstrument === inst.id && <Ionicons name="checkmark-circle" size={20} color={inst.color} />}
+                    <Text style={[styles.instrumentName, selectedInstrument === inst.id && styles.instrumentNameActive]}>
+{inst.name}
+</Text>
+                    {selectedInstrument === inst.id && (
+<Ionicons name="checkmark-circle" size={16} color="#1A1A1A" style={{ marginTop: 4 }} />
+                    )}
                   </TouchableOpacity>
                 ))}
               </View>
@@ -727,48 +867,64 @@ export default function AudioToolsScreen() {
           )}
 
           {/* Process */}
-          <View style={styles.section}>
+          <View style={styles.card}>
             <TouchableOpacity
               style={[styles.processBtn, isVocalProcessing && styles.processBtnDisabled]}
               onPress={handleProcessVocalAudio}
               disabled={isVocalProcessing}
-            >
+activeOpacity={0.85}
+                          >
               {isVocalProcessing
-                ? <><ActivityIndicator color="#fff" /><Text style={styles.processBtnText}>{progress.message}</Text></>
-                : <><Ionicons name="play-circle" size={24} color="#fff" /><Text style={styles.processBtnText}>Process Audio</Text></>
+                ? <><ActivityIndicator color="#FAFAFA" /><Text style={styles.processBtnText}>{progress.message || 'Processing…'}</Text></>
+                : <><Ionicons name="cog-outline" size={20} color="#FAFAFA" /><Text style={styles.processBtnText}>Process Audio</Text></>
               }
             </TouchableOpacity>
+
             {isVocalProcessing && (
               <View style={styles.progressBox}>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${progress.progress}%` }]} />
+                <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarFill, { width: `${progress.progress}%` }]} />
                 </View>
                 <Text style={styles.progressText}>{Math.round(progress.progress)}%</Text>
               </View>
             )}
           </View>
 
-          {/* Playback */}
+          {/* Playback result */}
           {processedAudioUri && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>4. Play Result</Text>
-              <View style={styles.vocalPlayer}>
-                <TouchableOpacity onPress={handleVocalPlayPause}>
-                  <Ionicons name={vocalIsPlaying ? 'pause-circle' : 'play-circle'} size={48} color="#007AFF" />
+            <View style={styles.card}>
+              <View style={styles.cardLabelRow}>
+                <View style={styles.cardLabelBar} />
+                <Text style={styles.cardLabel}>Result Playback</Text>
+</View>
+                            <View style={styles.vocalPlayerRow}>
+                <TouchableOpacity
+                  style={[styles.playCircle, vocalIsPlaying && styles.playCircleActive]}
+onPress={handleVocalPlayPause}
+                  activeOpacity={0.85}
+>
+                  <Ionicons
+name={vocalIsPlaying ? 'pause' : 'play'}
+size={22}
+color={vocalIsPlaying ? '#FAFAFA' : '#1A1A1A'}
+/>
                 </TouchableOpacity>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.timeText}>{formatTime(vocalPlaybackPosition)}</Text>
                   <Slider
-                    style={{ height: 40 }}
+                    style={{ height: 36 }}
                     minimumValue={0}
                     maximumValue={vocalPlaybackDuration}
                     value={vocalPlaybackPosition}
                     onValueChange={(v) => removalService.seek(v)}
-                    minimumTrackTintColor="#007AFF"
-                    maximumTrackTintColor="#ddd"
+                    minimumTrackTintColor="#1A1A1A"
+                    maximumTrackTintColor="#DEDEDE"
+                    thumbTintColor="#1A1A1A"
                   />
-                  <Text style={styles.timeText}>{formatTime(vocalPlaybackDuration)}</Text>
-                </View>
+<View style={styles.timeRow}>
+                    <Text style={styles.timeText}>{formatTime(vocalPlaybackPosition)}</Text>
+                                      <Text style={styles.timeText}>{formatTime(vocalPlaybackDuration)}</Text>
+</View>
+                                  </View>
               </View>
             </View>
           )}
@@ -777,14 +933,25 @@ export default function AudioToolsScreen() {
         </ScrollView>
       )}
 
-      {/* ─── ONLINE TOOLS TAB ─── */}
+      {/* ─────────────────────── ONLINE TOOLS TAB ─────────────────────── */}
       {activeTab === 'tools' && (
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          <Text style={styles.sectionTitle}>Online Audio Tools</Text>
-          {onlineTools.map(tool => (
-            <TouchableOpacity key={tool.title} style={styles.toolCard} onPress={() => handleOpenTool(tool.url)}>
-              <View style={[styles.toolColorBar, { backgroundColor: tool.color }]} />
-              <View style={{ flex: 1, paddingLeft: 8 }}>
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollPad}>
+          <View style={styles.toolsHeaderRow}>
+            <Text style={styles.toolsHeaderTitle}>Online Resources</Text>
+            <Text style={styles.toolsHeaderSub}>External tools for advanced processing</Text>
+</View>
+
+                    {onlineTools.map((tool, index) => (
+            <TouchableOpacity
+key={tool.title}
+style={styles.toolCard}
+onPress={() => handleOpenTool(tool.url)}
+              activeOpacity={0.8}
+>
+              <View style={styles.toolIndex}>
+                <Text style={styles.toolIndexText}>{String(index + 1).padStart(2, '0')}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.toolTitle}>{tool.title}</Text>
                 <Text style={styles.toolDesc}>{tool.description}</Text>
                 <View style={styles.toolFeatures}>
@@ -795,9 +962,12 @@ export default function AudioToolsScreen() {
                   ))}
                 </View>
               </View>
-              <Ionicons name="arrow-forward" size={20} color="#007AFF" />
-            </TouchableOpacity>
+<View style={styles.toolArrow}>
+                              <Ionicons name="arrow-forward" size={14} color="#1A1A1A" />
+</View>
+                          </TouchableOpacity>
           ))}
+
           <View style={{ height: 40 }} />
         </ScrollView>
       )}
@@ -806,87 +976,542 @@ export default function AudioToolsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { backgroundColor: '#007AFF', paddingHorizontal: 16, paddingVertical: 16 },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 2 },
-  headerSubtitle: { fontSize: 12, color: 'rgba(255,255,255,0.8)' },
-  tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e0e0e0' },
-  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, gap: 6 },
-  tabActive: { borderBottomWidth: 3, borderBottomColor: '#007AFF' },
-  tabText: { fontSize: 12, fontWeight: '500', color: '#999' },
-  tabTextActive: { color: '#007AFF', fontWeight: '600' },
-  content: { flex: 1, paddingHorizontal: 16, paddingVertical: 16 },
-  section: { marginBottom: 24 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#000', marginBottom: 12 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  filePickerButton: { backgroundColor: '#007AFF', borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  filePickerButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  processingContainer: { marginTop: 12, alignItems: 'center', padding: 16, backgroundColor: '#E3F2FD', borderRadius: 8 },
-  processingText: { marginTop: 8, fontSize: 13, color: '#007AFF', fontWeight: '500' },
-  selectedFileInfo: { backgroundColor: '#E3F2FD', borderRadius: 8, padding: 12, marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  fileInfoName: { fontSize: 13, fontWeight: '600', color: '#007AFF', marginBottom: 2 },
-  fileInfoPath: { fontSize: 11, color: '#007AFF', opacity: 0.7 },
-  playbackControls: { flexDirection: 'row', gap: 12, marginBottom: 12 },
-  playBtn: { backgroundColor: '#34C759', borderRadius: 28, width: 56, height: 56, justifyContent: 'center', alignItems: 'center' },
-  stopBtn: { backgroundColor: '#FF3B30', borderRadius: 28, width: 56, height: 56, justifyContent: 'center', alignItems: 'center' },
-  timeRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4 },
-  timeText: { fontSize: 11, color: '#666' },
-  confidenceRow: { marginBottom: 12, backgroundColor: '#fff', borderRadius: 8, padding: 12 },
-  confidenceText: { fontSize: 12, color: '#34C759', fontWeight: '500', marginTop: 6 },
-  keyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  keyButton: { width: '18%', aspectRatio: 1, backgroundColor: '#fff', borderRadius: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#e0e0e0' },
-  keyButtonActive: { backgroundColor: '#FF9500', borderColor: '#FF9500' },
-  keyButtonText: { fontSize: 13, fontWeight: '600', color: '#333' },
-  keyButtonTextActive: { color: '#fff' },
-  pitchDisplay: { backgroundColor: '#fff', borderRadius: 8, padding: 14, alignItems: 'center', marginBottom: 16 },
-  pitchValue: { fontSize: 28, fontWeight: 'bold', color: '#007AFF', marginBottom: 8 },
-  keyTransition: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  keyLabel: { fontSize: 18, fontWeight: 'bold', color: '#34C759' },
-  sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
-  slider: { flex: 1, height: 40 },
-  presetsLabel: { fontSize: 13, fontWeight: '600', color: '#666', marginBottom: 10 },
+  container: { flex: 1, backgroundColor: '#F2F2F2' },
+
+  // ── Header ──
+  header: {
+    backgroundColor: '#1A1A1A',
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 18,
+  },
+  headerInner: {},
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerAccent: {
+    width: 4, height: 40, borderRadius: 2,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.35,
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#FAFAFA',
+    letterSpacing: -0.3,
+},
+  headerSubtitle: {
+fontSize: 11,
+color: 'rgba(255,255,255,0.45)',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
+
+  // ── Tab Bar ──
+  tabBar: {
+flexDirection: 'row',
+backgroundColor: '#FFF',
+borderBottomWidth: 1,
+borderBottomColor: '#E8E8E8',
+},
+  tab: {
+flex: 1,
+flexDirection: 'row',
+alignItems: 'center',
+justifyContent: 'center',
+paddingVertical: 13,
+gap: 5,
+},
+  tabActive: {
+borderBottomWidth: 2,
+borderBottomColor: '#1A1A1A',
+},
+  tabText: {
+fontSize: 11,
+fontWeight: '600',
+color: '#AAAAAA',
+    letterSpacing: 0.3,
+},
+  tabTextActive: {
+    color: '#1A1A1A',
+  },
+
+  // ── Content ──
+  content: { flex: 1 },
+  scrollPad: { padding: 16 },
+
+  // ── Card ──
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  cardLabelRow: {
+flexDirection: 'row',
+alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+  },
+  cardLabelBar: {
+    width: 3,
+    height: 13,
+    borderRadius: 2,
+    backgroundColor: '#1A1A1A',
+  },
+  cardLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#555',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+
+  // ── Import ──
+  importBtn: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 18,
+flexDirection: 'row',
+alignItems: 'center',
+justifyContent: 'center',
+gap: 8,
+},
+  importBtnText: {
+color: '#FAFAFA',
+fontSize: 14,
+fontWeight: '700',
+    letterSpacing: 0.5,
+},
+  processingRow: {
+    flexDirection: 'row',
+alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+backgroundColor: '#F5F5F5',
+borderRadius: 8,
+    padding: 12,
+},
+  processingText: {
+fontSize: 13,
+color: '#555',
+fontWeight: '500',
+},
+  fileChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 12,
+backgroundColor: '#F5F5F5',
+borderRadius: 10,
+padding: 12,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+  },
+  fileChipIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#EBEBEB',
+    justifyContent: 'center',
+alignItems: 'center',
+},
+  fileChipName: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', marginBottom: 2 },
+  fileChipSub: { fontSize: 11, color: '#AAAAAA' },
+
+  // ── Playback ──
+  playbackRow: {
+flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 4,
+  },
+  playCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F0F0F0',
+    borderWidth: 1.5,
+    borderColor: '#DEDEDE',
+justifyContent: 'center',
+alignItems: 'center',
+},
+  playCircleActive: {
+backgroundColor: '#1A1A1A',
+    borderColor: '#1A1A1A',
+  },
+  stopCircle: {
+width: 40,
+height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+    borderWidth: 1,
+    borderColor: '#DEDEDE',
+justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playbackTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 3,
+  },
+  timeText: { fontSize: 11, color: '#888' },
+  timeSep: { fontSize: 11, color: '#CCCCCC' },
+  timeDuration: { fontSize: 11, color: '#BBBBBB' },
+  timeRow: {
+flexDirection: 'row',
+justifyContent: 'space-between',
+    paddingHorizontal: 2,
+    marginTop: 2,
+  },
+
+  // ── Key Detection ──
+  stepLabelDetectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+},
+  confidenceRow: {
+marginBottom: 14,
+  },
+  confidenceBarBg: {
+    height: 4,
+backgroundColor: '#EDEDED',
+borderRadius: 2,
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  confidenceBarFill: {
+    height: '100%',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 2,
+},
+  confidenceText: {
+fontSize: 11,
+color: '#888',
+fontWeight: '500',
+},
+  keyGrid: {
+flexDirection: 'row',
+flexWrap: 'wrap',
+gap: 8,
+},
+  keyBtn: {
+width: '18%',
+aspectRatio: 1,
+backgroundColor: '#F7F7F7',
+borderRadius: 8,
+justifyContent: 'center',
+alignItems: 'center',
+borderWidth: 1.5,
+borderColor: '#E4E4E4',
+},
+  keyBtnActive: {
+backgroundColor: '#1A1A1A',
+borderColor: '#1A1A1A',
+},
+  keyBtnText: { fontSize: 13, fontWeight: '700', color: '#444' },
+  keyBtnTextActive: { color: '#FAFAFA' },
+
+  // ── Pitch Display ──
+  pitchDisplay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+backgroundColor: '#F7F7F7',
+borderRadius: 12,
+padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  keyPill: {
+alignItems: 'center',
+    minWidth: 64,
+  },
+  keyPillLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#AAAAAA',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  keyPillKey: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    letterSpacing: -1,
+  },
+  keyPillTarget: { alignItems: 'center' },
+  keyPillKeyTarget: { color: '#444' },
+  pitchArrowCol: { alignItems: 'center' },
+  pitchSemitones: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1A1A1A',
+    letterSpacing: -0.5,
+  },
+  pitchSemiLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#AAAAAA',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginTop: 1,
+  },
+
+  // ── Slider ──
+  sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  slider: { flex: 1, height: 36 },
+
+  // ── Presets ──
+  minorLabel: {
+fontSize: 10,
+fontWeight: '700',
+color: '#AAAAAA',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+marginBottom: 10,
+},
   presetsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  presetBtn: { backgroundColor: '#fff', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: '#007AFF', minWidth: '31%', flex: 1 },
-  presetBtnActive: { backgroundColor: '#007AFF' },
-  presetBtnText: { fontSize: 11, color: '#007AFF', fontWeight: '500' },
-  presetBtnTextActive: { color: '#fff' },
-  tempoBox: { backgroundColor: '#FFF9E6', borderRadius: 12, padding: 14, borderLeftWidth: 4, borderLeftColor: '#FF9500', marginTop: 16 },
-  tempoTitle: { fontSize: 15, fontWeight: '600', color: '#333', marginBottom: 8 },
-  tempoValue: { fontSize: 13, color: '#FF9500', fontWeight: '600', marginBottom: 12 },
-  tempoQuickRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  tempoQuickBtn: { flex: 1, backgroundColor: '#fff', borderRadius: 8, paddingVertical: 8, borderWidth: 2, borderColor: '#FF9500', alignItems: 'center' },
-  tempoQuickBtnActive: { backgroundColor: '#FF9500' },
-  tempoQuickText: { fontSize: 11, color: '#FF9500', fontWeight: '600' },
-  tempoQuickTextActive: { color: '#fff' },
-  applyBtn: { backgroundColor: '#FF9500', borderRadius: 8, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  applyBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  vocalFileBtn: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 2, borderColor: '#007AFF', borderStyle: 'dashed', paddingVertical: 24, paddingHorizontal: 16, alignItems: 'center', flexDirection: 'row', gap: 12 },
-  vocalFileBtnTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', marginBottom: 2 },
-  vocalFileBtnSub: { fontSize: 12, color: '#999' },
-  removalTypeRow: { flexDirection: 'row', gap: 12 },
-  removalTypeBtn: { flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 16, alignItems: 'center', borderWidth: 2, borderColor: '#e0e0e0' },
-  removalTypeBtnActive: { borderColor: '#007AFF', backgroundColor: '#F0F8FF' },
-  removalTypeBtnTitle: { fontSize: 13, fontWeight: '600', color: '#333', marginTop: 8, marginBottom: 2, textAlign: 'center' },
-  removalTypeBtnTitleActive: { color: '#007AFF' },
-  removalTypeBtnSub: { fontSize: 11, color: '#999', textAlign: 'center' },
-  instrumentGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  instrumentCard: { width: '48%', backgroundColor: '#fff', borderRadius: 12, padding: 16, alignItems: 'center', borderLeftWidth: 4 },
-  instrumentCardActive: { backgroundColor: '#F0F8FF' },
-  instrumentIcon: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  instrumentName: { fontSize: 13, fontWeight: '600', color: '#000', textAlign: 'center' },
-  processBtn: { backgroundColor: '#007AFF', borderRadius: 12, paddingVertical: 16, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 12 },
-  processBtnDisabled: { opacity: 0.7 },
-  processBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  progressBox: { marginTop: 12 },
-  progressBar: { height: 8, backgroundColor: '#e0e0e0', borderRadius: 4, overflow: 'hidden', marginBottom: 8 },
-  progressFill: { height: '100%', backgroundColor: '#007AFF' },
-  progressText: { fontSize: 12, color: '#666', textAlign: 'right' },
-  vocalPlayer: { backgroundColor: '#fff', borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 16 },
-  toolCard: { backgroundColor: '#fff', borderRadius: 12, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingRight: 12, marginBottom: 12 },
-  toolColorBar: { width: 4, alignSelf: 'stretch' },
-  toolTitle: { fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 2 },
-  toolDesc: { fontSize: 12, color: '#666', marginBottom: 8 },
+  presetBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+backgroundColor: '#F5F5F5',
+borderRadius: 7,
+paddingVertical: 8,
+paddingHorizontal: 10,
+borderWidth: 1,
+borderColor: '#E4E4E4',
+minWidth: '31%',
+flex: 1,
+},
+  presetBtnActive: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
+  presetBtnText: { fontSize: 11, color: '#555', fontWeight: '500' },
+  presetBtnTextActive: { color: '#FAFAFA' },
+
+  // ── Tempo ──
+  tempoBox: {
+backgroundColor: '#F7F7F7',
+borderRadius: 10,
+padding: 14,
+borderWidth: 1,
+borderColor: '#EBEBEB',
+  },
+  tempoHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+marginBottom: 10,
+},
+  tempoTitle: {
+fontSize: 13,
+fontWeight: '600',
+color: '#333',
+    flex: 1,
+},
+  tempoValue: {
+fontSize: 12,
+fontWeight: '600',
+    color: '#888',
+},
+  tempoQuickRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
+  tempoQuickBtn: {
+flex: 1,
+backgroundColor: '#FFF',
+borderRadius: 7,
+paddingVertical: 8,
+borderWidth: 1,
+borderColor: '#DEDEDE',
+alignItems: 'center',
+},
+  tempoQuickBtnActive: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
+  tempoQuickText: { fontSize: 11, color: '#666', fontWeight: '600' },
+  tempoQuickTextActive: { color: '#FAFAFA' },
+
+  // ── Save Button ──
+  saveBtn: {
+backgroundColor: '#1A1A1A',
+borderRadius: 10,
+paddingVertical: 15,
+flexDirection: 'row',
+alignItems: 'center',
+justifyContent: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  saveBtnText: {
+    color: '#FAFAFA',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+
+  // ── Upload Zone ──
+  uploadZone: {
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#D8D8D8',
+borderStyle: 'dashed',
+    backgroundColor: '#FAFAFA',
+    padding: 16,
+    flexDirection: 'row',
+alignItems: 'center',
+    gap: 14,
+  },
+  uploadIconBox: {
+    width: 50,
+    height: 50,
+    borderRadius: 10,
+    backgroundColor: '#F0F0F0',
+    borderWidth: 1,
+    borderColor: '#E4E4E4',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  uploadTitle: { fontSize: 14, fontWeight: '600', color: '#1A1A1A', marginBottom: 2 },
+  uploadSub: { fontSize: 12, color: '#AAAAAA' },
+
+  // ── Removal Type ──
+  removalRow: { flexDirection: 'row', gap: 12 },
+  removalBtn: {
+flex: 1,
+backgroundColor: '#F7F7F7',
+borderRadius: 12,
+padding: 16,
+alignItems: 'center',
+borderWidth: 1.5,
+borderColor: '#EBEBEB',
+    gap: 6,
+},
+  removalBtnActive: {
+borderColor: '#1A1A1A',
+backgroundColor: '#FFF',
+},
+  removalBtnTitle: {
+fontSize: 12,
+fontWeight: '700',
+color: '#AAAAAA',
+textAlign: 'center',
+    letterSpacing: 0.2,
+},
+  removalBtnTitleActive: { color: '#1A1A1A' },
+  removalBtnSub: { fontSize: 11, color: '#BBBBBB', textAlign: 'center' },
+
+  // ── Instruments ──
+  instrumentGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  instrumentCard: {
+width: '48%',
+backgroundColor: '#F7F7F7',
+borderRadius: 12,
+padding: 14,
+alignItems: 'center',
+borderWidth: 1.5,
+    borderColor: '#EBEBEB',
+    gap: 8,
+},
+  instrumentCardActive: { borderColor: '#1A1A1A', backgroundColor: '#FFF' },
+  instrumentIconBox: {
+width: 52,
+height: 52,
+borderRadius: 26,
+    backgroundColor: '#EBEBEB',
+justifyContent: 'center',
+    alignItems: 'center',
+  },
+  instrumentIconBoxActive: { backgroundColor: '#1A1A1A' },
+  instrumentName: { fontSize: 12, fontWeight: '600', color: '#888', textAlign: 'center' },
+instrumentNameActive: { color: '#1A1A1A' },
+
+  // ── Process Button ──
+    processBtn: {
+backgroundColor: '#1A1A1A',
+borderRadius: 10,
+paddingVertical: 15,
+alignItems: 'center',
+justifyContent: 'center',
+flexDirection: 'row',
+gap: 10,
+},
+  processBtnDisabled: { opacity: 0.55 },
+  processBtnText: { color: '#FAFAFA', fontSize: 14, fontWeight: '700', letterSpacing: 0.5 },
+  progressBox: { marginTop: 14 },
+  progressBarBg: {
+height: 5,
+backgroundColor: '#E8E8E8',
+borderRadius: 3,
+overflow: 'hidden',
+marginBottom: 6,
+},
+  progressBarFill: { height: '100%', backgroundColor: '#1A1A1A' },
+  progressText: { fontSize: 11, color: '#AAAAAA', textAlign: 'right', fontWeight: '600' },
+
+  // ── Vocal Player ──
+  vocalPlayerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+
+  // ── Online Tools ──
+  toolsHeaderRow: { marginBottom: 16 },
+  toolsHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    letterSpacing: -0.2,
+    marginBottom: 3,
+  },
+  toolsHeaderSub: { fontSize: 12, color: '#AAAAAA' },
+  toolCard: {
+backgroundColor: '#FFF',
+borderRadius: 12,
+flexDirection: 'row',
+alignItems: 'center',
+    gap: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  toolIndex: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#F0F0F0',
+    borderWidth: 1,
+    borderColor: '#E4E4E4',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  toolIndexText: { fontSize: 11, fontWeight: '700', color: '#999' },
+  toolTitle: { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 },
+  toolDesc: { fontSize: 12, color: '#888', marginBottom: 8 },
   toolFeatures: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  toolBadge: { backgroundColor: '#F0F0F0', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  toolBadgeText: { fontSize: 11, color: '#666', fontWeight: '500' },
-})
+  toolBadge: {
+backgroundColor: '#F2F2F2',
+borderRadius: 6,
+paddingHorizontal: 8,
+paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+},
+  toolBadgeText: { fontSize: 10, color: '#777', fontWeight: '600' },
+  toolArrow: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+},
+  })

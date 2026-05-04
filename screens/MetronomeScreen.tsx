@@ -20,6 +20,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { getCurrentUser } from '../lib/auth'
 
+// Monochrome palette - Formal & Professional
+const COLORS = {
+  black: '#1a1a1a',
+  darkGray: '#333333',
+  mediumGray: '#666666',
+  lightGray: '#cccccc',
+  veryLightGray: '#f0f0f0',
+  offWhite: '#fafafa',
+  white: '#ffffff',
+}
+
 const SCREEN_WIDTH = Dimensions.get('window').width
 const PRESETS_STORAGE_KEY = 'metronome_presets'
 
@@ -321,8 +332,8 @@ export default function MetronomeScreen() {
             setActivePreset(null)
           }}
           step={1}
-          minimumTrackTintColor="#007AFF"
-          maximumTrackTintColor="#ddd"
+          minimumTrackTintColor={COLORS.black}
+          maximumTrackTintColor={COLORS.lightGray}
         />
         <Text style={styles.sliderLabel}>300</Text>
       </View>
@@ -387,7 +398,7 @@ export default function MetronomeScreen() {
               setShowAddModal(true)
             }}
           >
-            <Ionicons name="add-circle" size={28} color="#007AFF" />
+            <Ionicons name="add-circle" size={28} color={COLORS.black} />
           </TouchableOpacity>
         </View>
 
@@ -422,9 +433,9 @@ export default function MetronomeScreen() {
                     <Ionicons
                       name={preset.inCloud ? 'cloud-done-outline' : 'phone-portrait-outline'}
                       size={10}
-                      color={preset.inCloud ? '#34C759' : '#FF9500'}
+                      color={COLORS.mediumGray}
                     />
-                    <Text style={[styles.syncBadgeText, { color: preset.inCloud ? '#34C759' : '#FF9500' }]}>
+                    <Text style={styles.syncBadgeText}>
                       {preset.inCloud ? 'Cloud' : 'Local'}
                     </Text>
                   </View>
@@ -440,8 +451,8 @@ export default function MetronomeScreen() {
                     disabled={uploadingPresetId === preset.id}
                   >
                     {uploadingPresetId === preset.id
-                      ? <ActivityIndicator size="small" color="#007AFF" />
-                      : <Ionicons name="cloud-upload-outline" size={20} color="#007AFF" />
+                      ? <ActivityIndicator size="small" color={COLORS.black} />
+                      : <Ionicons name="cloud-upload-outline" size={20} color={COLORS.black} />
                     }
                   </TouchableOpacity>
                 )}
@@ -450,7 +461,7 @@ export default function MetronomeScreen() {
                   style={styles.deleteActionButton}
                   onPress={() => handleDeletePreset(preset)}
                 >
-                  <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                  <Ionicons name="trash-outline" size={20} color={COLORS.mediumGray} />
                 </TouchableOpacity>
               </View>
             </TouchableOpacity>
@@ -468,7 +479,7 @@ export default function MetronomeScreen() {
             <TextInput
               style={styles.modalInput}
               placeholder="Preset name (e.g. How Great Is Our God)"
-              placeholderTextColor="#999"
+              placeholderTextColor={COLORS.mediumGray}
               value={newPresetName}
               onChangeText={setNewPresetName}
               autoFocus
@@ -502,7 +513,7 @@ export default function MetronomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: COLORS.offWhite,
   },
   content: {
     padding: 20,
@@ -510,28 +521,32 @@ const styles = StyleSheet.create({
   },
   bpmDisplayContainer: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
+    paddingVertical: 16,
   },
   activePresetName: {
     fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '600',
-    marginBottom: 4,
+    color: COLORS.mediumGray,
+    fontWeight: '700',
+    marginBottom: 6,
+    letterSpacing: 0.3,
   },
   bpmLabel: {
     fontSize: 16,
-    color: '#999',
-    marginBottom: 5,
+    color: COLORS.mediumGray,
+    marginBottom: 8,
+    fontWeight: '600',
+    letterSpacing: 0.4,
   },
   bpmValue: {
-    fontSize: 72,
-    fontWeight: 'bold',
-    color: '#007AFF',
+    fontSize: 76,
+    fontWeight: '800',
+    color: COLORS.black,
   },
   sliderContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 32,
   },
   slider: {
     flex: 1,
@@ -540,109 +555,139 @@ const styles = StyleSheet.create({
   },
   sliderLabel: {
     fontSize: 12,
-    color: '#999',
+    color: COLORS.mediumGray,
     width: 30,
     textAlign: 'center',
+    fontWeight: '600',
   },
   playButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 20,
-    borderRadius: 12,
+    backgroundColor: COLORS.black,
+    paddingVertical: 22,
+    borderRadius: 8,
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
+    elevation: 3,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
   },
   playButtonActive: {
-    backgroundColor: '#34C759',
+    backgroundColor: COLORS.darkGray,
   },
   playButtonText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
+    fontSize: 26,
+    fontWeight: '800',
+    color: COLORS.white,
+    letterSpacing: 0.5,
   },
   beatIndicator: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   beatDot: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: '#34C759',
-    marginBottom: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.black,
+    marginBottom: 12,
+    elevation: 2,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
   },
   beatText: {
-    fontSize: 14,
-    color: '#34C759',
-    fontWeight: 'bold',
+    fontSize: 15,
+    color: COLORS.darkGray,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   tapTempoSection: {
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 32,
   },
   tapTempoLabel: {
     fontSize: 16,
-    color: '#999',
-    marginBottom: 15,
+    color: COLORS.mediumGray,
+    marginBottom: 16,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   tapTempoButton: {
-    backgroundColor: '#f0f0f0',
-    paddingVertical: 15,
-    paddingHorizontal: 30,
+    backgroundColor: COLORS.white,
+    paddingVertical: 16,
+    paddingHorizontal: 32,
     borderRadius: 8,
     borderWidth: 2,
-    borderColor: '#ddd',
+    borderColor: COLORS.black,
+    elevation: 2,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
   },
   tapTempoButtonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.black,
+    letterSpacing: 0.3,
   },
   resetButton: {
-    marginTop: 15,
-    paddingVertical: 10,
+    marginTop: 16,
+    paddingVertical: 11,
     paddingHorizontal: 20,
     borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    backgroundColor: COLORS.offWhite,
   },
   resetButtonText: {
     fontSize: 12,
-    color: '#999',
+    color: COLORS.mediumGray,
+    fontWeight: '600',
   },
   presetsContainer: {
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 32,
   },
   presetsLabel: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 12,
+    fontWeight: '800',
+    color: COLORS.black,
+    marginBottom: 14,
+    letterSpacing: 0.3,
   },
   presets: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     width: '100%',
+    gap: 8,
   },
   presetButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    backgroundColor: '#fff',
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: COLORS.darkGray,
+    backgroundColor: COLORS.white,
+    elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
   },
   presetButtonActive: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+    backgroundColor: COLORS.black,
+    borderColor: COLORS.black,
   },
   presetButtonText: {
     fontSize: 14,
-    fontWeight: 'bold',
-    color: '#333',
+    fontWeight: '700',
+    color: COLORS.black,
   },
   presetButtonTextActive: {
-    color: '#fff',
+    color: COLORS.white,
   },
   customPresetsContainer: {
     marginBottom: 20,
@@ -651,43 +696,51 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   addPresetButton: {
-    padding: 4,
+    padding: 6,
   },
   emptyPresetsText: {
-    color: '#999',
-    fontSize: 13,
+    color: COLORS.mediumGray,
+    fontSize: 14,
     textAlign: 'center',
-    paddingVertical: 20,
+    paddingVertical: 22,
+    fontWeight: '500',
   },
   customPresetCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#f8f8f8',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 10,
+    backgroundColor: COLORS.white,
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 11,
     borderWidth: 1.5,
-    borderColor: '#eee',
+    borderColor: COLORS.veryLightGray,
+    elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
   },
   customPresetCardActive: {
-    backgroundColor: '#EBF5FF',
-    borderColor: '#007AFF',
+    backgroundColor: COLORS.offWhite,
+    borderColor: COLORS.black,
+    borderWidth: 2,
   },
   customPresetLeft: {
     flex: 1,
   },
   customPresetName: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
+    fontWeight: '700',
+    color: COLORS.black,
+    marginBottom: 5,
   },
   customPresetNameActive: {
-    color: '#007AFF',
+    color: COLORS.black,
+    fontWeight: '800',
   },
   customPresetMeta: {
     flexDirection: 'row',
@@ -696,28 +749,33 @@ const styles = StyleSheet.create({
   },
   customPresetBpm: {
     fontSize: 13,
-    color: '#999',
+    color: COLORS.mediumGray,
+    fontWeight: '600',
   },
   customPresetBpmActive: {
-    color: '#007AFF',
+    color: COLORS.darkGray,
   },
   syncBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
   },
   syncBadgeCloud: {
-    backgroundColor: '#f0fff4',
+    backgroundColor: COLORS.offWhite,
+    borderColor: COLORS.lightGray,
   },
   syncBadgeLocal: {
-    backgroundColor: '#fff8f0',
+    backgroundColor: COLORS.veryLightGray,
+    borderColor: COLORS.lightGray,
   },
   syncBadgeText: {
     fontSize: 10,
-    fontWeight: '600',
+    fontWeight: '700',
+    color: COLORS.mediumGray,
   },
   customPresetActions: {
     flexDirection: 'row',
@@ -725,14 +783,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cloudActionButton: {
-    padding: 8,
+    padding: 9,
     borderRadius: 6,
-    backgroundColor: '#EBF5FF',
+    backgroundColor: COLORS.offWhite,
+    borderWidth: 1,
+    borderColor: COLORS.veryLightGray,
   },
   deleteActionButton: {
-    padding: 8,
+    padding: 9,
     borderRadius: 6,
-    backgroundColor: '#FFF0F0',
+    backgroundColor: COLORS.veryLightGray,
+    borderWidth: 1,
+    borderColor: COLORS.lightGray,
   },
   modalOverlay: {
     flex: 1,
@@ -740,37 +802,41 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modal: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 24,
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 26,
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#000',
-    marginBottom: 4,
+    fontSize: 21,
+    fontWeight: '800',
+    color: COLORS.black,
+    marginBottom: 6,
+    letterSpacing: 0.3,
   },
   modalSubtitle: {
     fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '600',
-    marginBottom: 20,
+    color: COLORS.mediumGray,
+    fontWeight: '700',
+    marginBottom: 22,
   },
   modalInput: {
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    borderRadius: 10,
-    padding: 12,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    borderRadius: 8,
+    padding: 13,
     fontSize: 15,
-    color: '#333',
-    marginBottom: 12,
+    color: COLORS.black,
+    marginBottom: 14,
+    backgroundColor: COLORS.offWhite,
+    fontWeight: '500',
   },
   modalHint: {
     fontSize: 12,
-    color: '#999',
-    marginBottom: 20,
+    color: COLORS.mediumGray,
+    marginBottom: 22,
     fontStyle: 'italic',
+    fontWeight: '500',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -778,24 +844,31 @@ const styles = StyleSheet.create({
   },
   modalButton: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
+    paddingVertical: 15,
+    borderRadius: 8,
     alignItems: 'center',
+    elevation: 2,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
   },
   cancelButton: {
-    backgroundColor: '#f0f0f0',
+    backgroundColor: COLORS.veryLightGray,
   },
   cancelButtonText: {
-    color: '#333',
-    fontWeight: '600',
+    color: COLORS.black,
+    fontWeight: '700',
     fontSize: 15,
+    letterSpacing: 0.3,
   },
   saveButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: COLORS.black,
   },
   saveButtonText: {
-    color: '#fff',
-    fontWeight: '600',
+    color: COLORS.white,
+    fontWeight: '700',
     fontSize: 15,
+    letterSpacing: 0.3,
   },
 })

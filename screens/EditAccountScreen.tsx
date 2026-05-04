@@ -28,6 +28,17 @@ const ROLES = [
   'Song Leader',
 ]
 
+// Monochrome palette - Formal & Professional
+const COLORS = {
+  black: '#1a1a1a',
+  darkGray: '#333333',
+  mediumGray: '#666666',
+  lightGray: '#cccccc',
+  veryLightGray: '#f0f0f0',
+  offWhite: '#fafafa',
+  white: '#ffffff',
+}
+
 interface FormData {
   nickname: string
   bio: string
@@ -210,12 +221,12 @@ export default function EditAccountScreen() {
             <Image source={{ uri: formData.avatarUrl }} style={styles.avatarPreview} />
           ) : (
             <View style={[styles.avatarPreview, styles.avatarPlaceholder]}>
-              <Ionicons name="person" size={64} color="#ccc" />
+              <Ionicons name="person" size={64} color={COLORS.mediumGray} />
             </View>
           )}
         </View>
         <TouchableOpacity style={styles.uploadButton} onPress={handlePickImage}>
-          <Ionicons name="image" size={20} color="#fff" />
+          <Ionicons name="image" size={20} color={COLORS.white} />
           <Text style={styles.uploadButtonText}>Choose Photo</Text>
         </TouchableOpacity>
         <Text style={styles.hint}>Tap to select an image from your device</Text>
@@ -272,7 +283,7 @@ export default function EditAccountScreen() {
                 {role}
               </Text>
               {selectedInstruments.includes(role) && (
-                <Ionicons name="checkmark" size={16} color="#fff" style={styles.instrumentCheck} />
+                <Ionicons name="checkmark" size={16} color={COLORS.white} style={styles.instrumentCheck} />
               )}
             </TouchableOpacity>
           ))}
@@ -288,7 +299,7 @@ export default function EditAccountScreen() {
               <Ionicons
                 name={formData.isPrivate ? 'lock-closed' : 'lock-open'}
                 size={18}
-                color={formData.isPrivate ? '#FF9500' : '#34C759'}
+                color={COLORS.black}
               />
               <Text style={styles.privacyLabel}>
                 {formData.isPrivate ? 'Private Profile' : 'Public Profile'}
@@ -303,8 +314,8 @@ export default function EditAccountScreen() {
           <Switch
             value={formData.isPrivate}
             onValueChange={val => setFormData({ ...formData, isPrivate: val })}
-            trackColor={{ false: '#E0E0E0', true: '#FFD580' }}
-            thumbColor={formData.isPrivate ? '#FF9500' : '#FFF'}
+            trackColor={{ false: COLORS.lightGray, true: COLORS.mediumGray }}
+            thumbColor={formData.isPrivate ? COLORS.black : COLORS.white}
           />
         </View>
 
@@ -317,7 +328,7 @@ export default function EditAccountScreen() {
                 <Image source={{ uri: formData.avatarUrl }} style={styles.privacyPreviewImg} />
               ) : (
                 <View style={[styles.privacyPreviewImg, styles.privacyPreviewAvatarFallback]}>
-                  <Ionicons name="person" size={22} color="#BBB" />
+                  <Ionicons name="person" size={22} color={COLORS.mediumGray} />
                 </View>
               )}
             </View>
@@ -327,7 +338,7 @@ export default function EditAccountScreen() {
               </Text>
               {formData.isPrivate ? (
                 <View style={styles.privacyHiddenBadge}>
-                  <Ionicons name="lock-closed" size={10} color="#888" />
+                  <Ionicons name="lock-closed" size={10} color={COLORS.mediumGray} />
                   <Text style={styles.privacyHiddenText}>Profile hidden</Text>
                 </View>
               ) : (
@@ -356,10 +367,10 @@ export default function EditAccountScreen() {
         disabled={saving}
       >
         {saving ? (
-          <ActivityIndicator color="#fff" />
+          <ActivityIndicator color={COLORS.white} />
         ) : (
           <>
-            <Ionicons name="save" size={20} color="#fff" />
+            <Ionicons name="save" size={20} color={COLORS.white} />
             <Text style={styles.primaryButtonText}>Save Profile</Text>
           </>
         )}
@@ -369,14 +380,14 @@ export default function EditAccountScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account</Text>
         <TouchableOpacity style={styles.actionButton} onPress={handleChangePassword}>
-          <Ionicons name="lock-closed" size={20} color="#007AFF" />
+          <Ionicons name="lock-closed" size={20} color={COLORS.black} />
           <Text style={styles.actionButtonText}>Change Password</Text>
-          <Ionicons name="chevron-forward" size={20} color="#ccc" />
+          <Ionicons name="chevron-forward" size={20} color={COLORS.lightGray} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton} onPress={handleDeleteAccount}>
-          <Ionicons name="trash" size={20} color="#f44" />
+          <Ionicons name="trash" size={20} color={COLORS.black} />
           <Text style={[styles.actionButtonText, styles.deleteText]}>Delete Account</Text>
-          <Ionicons name="chevron-forward" size={20} color="#ccc" />
+          <Ionicons name="chevron-forward" size={20} color={COLORS.lightGray} />
         </TouchableOpacity>
       </View>
 
@@ -396,35 +407,39 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: COLORS.offWhite,
   },
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: COLORS.offWhite,
   },
   section: {
-    backgroundColor: '#fff',
-    marginVertical: 8,
+    backgroundColor: COLORS.white,
+    marginVertical: 10,
+    marginHorizontal: 0,
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e5e5',
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.veryLightGray,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 12,
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.black,
+    marginBottom: 14,
+    letterSpacing: 0.2,
   },
   input: {
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    borderRadius: 8,
-    paddingHorizontal: 12,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    borderRadius: 6,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 14,
-    backgroundColor: '#f9f9f9',
+    fontSize: 15,
+    backgroundColor: COLORS.offWhite,
     marginBottom: 8,
+    color: COLORS.black,
+    fontWeight: '500',
   },
   bioInput: {
     minHeight: 100,
@@ -432,18 +447,22 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 12,
-    color: '#999',
+    color: COLORS.mediumGray,
     marginBottom: 12,
+    fontWeight: '400',
   },
   avatarPreviewContainer: {
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
+    paddingVertical: 12,
   },
   avatarPreview: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#f0f0f0',
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: COLORS.veryLightGray,
+    borderWidth: 2,
+    borderColor: COLORS.darkGray,
   },
   avatarPlaceholder: {
     justifyContent: 'center',
@@ -453,44 +472,50 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    paddingVertical: 12,
-    marginBottom: 8,
+    backgroundColor: COLORS.black,
+    borderRadius: 6,
+    paddingVertical: 13,
+    marginBottom: 10,
     gap: 8,
+    elevation: 2,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
   },
   uploadButtonText: {
-    color: '#fff',
+    color: COLORS.white,
     fontSize: 15,
     fontWeight: '600',
+    letterSpacing: 0.3,
   },
   instrumentsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 10,
     marginBottom: 8,
   },
   instrumentButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-    backgroundColor: '#fff',
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: COLORS.darkGray,
+    backgroundColor: COLORS.white,
   },
   instrumentButtonActive: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+    backgroundColor: COLORS.black,
+    borderColor: COLORS.black,
   },
   instrumentButtonText: {
-    fontSize: 12,
-    color: '#007AFF',
-    fontWeight: '500',
+    fontSize: 13,
+    color: COLORS.black,
+    fontWeight: '600',
   },
   instrumentButtonTextActive: {
-    color: '#fff',
+    color: COLORS.white,
   },
   instrumentCheck: {
     marginLeft: 6,
@@ -499,8 +524,8 @@ const styles = StyleSheet.create({
   privacyRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
-    gap: 12,
+    marginBottom: 18,
+    gap: 14,
   },
   privacyInfo: {
     flex: 1,
@@ -508,47 +533,52 @@ const styles = StyleSheet.create({
   privacyLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
+    gap: 7,
+    marginBottom: 5,
   },
   privacyLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.black,
   },
   privacyDescription: {
     fontSize: 12,
-    color: '#888',
+    color: COLORS.mediumGray,
     lineHeight: 17,
   },
   privacyPreview: {
-    backgroundColor: '#F8F8F8',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
+    backgroundColor: COLORS.veryLightGray,
+    borderRadius: 8,
+    padding: 14,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
   },
   privacyPreviewLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#AAA',
-    letterSpacing: 0.5,
+    fontSize: 10,
+    fontWeight: '800',
+    color: COLORS.mediumGray,
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   privacyPreviewCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    backgroundColor: COLORS.white,
+    padding: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: COLORS.lightGray,
   },
   privacyPreviewAvatar: {},
   privacyPreviewImg: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
   },
   privacyPreviewAvatarFallback: {
-    backgroundColor: '#E8E8E8',
+    backgroundColor: COLORS.veryLightGray,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -558,89 +588,102 @@ const styles = StyleSheet.create({
   privacyPreviewName: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#222',
+    color: COLORS.black,
     marginBottom: 3,
   },
   privacyPreviewBio: {
     fontSize: 12,
-    color: '#666',
+    color: COLORS.mediumGray,
     lineHeight: 16,
     marginBottom: 3,
   },
   privacyPreviewRoles: {
     fontSize: 11,
-    color: '#007AFF',
+    color: COLORS.black,
     fontWeight: '600',
   },
   privacyHiddenBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#EEEEEE',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    gap: 5,
+    backgroundColor: COLORS.veryLightGray,
+    borderRadius: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
     alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: COLORS.lightGray,
   },
   privacyHiddenText: {
     fontSize: 11,
-    color: '#888',
+    color: COLORS.mediumGray,
+    fontWeight: '500',
   },
   primaryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    paddingVertical: 14,
+    backgroundColor: COLORS.black,
+    borderRadius: 6,
+    paddingVertical: 15,
     marginHorizontal: 16,
-    marginVertical: 16,
-    gap: 8,
+    marginVertical: 18,
+    gap: 10,
+    elevation: 3,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
   },
   disabledButton: {
     opacity: 0.6,
   },
   primaryButtonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    backgroundColor: '#f9f9f9',
-    borderRadius: 8,
-    marginBottom: 8,
+    paddingVertical: 15,
+    paddingHorizontal: 14,
+    backgroundColor: COLORS.offWhite,
+    borderRadius: 6,
+    marginBottom: 9,
     gap: 12,
+    borderWidth: 1,
+    borderColor: COLORS.veryLightGray,
   },
   actionButtonText: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '500',
-    color: '#333',
+    fontWeight: '600',
+    color: COLORS.black,
   },
   deleteText: {
-    color: '#f44',
+    color: COLORS.black,
   },
   infoSection: {
-    backgroundColor: '#fff',
-    marginVertical: 8,
+    backgroundColor: COLORS.white,
+    marginVertical: 10,
     paddingHorizontal: 16,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#e5e5e5',
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.veryLightGray,
   },
   infoLabel: {
-    fontSize: 12,
-    color: '#999',
-    marginBottom: 4,
+    fontSize: 11,
+    color: COLORS.mediumGray,
+    marginBottom: 6,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   infoValue: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500',
+    fontSize: 15,
+    color: COLORS.black,
+    fontWeight: '600',
   },
   spacer: {
     height: 40,

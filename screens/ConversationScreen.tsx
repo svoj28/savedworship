@@ -37,8 +37,7 @@ export default function ConversationScreen() {
   const [showNewConversationModal, setShowNewConversationModal] = useState(false)
   const [newRecipientId, setNewRecipientId] = useState('')
   const [friendsList, setFriendsList] = useState<any[]>([])
-  // Track which friend IDs are "active" (online) — wire to your presence system
-  const [activeUserIds, setActiveUserIds] = useState<Set<string>>(new Set())
+    const [activeUserIds, setActiveUserIds] = useState<Set<string>>(new Set())
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
   const [selectedConvId, setSelectedConvId] = useState<string | null>(null)
   const [profileModalUserId, setProfileModalUserId] = useState<string | null>(null)
@@ -103,10 +102,7 @@ export default function ConversationScreen() {
         }
       }
       setUserProfiles(profilesMap)
-
-      setTimeout(() => {
-        scrollViewRef?.scrollToEnd({ animated: true })
-      }, 100)
+      setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
     } catch (err) {
       console.error('Error loading messages:', err)
     }
@@ -134,8 +130,7 @@ export default function ConversationScreen() {
       const mapped = results.map(mapMessage)
       setOverallChatMessages(mapped)
       await loadUsers()
-      setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
-
+      
       const senderIds = new Set(mapped.map(m => m.senderId))
       const profilesMap = new Map<string, UserProfile>(userProfiles)
       for (const senderId of senderIds) {
@@ -145,10 +140,7 @@ export default function ConversationScreen() {
         }
       }
       setUserProfiles(profilesMap)
-
-      setTimeout(() => {
-        scrollViewRef?.scrollToEnd({ animated: true })
-      }, 100)
+      setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
     } catch (err) {
       console.error('Error loading overall chat:', err)
     }
@@ -156,15 +148,13 @@ export default function ConversationScreen() {
 
   const handleSendMessage = async () => {
     if (!messageText.trim()) {
-      Alert.alert('Error', 'Please enter a message')
+      Alert.alert('Notice', 'Please enter a message')
       return
     }
-
     if (chatMode === 'direct' && !receiverId.trim()) {
-      Alert.alert('Error', 'Please select a recipient')
+      Alert.alert('Notice', 'Please select a recipient')
       return
     }
-
     try {
       await createMessage({
         senderId: userId,
@@ -175,9 +165,7 @@ export default function ConversationScreen() {
         isDeleted: false,
         synced: false,
       })
-
       setMessageText('')
-
       if (chatMode === 'overall') {
         await loadOverallChat(userId)
       } else {
@@ -198,17 +186,15 @@ export default function ConversationScreen() {
 
   const handleEditMessage = async () => {
     if (!editingText.trim()) {
-      Alert.alert('Error', 'Message cannot be empty')
+      Alert.alert('Notice', 'Message cannot be empty')
       return
     }
-
     try {
       if (editingMessageId) {
         await editMessage(editingMessageId, editingText)
         setEditingMessageId(null)
         setEditingText('')
         setShowEditModal(false)
-
         if (chatMode === 'overall') {
           await loadOverallChat(userId)
         } else {
@@ -222,14 +208,13 @@ export default function ConversationScreen() {
   }
 
   const handleDeleteMessage = async (messageId: string) => {
-    Alert.alert('Delete Message', 'Are you sure?', [
+    Alert.alert('Delete Message', 'Are you sure you want to remove this message?', [
       { text: 'Cancel' },
       {
         text: 'Delete',
         onPress: async () => {
           try {
             await deleteMessage(messageId)
-
             if (chatMode === 'overall') {
               await loadOverallChat(userId)
             } else {
@@ -248,29 +233,27 @@ export default function ConversationScreen() {
 
   const handleDeleteConversation = (otherUserId: string, nickname: string) => {
     Alert.alert(
-      'Delete Conversation',
+      'Remove Conversation',
       `Remove your conversation with ${nickname}?`,
       [
         { text: 'Cancel' },
         {
-          text: 'Delete',
+          text: 'Remove',
           style: 'destructive',
           onPress: async () => {
             try {
-              // Soft-delete all messages between the two users
-              await dbQuery(
+                            await dbQuery(
                 `UPDATE messages SET is_deleted = 1 WHERE 
                 (sender_id = ? AND receiver_id = ?) OR 
                 (sender_id = ? AND receiver_id = ?)`,
                 [userId, otherUserId, otherUserId, userId]
               )
-              // If currently viewing this convo, go back to DM list
-              if (receiverId === otherUserId) setReceiverId('')
+                            if (receiverId === otherUserId) setReceiverId('')
               await loadMessages(userId)
               await loadContactedUsers(userId)
             } catch (err) {
               console.error('Error deleting conversation:', err)
-              Alert.alert('Error', 'Failed to delete conversation')
+              Alert.alert('Error', 'Failed to remove conversation')
             }
           },
         },
@@ -281,7 +264,6 @@ export default function ConversationScreen() {
   const getProfileWithFallback = async (targetUserId: string): Promise<UserProfile | null> => {
     const local = await getUserProfileByUserId(targetUserId)
     if (local?.nickname) return local
-
     try {
       const { supabase } = await import('../lib/supabase')
       const { data } = await supabase
@@ -289,7 +271,6 @@ export default function ConversationScreen() {
         .select('*')
         .eq('user_id', targetUserId)
         .single()
-
       if (data) {
         const { execute } = await import('../db/index')
         try {
@@ -310,7 +291,6 @@ export default function ConversationScreen() {
             ]
           )
         } catch (e) {}
-
         return {
           id: data.id,
           userId: data.user_id,
@@ -327,17 +307,15 @@ export default function ConversationScreen() {
     } catch (e) {
       console.warn('Failed to fetch profile from Supabase:', e)
     }
-
     return null
   }
 
   const loadUsers = async () => {
     try {
       const allProfiles: any[] = await dbQuery(`SELECT * FROM user_profiles`)
-
       const profilesMap = new Map<string, UserProfile>()
       for (const row of allProfiles) {
-        const profile: UserProfile = {
+        profilesMap.set(row.user_id, {
           id: row.id,
           userId: row.user_id,
           nickname: row.nickname || '',
@@ -348,8 +326,7 @@ export default function ConversationScreen() {
           updatedAt: row.updated_at,
           synced: Boolean(row._synced),
           role: row.role ?? 'user',
-        }
-        profilesMap.set(row.user_id, profile)
+        })
       }
       setUserProfiles(profilesMap)
     } catch (err) {
@@ -365,7 +342,6 @@ export default function ConversationScreen() {
         ORDER BY created_at DESC`,
         [OVERALL_CHAT_ID]
       )
-
       const userMap = new Map<string, { lastContacted: number; lastMessage: string }>()
       results.forEach((msg: any) => {
         const otherUserId = msg.sender_id === id ? msg.receiver_id : msg.sender_id
@@ -376,23 +352,20 @@ export default function ConversationScreen() {
           })
         }
       })
-
       const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
-
       const contactList = []
       for (const [uid, data] of userMap.entries()) {
         if (data.lastContacted > thirtyDaysAgo) {
           const profile = await getUserProfileByUserId(uid)
           contactList.push({
             id: uid,
-            nickname: profile?.nickname || 'User',
+            nickname: profile?.nickname || 'Member',
             avatar: profile?.avatarUrl,
             lastContacted: data.lastContacted,
             lastMessage: data.lastMessage,
           })
         }
       }
-
       contactList.sort((a, b) => b.lastContacted - a.lastContacted)
       setContactedUsers(contactList)
     } catch (err) {
@@ -408,7 +381,7 @@ export default function ConversationScreen() {
           const profile = await getUserProfileByUserId(contact.contactUserId)
           return {
             id: contact.contactUserId,
-            nickname: profile?.nickname || 'User',
+            nickname: profile?.nickname || 'Member',
             avatar: profile?.avatarUrl,
           }
         })
@@ -431,8 +404,7 @@ export default function ConversationScreen() {
     }, [userId])
   )
 
-  // Filter messages for current direct conversation
-  const directConversationMessages = messages.filter(
+    const directConversationMessages = messages.filter(
     m =>
       (m.senderId === userId && m.receiverId === receiverId) ||
       (m.senderId === receiverId && m.receiverId === userId)
@@ -445,25 +417,26 @@ export default function ConversationScreen() {
     const isOwn = msg.senderId === userId
     const senderProfile = userProfiles.get(msg.senderId)
     const displayProfile = isOwn ? userProfile : senderProfile
-    const displayNickname = isOwn ? (userProfile?.nickname || 'User') : (senderProfile?.nickname || 'User')
+    const displayNickname = isOwn
+      ? userProfile?.nickname || 'You'
+      : senderProfile?.nickname || 'Member'
 
     if (msg.isDeleted) {
       return (
-        <View key={msg.id} style={styles.messageContainer}>
-          <View style={styles.messageBubble}>
-            <Text style={styles.deletedMessageText}>
-              <Ionicons name="trash-outline" size={12} /> This message was deleted
+        <View key={msg.id} style={styles.deletedWrapper}>
+                      <Text style={styles.deletedMessageText}>
+              — This message has been removed —
             </Text>
-          </View>
-        </View>
+                  </View>
       )
     }
 
-    const avatarContent = displayProfile?.avatarUrl && displayProfile.avatarUrl.trim() !== '' ? (
+    const avatarContent =
+displayProfile?.avatarUrl && displayProfile.avatarUrl.trim() !== '' ? (
       <Image source={{ uri: displayProfile.avatarUrl }} style={styles.messageSenderAvatar} />
     ) : (
-      <View style={styles.messageSenderAvatarPlaceholder}>
-        <Ionicons name="person" size={16} color="#999" />
+      <View style={[styles.messageSenderAvatarPlaceholder, isOwn && styles.ownAvatarPlaceholder]}>
+        <Ionicons name="person" size={15} color={isOwn ? '#FFF' : '#888'} />
       </View>
     )
 
@@ -482,8 +455,7 @@ export default function ConversationScreen() {
         onLongPress={() => isOwn && setSelectedMessageId(msg.id)}
         style={styles.messageWrapper}
       >
-        <View>
-          <Text style={[styles.messageSenderNickname, isOwn && styles.messageSenderNicknameOwn]}>
+                  <Text style={[styles.messageSenderNickname, isOwn && styles.messageSenderNicknameOwn]}>
             {displayNickname}
           </Text>
           <View style={[styles.messageRow, isOwn && styles.messageRowOwn]}>
@@ -492,42 +464,47 @@ export default function ConversationScreen() {
               <Text style={[styles.messageText, isOwn && styles.ownMessageText]}>{msg.text}</Text>
               <View style={styles.messageFooter}>
                 <Text style={[styles.timestamp, isOwn && styles.ownTimestamp]}>
-                  {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(msg.createdAt).toLocaleTimeString([], {
+hour: '2-digit',
+minute: '2-digit',
+})}
                 </Text>
                 {msg.editedAt && (
-                  <Text style={[styles.editedBadge, isOwn && styles.ownEditedBadge]}>(edited)</Text>
+                  <Text style={[styles.editedBadge, isOwn && styles.ownEditedBadge]}>· edited</Text>
                 )}
               </View>
             </View>
             {isOwn && avatar}
-          </View>
-        </View>
+                  </View>
       </Pressable>
     )
   }
 
-  // ─── Sorted friends: active first ───────────────────────────────────────────
-  const sortedFriends = [...friendsList].sort((a, b) => {
+    const sortedFriends = [...friendsList].sort((a, b) => {
     const aActive = activeUserIds.has(a.id) ? 0 : 1
     const bActive = activeUserIds.has(b.id) ? 0 : 1
     return aActive - bActive
   })
 
-  // ─── Direct Messages panel (no conversation open) ───────────────────────────
-  const renderDirectMessagesPanel = () => (
+    const renderDirectMessagesPanel = () => (
     <ScrollView style={styles.dmPanel} showsVerticalScrollIndicator={false}>
-      {/* Friends Section */}
+      {/* Members Section */}
       <View style={styles.sectionBlock}>
-        <Text style={styles.sectionHeader}>
-          <Ionicons name="people" size={14} color="#007AFF" />
-          {'  '}Friends
-        </Text>
+<View style={styles.sectionHeaderRow}>
+          <View style={styles.sectionAccentLine} />
+        <Text style={styles.sectionHeader}>MEMBERS</Text>
+</View>
         {sortedFriends.length === 0 ? (
           <View style={styles.emptySection}>
-            <Text style={styles.emptySectionText}>No friends yet</Text>
+            <Text style={styles.emptySectionText}>No members added yet</Text>
           </View>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.friendsRow}>
+          <ScrollView
+horizontal
+showsHorizontalScrollIndicator={false}
+style={styles.friendsRow}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 4 }}
+>
             {sortedFriends.map(friend => {
               const isActive = activeUserIds.has(friend.id)
               return (
@@ -536,13 +513,14 @@ export default function ConversationScreen() {
                   style={styles.friendBubble}
                   onPress={() => handleStartConversation(friend.id)}
                   onLongPress={() => setProfileModalUserId(friend.id)}
+activeOpacity={0.7}
                 >
                   <View style={styles.friendAvatarWrapper}>
                     {friend.avatar ? (
                       <Image source={{ uri: friend.avatar }} style={styles.friendBubbleAvatar} />
                     ) : (
                       <View style={styles.friendBubbleAvatarPlaceholder}>
-                        <Ionicons name="person" size={22} color="#999" />
+                        <Ionicons name="person" size={22} color="#555" />
                       </View>
                     )}
                     {isActive && <View style={styles.activeDot} />}
@@ -558,22 +536,24 @@ export default function ConversationScreen() {
       </View>
 
       {/* Conversations Section */}
-      <View style={styles.sectionBlock}>
-        <Text style={styles.sectionHeader}>
-          <Ionicons name="chatbubbles" size={14} color="#007AFF" />
-          {'  '}Conversations
-        </Text>
+<View style={[styles.sectionBlock, { marginTop: 4 }]}>
+      <View style={styles.sectionHeaderRow}>
+<View style={styles.sectionAccentLine} />
+        <Text style={styles.sectionHeader}>CONVERSATIONS</Text>
+</View>
         {contactedUsers.length === 0 ? (
           <View style={styles.emptySection}>
-            <Ionicons name="chatbubbles-outline" size={40} color="#DDD" />
+            <Ionicons name="chatbubble-ellipses-outline" size={36} color="#BDBDBD" />
             <Text style={styles.emptySectionText}>No conversations yet</Text>
-            <Text style={styles.emptySectionSub}>Tap a friend above to start chatting</Text>
+            <Text style={styles.emptySectionSub}>Select a member above to begin</Text>
           </View>
         ) : (
-          contactedUsers.map(contact => {
+<View style={{ paddingHorizontal: 16 }}>
+            {contactedUsers.map((contact, index) => {
             const isSelected = selectedConversationId === contact.id
             return (
               <View key={contact.id}>
+{index > 0 && <View style={styles.divider} />}
                 <Pressable
                   style={[styles.conversationItem, isSelected && styles.conversationItemSelected]}
                   onPress={() => {
@@ -593,7 +573,7 @@ export default function ConversationScreen() {
                       <Image source={{ uri: contact.avatar }} style={styles.convAvatar} />
                     ) : (
                       <View style={styles.convAvatarPlaceholder}>
-                        <Ionicons name="person" size={20} color="#999" />
+                        <Ionicons name="person" size={18} color="#888" />
                       </View>
                     )}
                     {activeUserIds.has(contact.id) && <View style={styles.activeDotSmall} />}
@@ -601,9 +581,10 @@ export default function ConversationScreen() {
                   <View style={styles.convInfo}>
                     <Text style={styles.convNickname}>{contact.nickname}</Text>
                     <Text style={styles.convLastMessage} numberOfLines={1}>
-                      {contact.lastMessage || 'Say hello!'}
+                      {contact.lastMessage || '—'}
                     </Text>
                   </View>
+<View style={styles.convRightCol}>
                   <Text style={styles.convTime}>
                     {new Date(contact.lastContacted).toLocaleTimeString([], {
                       hour: '2-digit',
@@ -618,39 +599,42 @@ export default function ConversationScreen() {
                         handleDeleteConversation(contact.id, contact.nickname)
                       }}
                     >
-                      <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                      <Ionicons name="trash-outline" size={16} color="#111" />
                     </TouchableOpacity>
                   )}
+</View>
                 </Pressable>
               </View>
             )
-          })
+          })}
+          </View>
         )}
       </View>
+<View style={{ height: 100 }} />
     </ScrollView>
   )
 
-  // ─── Active Direct Conversation ─────────────────────────────────────────────
-  const activeConvProfile = receiverId ? userProfiles.get(receiverId) : null
-  const activeConvNickname = activeConvProfile?.nickname || 'User'
+    const activeConvProfile = receiverId ? userProfiles.get(receiverId) : null
+  const activeConvNickname = activeConvProfile?.nickname || 'Member'
 
   const renderActiveConversation = () => (
     <>
       {/* Conversation sub-header */}
       <View style={styles.convHeader}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => setReceiverId('')}>
-          <Ionicons name="chevron-back" size={22} color="#007AFF" />
+        <TouchableOpacity style={styles.backBtn} onPress={() => setReceiverId('')} activeOpacity={0.7}>
+          <Ionicons name="chevron-back" size={22} color="#111" />
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.convHeaderTapArea}
           onPress={() => setProfileModalUserId(receiverId)}
+activeOpacity={0.7}
         >
           <View style={styles.convAvatarWrapper}>
             {activeConvProfile?.avatarUrl ? (
               <Image source={{ uri: activeConvProfile.avatarUrl }} style={styles.convHeaderAvatar} />
             ) : (
               <View style={styles.convHeaderAvatarPlaceholder}>
-                <Ionicons name="person" size={18} color="#999" />
+                <Ionicons name="person" size={16} color="#888" />
               </View>
             )}
             {activeUserIds.has(receiverId) && <View style={styles.activeDotSmall} />}
@@ -658,18 +642,17 @@ export default function ConversationScreen() {
           <View>
             <Text style={styles.convHeaderName}>{activeConvNickname}</Text>
             <Text style={styles.convHeaderStatus}>
-              {activeUserIds.has(receiverId) ? 'Active now' : 'Offline'}
+              {activeUserIds.has(receiverId) ? '● Online' : '○ Offline'}
             </Text>
           </View>
         </TouchableOpacity>
       </View>
 
-      {/* Messages */}
-      {isEmpty ? (
+            {isEmpty ? (
         <View style={styles.centerContent}>
-          <Ionicons name="chatbubble-ellipses-outline" size={50} color="#CCC" />
+          <Ionicons name="chatbubble-ellipses-outline" size={44} color="#BDBDBD" />
           <Text style={styles.emptyText}>No messages yet</Text>
-          <Text style={styles.emptySubtext}>Say hi to {activeConvNickname}!</Text>
+          <Text style={styles.emptySubtext}>Send a message to {activeConvNickname}</Text>
         </View>
       ) : (
         <ScrollView
@@ -679,23 +662,27 @@ export default function ConversationScreen() {
           onContentSizeChange={() => scrollViewRef?.scrollToEnd({ animated: true })}
         >
           {currentMessages.map(renderMessageBubble)}
+<View style={{ height: 12 }} />
         </ScrollView>
       )}
 
-      {/* Input */}
-      <View style={styles.inputArea}>
+            <View style={styles.inputArea}>
         <View style={styles.messageInputContainer}>
           <TextInput
             style={styles.textInput}
-            placeholder="Type a message..."
+            placeholder="Write a message…"
             value={messageText}
             onChangeText={setMessageText}
             multiline
             maxLength={500}
-            placeholderTextColor="#999"
+            placeholderTextColor="#AAA"
           />
-          <TouchableOpacity style={styles.sendButtonSmall} onPress={handleSendMessage}>
-            <Ionicons name="send" size={18} color="#FFF" />
+          <TouchableOpacity
+style={[styles.sendButtonSmall, !messageText.trim() && styles.sendButtonDisabled]}
+onPress={handleSendMessage}
+            activeOpacity={0.8}
+>
+            <Ionicons name="arrow-up" size={18} color="#FFF" />
           </TouchableOpacity>
         </View>
       </View>
@@ -709,47 +696,51 @@ export default function ConversationScreen() {
         <TouchableOpacity
           style={[styles.tab, chatMode === 'overall' && styles.tabActive]}
           onPress={() => setChatMode('overall')}
+activeOpacity={0.7}
         >
           <Ionicons
             name={chatMode === 'overall' ? 'people' : 'people-outline'}
-            size={20}
-            color={chatMode === 'overall' ? '#007AFF' : '#999'}
+            size={18}
+            color={chatMode === 'overall' ? '#111' : '#AAA'}
           />
           <Text style={[styles.tabText, chatMode === 'overall' && styles.tabTextActive]}>
-            Overall Chat
+            Team Chat
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.tab, chatMode === 'direct' && styles.tabActive]}
           onPress={() => setChatMode('direct')}
+activeOpacity={0.7}
         >
           <Ionicons
             name={chatMode === 'direct' ? 'chatbubble' : 'chatbubble-outline'}
-            size={20}
-            color={chatMode === 'direct' ? '#007AFF' : '#999'}
+            size={18}
+            color={chatMode === 'direct' ? '#111' : '#AAA'}
           />
           <Text style={[styles.tabText, chatMode === 'direct' && styles.tabTextActive]}>
-            Direct Messages
+            Direct
           </Text>
         </TouchableOpacity>
       </View>
 
-      {/* Header — shown only in overall or when no direct convo open */}
+      {/* Header — overall or DM list */}
       {(chatMode === 'overall' || (chatMode === 'direct' && !receiverId)) && (
         <View style={styles.header}>
           <View style={styles.headerContent}>
+<View style={styles.headerAvatarCol}>
             {userProfile?.avatarUrl ? (
               <Image source={{ uri: userProfile.avatarUrl }} style={styles.headerAvatar} />
             ) : (
               <View style={styles.headerAvatarPlaceholder}>
-                <Ionicons name="person" size={20} color="#999" />
+                <Ionicons name="person" size={18} color="#888" />
               </View>
             )}
+</View>
             <View style={styles.headerInfo}>
-              <Text style={styles.headerNickname}>{userProfile?.nickname || 'User'}</Text>
+              <Text style={styles.headerNickname}>{userProfile?.nickname || 'You'}</Text>
               <Text style={styles.headerTitle}>
-                {chatMode === 'overall' ? 'Overall Chat' : 'Direct Messages'}
+                {chatMode === 'overall' ? 'Worship Team · Team Chat' : 'Direct Messages'}
               </Text>
             </View>
           </View>
@@ -761,8 +752,9 @@ export default function ConversationScreen() {
         <>
           {overallChatMessages.length === 0 ? (
             <View style={styles.centerContent}>
-              <Ionicons name="people-outline" size={60} color="#CCC" />
-              <Text style={styles.emptyText}>No messages in overall chat yet</Text>
+              <Ionicons name="people-outline" size={50} color="#BDBDBD" />
+              <Text style={styles.emptyText}>No messages yet</Text>
+<Text style={styles.emptySubtext}>Begin the team conversation below</Text>
             </View>
           ) : (
             <ScrollView
@@ -772,21 +764,26 @@ export default function ConversationScreen() {
               onContentSizeChange={() => scrollViewRef?.scrollToEnd({ animated: true })}
             >
               {overallChatMessages.map(renderMessageBubble)}
+<View style={{ height: 12 }} />
             </ScrollView>
           )}
           <View style={styles.inputArea}>
             <View style={styles.messageInputContainer}>
               <TextInput
                 style={styles.textInput}
-                placeholder="Share a message..."
+                placeholder="Share with the team…"
                 value={messageText}
                 onChangeText={setMessageText}
                 multiline
                 maxLength={500}
-                placeholderTextColor="#999"
+                placeholderTextColor="#AAA"
               />
-              <TouchableOpacity style={styles.sendButtonSmall} onPress={handleSendMessage}>
-                <Ionicons name="send" size={18} color="#FFF" />
+              <TouchableOpacity
+style={[styles.sendButtonSmall, !messageText.trim() && styles.sendButtonDisabled]}
+onPress={handleSendMessage}
+                activeOpacity={0.8}
+>
+                <Ionicons name="arrow-up" size={18} color="#FFF" />
               </TouchableOpacity>
             </View>
           </View>
@@ -797,14 +794,13 @@ export default function ConversationScreen() {
       {chatMode === 'direct' && (
         <>
           {receiverId ? renderActiveConversation() : renderDirectMessagesPanel()}
-
-          {/* FAB: only show when NOT in an active conversation */}
           {!receiverId && (
             <TouchableOpacity
               style={styles.fab}
               onPress={() => setShowNewConversationModal(true)}
+activeOpacity={0.85}
             >
-              <Ionicons name="create" size={24} color="#FFF" />
+              <Ionicons name="create-outline" size={22} color="#FFF" />
             </TouchableOpacity>
           )}
         </>
@@ -820,18 +816,18 @@ export default function ConversationScreen() {
               </TouchableOpacity>
               <Text style={styles.modalTitle}>Edit Message</Text>
               <TouchableOpacity onPress={handleEditMessage}>
-                <Text style={styles.sendButton}>Save</Text>
+                <Text style={styles.confirmButton}>Save</Text>
               </TouchableOpacity>
             </View>
             <View style={styles.modalBody}>
-              <Text style={styles.label}>Message:</Text>
+              <Text style={styles.label}>Message</Text>
               <TextInput
                 style={styles.messageInput}
                 value={editingText}
                 onChangeText={setEditingText}
                 multiline
                 numberOfLines={6}
-                placeholderTextColor="#999"
+                placeholderTextColor="#AAA"
               />
             </View>
           </View>
@@ -861,19 +857,19 @@ export default function ConversationScreen() {
                 setSelectedMessageId(null)
               }}
             >
-              <Ionicons name="pencil-outline" size={20} color="#007AFF" />
-              <Text style={styles.menuOptionText}>Edit</Text>
+              <Ionicons name="pencil-outline" size={18} color="#111" />
+              <Text style={styles.menuOptionText}>Edit Message</Text>
             </TouchableOpacity>
-
+<View style={styles.menuDivider} />
             <TouchableOpacity
-              style={[styles.menuOption, styles.deleteOption]}
+              style={styles.menuOption}
               onPress={() => {
                 if (selectedMessageId) handleDeleteMessage(selectedMessageId)
                 setSelectedMessageId(null)
               }}
             >
-              <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-              <Text style={[styles.menuOptionText, styles.deleteOptionText]}>Delete</Text>
+              <Ionicons name="trash-outline" size={18} color="#111" />
+              <Text style={[styles.menuOptionText, styles.deleteOptionText]}>Delete Message</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -888,30 +884,34 @@ export default function ConversationScreen() {
       >
         <View style={styles.modalContainer}>
           <View style={styles.newConversationContent}>
-            <View style={styles.newConversationHeader}>
+            <View style={styles.modalHeader}>
               <TouchableOpacity onPress={() => setShowNewConversationModal(false)}>
                 <Text style={styles.cancelButton}>Cancel</Text>
               </TouchableOpacity>
-              <Text style={styles.modalTitle}>Start Conversation</Text>
+              <Text style={styles.modalTitle}>New Message</Text>
               <View style={{ width: 60 }} />
             </View>
 
             <ScrollView style={styles.newConversationBody} showsVerticalScrollIndicator={false}>
               {friendsList.length > 0 && (
                 <>
-                  <Text style={styles.sectionTitle}>From Friends</Text>
+<View style={styles.sectionHeaderRow}>
+                    <View style={styles.sectionAccentLine} />
+                  <Text style={styles.sectionHeader}>MEMBERS</Text>
+</View>
                   <View style={styles.friendsGrid}>
                     {friendsList.map(friend => (
                       <TouchableOpacity
                         key={friend.id}
                         style={styles.friendCard}
                         onPress={() => handleStartConversation(friend.id)}
+activeOpacity={0.7}
                       >
                         {friend.avatar ? (
                           <Image source={{ uri: friend.avatar }} style={styles.friendAvatar} />
                         ) : (
                           <View style={styles.friendAvatarPlaceholder}>
-                            <Ionicons name="person" size={24} color="#999" />
+                            <Ionicons name="person" size={22} color="#555" />
                           </View>
                         )}
                         <Text style={styles.friendName} numberOfLines={2}>
@@ -923,14 +923,17 @@ export default function ConversationScreen() {
                 </>
               )}
 
+<View style={[styles.sectionHeaderRow, { marginTop: 24 }]}>
+                <View style={styles.sectionAccentLine} />
+                <Text style={styles.sectionHeader}>BY ID</Text>
+              </View>
               <View style={styles.recipientInputSection}>
-                <Text style={styles.sectionTitle}>By Recipient ID</Text>
-                <TextInput
+                                <TextInput
                   style={styles.recipientIdInput}
                   placeholder="Enter recipient ID"
                   value={newRecipientId}
                   onChangeText={setNewRecipientId}
-                  placeholderTextColor="#999"
+                  placeholderTextColor="#AAA"
                 />
                 <TouchableOpacity
                   style={[styles.startButton, !newRecipientId.trim() && styles.startButtonDisabled]}
@@ -938,18 +941,21 @@ export default function ConversationScreen() {
                     if (newRecipientId.trim()) handleStartConversation(newRecipientId)
                   }}
                   disabled={!newRecipientId.trim()}
+activeOpacity={0.8}
                 >
-                  <Text style={styles.startButtonText}>Start</Text>
+                  <Text style={styles.startButtonText}>Start Conversation</Text>
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.qrSection}>
-                <Text style={styles.sectionTitle}>Scan QR Code</Text>
-                <TouchableOpacity style={styles.qrButton}>
-                  <Ionicons name="qr-code" size={40} color="#007AFF" />
+<View style={[styles.sectionHeaderRow, { marginTop: 24 }]}>
+              <View style={styles.sectionAccentLine} />
+                <Text style={styles.sectionHeader}>SCAN</Text>
+</View>
+                <TouchableOpacity style={styles.qrButton} activeOpacity={0.75}>
+                  <Ionicons name="qr-code-outline" size={36} color="#111" />
                   <Text style={styles.qrButtonText}>Scan QR Code</Text>
                 </TouchableOpacity>
-              </View>
+              <View style={{ height: 40 }} />
             </ScrollView>
           </View>
         </View>
@@ -970,126 +976,199 @@ export default function ConversationScreen() {
   )
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
+// ─── PALETTE ────────────────────────────────────────────────────────────────
+// Pure monochrome: #000 (black), #111 (near-black), #333, #555, #888, #AAA, #CCC, #E8E8E8, #F2F2F2, #FFF
+// Active indicator: #111 (solid black dot for formality)
 
-  // ── Tabs ──
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F2F2F2' },
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
   tabContainer: {
     flexDirection: 'row',
     backgroundColor: '#FFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E8E8E8',
+    borderBottomColor: '#E0E0E0',
   },
   tab: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    gap: 6,
-    borderBottomWidth: 3,
+    paddingVertical: 13,
+    gap: 7,
+    borderBottomWidth: 2,
     borderBottomColor: 'transparent',
   },
-  tabActive: { borderBottomColor: '#007AFF' },
-  tabText: { fontSize: 13, fontWeight: '500', color: '#999' },
-  tabTextActive: { color: '#007AFF' },
+  tabActive: { borderBottomColor: '#111' },
+  tabText: {
+fontSize: 12,
+fontWeight: '600',
+color: '#AAA',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+},
+  tabTextActive: { color: '#111' },
 
-  // ── Header ──
+  // ── Header ─────────────────────────────────────────────────────────────────
   header: {
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     backgroundColor: '#FFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E8E8E8',
   },
   headerContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  headerAvatar: { width: 40, height: 40, borderRadius: 20 },
+headerAvatarCol: {},
+  headerAvatar: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: '#E0E0E0' },
   headerAvatarPlaceholder: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center',
+    width: 42,
+height: 42,
+borderRadius: 21,
+    backgroundColor: '#F2F2F2',
+justifyContent: 'center',
+alignItems: 'center',
+borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   headerInfo: { flex: 1 },
-  headerNickname: { fontSize: 14, fontWeight: '600', color: '#007AFF', marginBottom: 2 },
-  headerTitle: { fontSize: 14, fontWeight: '500', color: '#666' },
-
-  // ── DM Panel ──
-  dmPanel: { flex: 1, backgroundColor: '#F8F9FA' },
-  sectionBlock: { marginBottom: 4 },
-  sectionHeader: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#007AFF',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 10,
+  headerNickname: {
+fontSize: 15,
+fontWeight: '700',
+color: '#111',
+    letterSpacing: 0.2,
+marginBottom: 2,
+},
+  headerTitle: {
+fontSize: 12,
+fontWeight: '400',
+color: '#888',
     letterSpacing: 0.3,
+},
+
+  // ── DM Panel ───────────────────────────────────────────────────────────────
+  dmPanel: { flex: 1, backgroundColor: '#FAFAFA' },
+  sectionBlock: { marginTop: 24 },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    marginBottom: 14,
+  },
+  sectionAccentLine: {
+    width: 3,
+    height: 16,
+    backgroundColor: '#111',
+    borderRadius: 1.5,
+},
+  sectionHeader: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#111',
+        letterSpacing: 1.5,
+    textTransform: 'uppercase',
   },
 
   // Friends horizontal scroll
-  friendsRow: { paddingLeft: 16, paddingBottom: 12 },
-  friendBubble: { alignItems: 'center', marginRight: 18, width: 64 },
-  friendAvatarWrapper: { position: 'relative', marginBottom: 6 },
-  friendBubbleAvatar: { width: 56, height: 56, borderRadius: 28 },
+  friendsRow: { paddingBottom: 8 },
+  friendBubble: { alignItems: 'center', marginRight: 22, width: 64 },
+  friendAvatarWrapper: { position: 'relative', marginBottom: 8 },
+  friendBubbleAvatar: {
+width: 56,
+height: 56,
+borderRadius: 28,
+    borderWidth: 2,
+    borderColor: '#E5E5E5',
+},
   friendBubbleAvatarPlaceholder: {
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: '#E8E8E8', justifyContent: 'center', alignItems: 'center',
+    width: 56,
+height: 56,
+borderRadius: 28,
+    backgroundColor: '#E8E8E8',
+justifyContent: 'center',
+alignItems: 'center',
+borderWidth: 2,
+    borderColor: '#E5E5E5',
   },
   activeDot: {
-    position: 'absolute', bottom: 2, right: 2,
-    width: 13, height: 13, borderRadius: 7,
-    backgroundColor: '#34C759', borderWidth: 2, borderColor: '#F8F9FA',
+    position: 'absolute',
+bottom: 1,
+right: 1,
+    width: 12,
+height: 12,
+borderRadius: 6,
+    backgroundColor: '#111',
+borderWidth: 2,
+borderColor: '#F2F2F2',
   },
   activeDotSmall: {
-    position: 'absolute', bottom: 1, right: 1,
-    width: 10, height: 10, borderRadius: 5,
-    backgroundColor: '#34C759', borderWidth: 2, borderColor: '#FFF',
+    position: 'absolute',
+bottom: 0,
+right: 0,
+    width: 9,
+height: 9,
+borderRadius: 5,
+    backgroundColor: '#111',
+borderWidth: 2,
+borderColor: '#FFF',
   },
-  friendBubbleName: { fontSize: 11, fontWeight: '500', color: '#333', textAlign: 'center' },
+  friendBubbleName: {
+fontSize: 12,
+fontWeight: '600',
+color: '#222',
+textAlign: 'center',
+    lineHeight: 15,
+    letterSpacing: 0.2,
+},
 
   // Conversations list
+divider: {
+    height: 1,
+    backgroundColor: '#F0F0F0',
+    marginVertical: 0,
+  },
   conversationItem: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFF',
-    marginHorizontal: 12,
-    marginBottom: 6,
-    borderRadius: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+        paddingVertical: 14,
+    paddingHorizontal: 16,
     gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
-  },
+borderRadius: 8,
+    marginVertical: 4,
+      },
   conversationItemSelected: {
-    backgroundColor: '#FFF0F0',
-    borderWidth: 1,
-    borderColor: '#FFCDD2',
-  },
-  conversationItemMain: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
+    backgroundColor: '#F8F8F8',
+    borderWidth: 1.5,
+    borderColor: '#111',
+},
   convAvatarWrapper: { position: 'relative' },
-  convAvatar: { width: 46, height: 46, borderRadius: 23 },
+  convAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 1.5,
+    borderColor: '#E5E5E5',
+  },
   convAvatarPlaceholder: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#E5E5E5',
   },
   convInfo: { flex: 1 },
-  convNickname: { fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 3 },
-  convLastMessage: { fontSize: 12, color: '#999' },
-  convTime: { fontSize: 11, color: '#BBB', marginLeft: 4 },
-  convDeleteBtn: {
-    padding: 6,
-    marginLeft: 'auto',
-  },
+  convNickname: { fontSize: 14, fontWeight: '700', color: '#111', marginBottom: 3, letterSpacing: 0.2 },
+  convLastMessage: { fontSize: 12, color: '#888', lineHeight: 16, letterSpacing: 0.1 },
+  convRightCol: { alignItems: 'flex-end', gap: 8 },
+  convTime: { fontSize: 11, color: '#AAA', letterSpacing: 0.3, fontWeight: '500' },
+  convDeleteBtn: { padding: 6, paddingRight: 0 },
 
-  // ── Conversation view ──
+  // ── Conversation view ──────────────────────────────────────────────────────
   convHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1097,7 +1176,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E8E8E8',
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     gap: 10,
   },
   convHeaderTapArea: {
@@ -1106,156 +1185,336 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  backBtn: { padding: 4, marginRight: 2 },
-  convHeaderAvatar: { width: 36, height: 36, borderRadius: 18 },
+  backBtn: { padding: 4 },
+  convHeaderAvatar: {
+width: 36,
+height: 36,
+borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+},
   convHeaderAvatarPlaceholder: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center',
+    width: 36,
+height: 36,
+borderRadius: 18,
+    backgroundColor: '#F0F0F0',
+justifyContent: 'center',
+alignItems: 'center',
+borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
-  convHeaderName: { fontSize: 15, fontWeight: '600', color: '#000' },
-  convHeaderStatus: { fontSize: 12, color: '#34C759' },
+  convHeaderName: { fontSize: 15, fontWeight: '700', color: '#111', letterSpacing: 0.1 },
+  convHeaderStatus: { fontSize: 11, color: '#888', marginTop: 1, letterSpacing: 0.5 },
 
-  // ── Messages ──
-  messagesContainer: { flex: 1, padding: 12 },
-  messageWrapper: { marginBottom: 12 },
-  messageContainer: { marginBottom: 12 },
+  // ── Messages ───────────────────────────────────────────────────────────────
+  messagesContainer: { flex: 1, paddingHorizontal: 14, paddingTop: 14 },
+  messageWrapper: { marginBottom: 14 },
+  deletedWrapper: { alignItems: 'center', marginBottom: 14 },
   messageSenderNickname: {
-    fontSize: 12, fontWeight: '600', color: '#666', marginBottom: 4, marginLeft: 40,
+    fontSize: 11,
+fontWeight: '600',
+color: '#888',
+marginBottom: 4,
+marginLeft: 42,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
   },
   messageSenderNicknameOwn: {
-    marginLeft: 0, marginRight: 40, textAlign: 'right', color: '#007AFF',
+    marginLeft: 0,
+marginRight: 42,
+textAlign: 'right',
+color: '#555',
   },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   messageRowOwn: { justifyContent: 'flex-end' },
-  messageSenderAvatar: { width: 32, height: 32, borderRadius: 16 },
+  messageSenderAvatar: {
+width: 30,
+height: 30,
+borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+},
   messageSenderAvatarPlaceholder: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center',
+    width: 30,
+height: 30,
+borderRadius: 15,
+    backgroundColor: '#EBEBEB',
+justifyContent: 'center',
+alignItems: 'center',
+borderWidth: 1,
+    borderColor: '#DCDCDC',
+  },
+  ownAvatarPlaceholder: {
+    backgroundColor: '#333',
+    borderColor: '#222',
   },
   messageBubble: {
-    backgroundColor: '#E5E5EA', borderRadius: 12,
-    paddingHorizontal: 12, paddingVertical: 8, maxWidth: '70%', alignSelf: 'flex-start',
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    borderTopLeftRadius: 4,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    maxWidth: '72%',
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
   },
-  ownMessage: { backgroundColor: '#007AFF', alignSelf: 'flex-end' },
-  messageText: { fontSize: 14, color: '#000' },
+  ownMessage: {
+backgroundColor: '#111',
+    borderTopRightRadius: 4,
+    borderTopLeftRadius: 14,
+    borderColor: '#111',
+},
+  messageText: { fontSize: 14, color: '#111', lineHeight: 20 },
   ownMessageText: { color: '#FFF' },
   messageFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
-  timestamp: { fontSize: 11, color: '#666' },
-  ownTimestamp: { color: 'rgba(255,255,255,0.7)' },
-  editedBadge: { fontSize: 10, color: '#999', fontStyle: 'italic' },
-  ownEditedBadge: { color: 'rgba(255,255,255,0.6)' },
-  deletedMessageText: { fontSize: 13, color: '#999', fontStyle: 'italic' },
+  timestamp: { fontSize: 10, color: '#BDBDBD', letterSpacing: 0.2 },
+  ownTimestamp: { color: 'rgba(255,255,255,0.45)' },
+  editedBadge: { fontSize: 10, color: '#BDBDBD', fontStyle: 'italic' },
+  ownEditedBadge: { color: 'rgba(255,255,255,0.4)' },
+  deletedMessageText: {
+fontSize: 12,
+color: '#BDBDBD',
+fontStyle: 'italic',
+    letterSpacing: 0.3,
+},
 
-  // ── Input ──
+  // ── Input ──────────────────────────────────────────────────────────────────
   inputArea: {
-    backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#E8E8E8',
-    paddingHorizontal: 12, paddingVertical: 8,
+    backgroundColor: '#FFF',
+borderTopWidth: 1,
+borderTopColor: '#E8E8E8',
+    paddingHorizontal: 12,
+paddingVertical: 10,
   },
   messageInputContainer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   textInput: {
-    flex: 1, backgroundColor: '#F0F0F0', borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#000', maxHeight: 100,
+    flex: 1,
+backgroundColor: '#F5F5F5',
+borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    paddingHorizontal: 16,
+paddingVertical: 10,
+fontSize: 14,
+color: '#111',
+maxHeight: 100,
+lineHeight: 20,
   },
   sendButtonSmall: {
-    backgroundColor: '#007AFF', borderRadius: 20,
-    width: 40, height: 40, justifyContent: 'center', alignItems: 'center', marginBottom: 2,
+    backgroundColor: '#111',
+borderRadius: 20,
+    width: 40,
+height: 40,
+justifyContent: 'center',
+alignItems: 'center',
+marginBottom: 2,
+},
+  sendButtonDisabled: {
+    backgroundColor: '#BDBDBD',
   },
 
-  // ── Empty States ──
-  centerContent: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { fontSize: 16, color: '#999', marginTop: 12 },
-  emptySubtext: { fontSize: 14, color: '#CCC', marginTop: 8 },
-  emptySection: { alignItems: 'center', paddingVertical: 20, paddingHorizontal: 16 },
-  emptySectionText: { fontSize: 14, color: '#BBB', marginTop: 8 },
-  emptySectionSub: { fontSize: 12, color: '#CCC', marginTop: 4 },
+  // ── Empty States ───────────────────────────────────────────────────────────
+  centerContent: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  emptyText: { fontSize: 15, color: '#888', marginTop: 14, fontWeight: '500' },
+  emptySubtext: { fontSize: 13, color: '#BDBDBD', marginTop: 6, textAlign: 'center' },
+  emptySection: { alignItems: 'center', paddingVertical: 24, paddingHorizontal: 16 },
+  emptySectionText: { fontSize: 13, color: '#BDBDBD', marginTop: 8, fontWeight: '500' },
+  emptySectionSub: { fontSize: 12, color: '#CFCFCF', marginTop: 4 },
 
-  // ── FAB ──
+  // ── FAB ────────────────────────────────────────────────────────────────────
   fab: {
-    position: 'absolute', bottom: 20, right: 20,
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: '#007AFF',
-    justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 8, elevation: 8,
+    position: 'absolute',
+bottom: 24,
+right: 20,
+    width: 52,
+height: 52,
+borderRadius: 26,
+    backgroundColor: '#111',
+    justifyContent: 'center',
+alignItems: 'center',
+    shadowColor: '#000',
+shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+shadowRadius: 8,
+elevation: 6,
   },
 
-  // ── Modals ──
+  // ── Modals ─────────────────────────────────────────────────────────────────
   modalContainer: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end',
+    flex: 1,
+backgroundColor: 'rgba(0,0,0,0.45)',
+justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '90%',
+    backgroundColor: '#FFF',
+borderTopLeftRadius: 20,
+borderTopRightRadius: 20,
+maxHeight: '90%',
   },
   modalHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: '#E8E8E8',
+    flexDirection: 'row',
+justifyContent: 'space-between',
+alignItems: 'center',
+    paddingHorizontal: 16,
+paddingVertical: 14,
+    borderBottomWidth: 1,
+borderBottomColor: '#E8E8E8',
   },
-  modalTitle: { fontSize: 16, fontWeight: '600', color: '#000' },
-  cancelButton: { color: '#999', fontSize: 14 },
-  sendButton: { color: '#007AFF', fontSize: 14, fontWeight: '600' },
-  modalBody: { paddingHorizontal: 16, paddingVertical: 12 },
-  label: { fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 8 },
+  modalTitle: {
+fontSize: 15,
+fontWeight: '700',
+color: '#111',
+    letterSpacing: 0.2,
+},
+  cancelButton: { color: '#888', fontSize: 14, fontWeight: '500' },
+  confirmButton: { color: '#111', fontSize: 14, fontWeight: '700' },
+  modalBody: { paddingHorizontal: 16, paddingVertical: 16 },
+  label: {
+fontSize: 11,
+fontWeight: '700',
+color: '#888',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+marginBottom: 10,
+},
   messageInput: {
-    borderWidth: 1, borderColor: '#E8E8E8', borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 10, fontSize: 14,
-    color: '#000', textAlignVertical: 'top',
+    borderWidth: 1,
+borderColor: '#E0E0E0',
+borderRadius: 10,
+    paddingHorizontal: 14,
+paddingVertical: 12,
+fontSize: 14,
+    color: '#111',
+textAlignVertical: 'top',
+lineHeight: 20,
+    backgroundColor: '#FAFAFA',
   },
   menuOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center', alignItems: 'center',
+    flex: 1,
+backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+alignItems: 'center',
   },
   actionMenuContainer: {
-    backgroundColor: '#FFF', borderRadius: 12, overflow: 'hidden', minWidth: 160,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 8, elevation: 8,
+    backgroundColor: '#FFF',
+borderRadius: 14,
+overflow: 'hidden',
+minWidth: 200,
+    shadowColor: '#000',
+shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+shadowRadius: 12,
+elevation: 10,
   },
   menuOption: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 14, gap: 12,
-    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  deleteOption: { borderBottomWidth: 0 },
-  menuOptionText: { fontSize: 15, fontWeight: '500', color: '#007AFF' },
-  deleteOptionText: { color: '#FF3B30' },
+    flexDirection: 'row',
+alignItems: 'center',
+    paddingHorizontal: 18,
+paddingVertical: 15,
+gap: 12,
+    },
+  menuDivider: {
+    height: 1,
+    backgroundColor: '#F0F0F0',
+  marginHorizontal: 16,
+},
+  menuOptionText: {
+fontSize: 14,
+fontWeight: '500',
+color: '#111',
+    letterSpacing: 0.1,
+},
+  deleteOptionText: { color: '#333' },
   newConversationContent: {
-    backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    maxHeight: '90%', flex: 1,
+    backgroundColor: '#FFF',
+borderTopLeftRadius: 20,
+borderTopRightRadius: 20,
+    maxHeight: '90%',
+    flex: 1,
   },
-  newConversationHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: '#E8E8E8',
+  newConversationBody: {
+flex: 1,
+paddingHorizontal: 16,
+    paddingTop: 8,
   },
-  newConversationBody: { flex: 1, paddingHorizontal: 16, paddingVertical: 16 },
-  sectionTitle: {
-    fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 12, marginTop: 16,
-  },
-  friendsGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 20 },
+  friendsGrid: {
+flexDirection: 'row',
+flexWrap: 'wrap',
+marginBottom: 8,
+    marginTop: 4,
+},
   friendCard: {
-    width: '33.33%', alignItems: 'center', marginBottom: 16, paddingHorizontal: 4,
+    width: '33.33%',
+alignItems: 'center',
+marginBottom: 18,
+paddingHorizontal: 4,
   },
-  friendAvatar: { width: 60, height: 60, borderRadius: 30, marginBottom: 8 },
+  friendAvatar: {
+width: 58,
+height: 58,
+borderRadius: 29,
+marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+},
   friendAvatarPlaceholder: {
-    width: 60, height: 60, borderRadius: 30,
-    backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 8,
+    width: 58,
+height: 58,
+borderRadius: 29,
+    backgroundColor: '#EBEBEB',
+justifyContent: 'center',
+alignItems: 'center',
+marginBottom: 8,
+borderWidth: 1,
+    borderColor: '#DCDCDC',
   },
-  friendName: { fontSize: 12, fontWeight: '500', color: '#000', textAlign: 'center' },
-  recipientInputSection: { marginBottom: 20 },
+  friendName: {
+fontSize: 12,
+fontWeight: '500',
+color: '#333',
+textAlign: 'center',
+    lineHeight: 15,
+},
+  recipientInputSection: { marginBottom: 4 },
   recipientIdInput: {
-    borderWidth: 1, borderColor: '#E8E8E8', borderRadius: 8,
-    paddingHorizontal: 12, paddingVertical: 12,
-    fontSize: 14, color: '#000', marginBottom: 12,
+    borderWidth: 1,
+borderColor: '#E0E0E0',
+borderRadius: 10,
+    paddingHorizontal: 14,
+paddingVertical: 13,
+    fontSize: 14,
+color: '#111',
+marginBottom: 10,
+    backgroundColor: '#FAFAFA',
   },
   startButton: {
-    backgroundColor: '#007AFF', borderRadius: 8, paddingVertical: 12, alignItems: 'center',
+    backgroundColor: '#111',
+borderRadius: 10,
+paddingVertical: 14,
+alignItems: 'center',
   },
-  startButtonDisabled: { backgroundColor: '#CCC' },
-  startButtonText: { color: '#FFF', fontSize: 14, fontWeight: '600' },
-  qrSection: { marginBottom: 40 },
+  startButtonDisabled: { backgroundColor: '#DCDCDC' },
+  startButtonText: {
+color: '#FFF',
+fontSize: 14,
+fontWeight: '600',
+    letterSpacing: 0.3,
+},
   qrButton: {
-    backgroundColor: '#F0F0F0', borderRadius: 12, paddingVertical: 24,
-    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F5F5F5',
+borderRadius: 12,
+paddingVertical: 22,
+    alignItems: 'center',
+justifyContent: 'center',
+borderWidth: 1,
+    borderColor: '#E8E8E8',
+    marginTop: 8,
   },
-  qrButtonText: { fontSize: 14, fontWeight: '600', color: '#007AFF', marginTop: 8 },
+  qrButtonText: {
+fontSize: 13,
+fontWeight: '600',
+color: '#333',
+marginTop: 8,
+    letterSpacing: 0.3,
+},
 })

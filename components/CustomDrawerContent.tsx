@@ -9,6 +9,7 @@ import {
   ScrollView,
   Clipboard,
   Image,
+  Animated,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { getCurrentUser, signOut, AuthUser } from '../lib/auth'
@@ -28,13 +29,13 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
   const [loading, setLoading] = useState(true)
   const [contacts, setContacts] = useState<Contact[]>([])
   const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [expandFriends, setExpandFriends] = useState(true)
   const navigation = useNavigation<any>()
 
   useEffect(() => {
     loadUser()
   }, [])
 
-  // Reload contacts and profile when drawer is focused
   useFocusEffect(
     React.useCallback(() => {
       if (user) {
@@ -88,16 +89,16 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
   }
 
   const handleLogout = async () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel' },
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Logout',
+        text: 'Sign Out',
         onPress: async () => {
           try {
             onClose()
             await signOut()
           } catch (err) {
-            Alert.alert('Error', 'Failed to logout')
+            Alert.alert('Error', 'Failed to sign out')
           }
         },
         style: 'destructive',
@@ -112,149 +113,216 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
 
   return (
     <View style={styles.container}>
-      {/* Header with Account Info */}
+
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.avatarContainer}>
-          {profile?.avatarUrl ? (
-            <Image
-              source={{ uri: profile.avatarUrl }}
-              style={styles.avatar}
-            />
-          ) : (
-            <View style={[styles.avatar, styles.avatarPlaceholder]}>
-              <Ionicons name="person" size={36} color="#fff" />
-            </View>
-          )}
-          
+        {/* Top accent line */}
+        <View style={styles.accentLine} />
+
+        {/* App title */}
+        <View style={styles.appTitleRow}>
+          <Ionicons name="musical-notes" size={14} color="#999" />
+          <Text style={styles.appTitle}>WORSHIP TEAM</Text>
+        </View>
+
+        {/* Avatar & User Info */}
+        <View style={styles.avatarRow}>
+          <View style={styles.avatarWrapper}>
+            {profile?.avatarUrl ? (
+              <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Ionicons name="person" size={28} color="#000" />
+              </View>
+            )}
+          </View>
+
           <View style={styles.userInfo}>
             <Text style={styles.userName}>
-              {profile?.nickname || user?.email?.split('@')[0] || 'User'}
+              {profile?.nickname || user?.email?.split('@')[0] || 'Member'}
             </Text>
-            <Text style={styles.userEmail}>{user?.email || 'Not logged in'}</Text>
+            <Text style={styles.userEmail}>{user?.email || 'Not signed in'}</Text>
             {profile?.instruments && (
-              <Text style={styles.userRoles}>{profile.instruments}</Text>
+              <View style={styles.instrumentBadge}>
+                <Text style={styles.instrumentText}>{profile.instruments}</Text>
+              </View>
             )}
           </View>
         </View>
 
+        {/* Bio */}
         {profile?.bio && (
           <View style={styles.bioContainer}>
-            <Text style={styles.bioText} numberOfLines={2}>{profile.bio}</Text>
+            <Text style={styles.bioText} numberOfLines={2}>
+              {profile.bio}
+            </Text>
           </View>
         )}
-        
-        {/* User ID Section */}
+
+        {/* Recipient ID */}
         {user?.id && (
-          <TouchableOpacity 
-            style={styles.userIdContainer}
+          <TouchableOpacity
+            style={styles.idContainer}
             onPress={() => copyToClipboard(generateShortId(user.id), 'Recipient ID')}
+            activeOpacity={0.7}
           >
-            <View style={styles.userIdLabelRow}>
-              <Text style={styles.userIdLabel}>Recipient ID</Text>
-              <Ionicons name="copy" size={14} color="rgba(255, 255, 255, 0.7)" />
+            <View style={styles.idRow}>
+              <Text style={styles.idLabel}>RECIPIENT ID</Text>
+              <View style={styles.copyBadge}>
+                <Ionicons name="copy-outline" size={11} color="#fff" />
+                <Text style={styles.copyText}>COPY</Text>
+              </View>
             </View>
-            <Text style={styles.userId}>{generateShortId(user.id)}</Text>
-            <Text style={styles.userIdHint}>Tap to copy</Text>
+            <Text style={styles.idValue}>{generateShortId(user.id)}</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Menu Items */}
-      <ScrollView style={styles.menuContainer} showsVerticalScrollIndicator={false}>
+      {/* Scrollable Menu */}
+      <ScrollView
+        style={styles.menuScroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.menuContent}
+      >
+        {/* Section: Account */}
+        <Text style={styles.sectionLabel}>ACCOUNT</Text>
+
         <TouchableOpacity
           style={styles.menuItem}
           onPress={() => handleNavigate('EditAccount')}
+          activeOpacity={0.6}
         >
-          <Ionicons name="person-circle" size={24} color="#007AFF" />
-          <Text style={styles.menuItemText}>Edit Profile</Text>
+          <View style={styles.menuIcon}>
+            <Ionicons name="person-outline" size={18} color="#000" />
+          </View>
+          <Text style={styles.menuLabel}>Edit Profile</Text>
+          <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.menuItem}
           onPress={() => handleNavigate('AddContacts')}
+          activeOpacity={0.6}
         >
-          <Ionicons name="person-add" size={24} color="#007AFF" />
-          <Text style={styles.menuItemText}>Add Contacts</Text>
+          <View style={styles.menuIcon}>
+            <Ionicons name="person-add-outline" size={18} color="#000" />
+          </View>
+          <Text style={styles.menuLabel}>Add Contacts</Text>
+          <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
 
-        <View style={styles.divider} />
+        {/* Section: Members */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionLabel}>MEMBERS</Text>
+          <TouchableOpacity
+            onPress={() => setExpandFriends(!expandFriends)}
+            style={styles.expandButton}
+          >
+            <Ionicons
+              name={expandFriends ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color="#888"
+            />
+          </TouchableOpacity>
+        </View>
 
-        {/* Friends List */}
-        <View style={styles.friendsSection}>
-          <View style={styles.friendsHeader}>
-            <Ionicons name="people" size={18} color="#007AFF" />
-            <Text style={styles.friendsTitle}>Friends ({contacts.length})</Text>
-          </View>
-
-          {contacts.length === 0 ? (
-            <Text style={styles.noFriendsText}>No friends yet</Text>
-          ) : (
-            <ScrollView 
-              style={styles.friendsList}
-              nestedScrollEnabled={true}
-              scrollEventThrottle={16}
-            >
-              {contacts.map((contact) => (
+        {expandFriends && (
+          <View style={styles.friendsContainer}>
+            {contacts.length === 0 ? (
+              <View style={styles.emptyFriends}>
+                <Ionicons name="people-outline" size={22} color="#ccc" />
+                <Text style={styles.emptyFriendsText}>No members yet</Text>
+              </View>
+            ) : (
+              contacts.map((contact, index) => (
                 <TouchableOpacity
                   key={contact.id}
-                  style={styles.friendItem}
+                  style={[
+                    styles.friendItem,
+                    index === contacts.length - 1 && { borderBottomWidth: 0 },
+                  ]}
                   onPress={() => {
                     onClose()
                     navigation.navigate('AddContacts')
                   }}
+                  activeOpacity={0.6}
                 >
                   <View style={styles.friendAvatar}>
-                    <Ionicons name="person" size={16} color="#007AFF" />
+                    <Text style={styles.friendAvatarText}>
+                      {(contact.contactName || 'F')[0].toUpperCase()}
+                    </Text>
                   </View>
                   <View style={styles.friendInfo}>
                     <Text style={styles.friendName}>
-                      {contact.contactName || 'Friend'}
+                      {contact.contactName || 'Member'}
                     </Text>
-                    <Text style={styles.friendId}>{generateShortId(contact.contactUserId)}</Text>
+                    <Text style={styles.friendId}>
+                      {generateShortId(contact.contactUserId)}
+                    </Text>
                   </View>
                   {contact.status === 'accepted' && (
-                    <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
+                    <View style={styles.statusDot} />
                   )}
                 </TouchableOpacity>
-              ))}
-            </ScrollView>
-          )}
+              ))
+            )}
+          </View>
+        )}
+
+        <View style={styles.countRow}>
+          <Text style={styles.countText}>{contacts.length} member{contacts.length !== 1 ? 's' : ''}</Text>
         </View>
 
-        <View style={styles.divider} />
+        {/* Section: Tools */}
+        <Text style={[styles.sectionLabel, { marginTop: 20 }]}>TOOLS</Text>
 
         <TouchableOpacity
           style={styles.menuItem}
           onPress={() => handleNavigate('Metronome')}
+          activeOpacity={0.6}
         >
-          <Ionicons name="timer" size={24} color="#007AFF" />
-          <Text style={styles.menuItemText}>Metronome</Text>
+          <View style={styles.menuIcon}>
+            <Ionicons name="timer-outline" size={18} color="#000" />
+          </View>
+          <Text style={styles.menuLabel}>Metronome</Text>
+          <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.menuItem]}
+          style={styles.menuItem}
           onPress={() => handleNavigate('ManualTranspose')}
+          activeOpacity={0.6}
         >
-          <Ionicons name="git-compare" size={24} color="#007AFF" />
-          <Text style={styles.menuItemText}>Transpose Chords</Text>
+          <View style={styles.menuIcon}>
+            <Ionicons name="git-compare-outline" size={18} color="#000" />
+          </View>
+          <Text style={styles.menuLabel}>Transpose Chords</Text>
+          <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.menuItem]}
+          style={[styles.menuItem, { borderBottomWidth: 0 }]}
           onPress={() => handleNavigate('AudioTools')}
+          activeOpacity={0.6}
         >
-          <Ionicons name="musical-note" size={24} color="#007AFF" />
-            <Text style={styles.menuItemText}>Audio Tools</Text>
+          <View style={styles.menuIcon}>
+            <Ionicons name="musical-note-outline" size={18} color="#000" />
+          </View>
+          <Text style={styles.menuLabel}>Audio Tools</Text>
+          <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
 
-        <View style={styles.divider} />
+        <View style={{ height: 24 }} />
       </ScrollView>
 
-      {/* Logout Button */}
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Ionicons name="log-out" size={20} color="#f44" />
-        <Text style={styles.logoutButtonText}>Logout</Text>
-      </TouchableOpacity>
+      {/* Footer: Sign Out */}
+      <View style={styles.footer}>
+        <View style={styles.footerDivider} />
+        <TouchableOpacity style={styles.signOutButton} onPress={handleLogout} activeOpacity={0.7}>
+          <Ionicons name="log-out-outline" size={17} color="#333" />
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   )
 }
@@ -263,223 +331,289 @@ const styles = StyleSheet.create({
   container: {
     width: '75%',
     height: '100%',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff',
+    borderRightWidth: 1,
+    borderRightColor: '#e8e8e8',
   },
+
+  // ── Header ──────────────────────────────────────────────
   header: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 16,
+    backgroundColor: '#0a0a0a',
+    paddingHorizontal: 20,
+    paddingTop: 52,
+    paddingBottom: 20,
   },
-  avatarContainer: {
+  accentLine: {
+    width: 28,
+    height: 2,
+    backgroundColor: '#fff',
+    marginBottom: 16,
+    opacity: 0.9,
+  },
+  appTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
+    gap: 6,
+    marginBottom: 20,
+  },
+  appTitle: {
+    fontSize: 10,
+    letterSpacing: 2.5,
+    color: '#888',
+    fontWeight: '600',
+  },
+  avatarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 14,
+  },
+  avatarWrapper: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 30,
+    padding: 2,
   },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
   },
   avatarPlaceholder: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   userInfo: {
     flex: 1,
   },
   userName: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
     color: '#fff',
+    letterSpacing: 0.2,
+    marginBottom: 3,
   },
   userEmail: {
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.8)',
-    marginTop: 2,
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 6,
   },
-  userInstruments: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.7)',
-    marginTop: 4,
-    fontStyle: 'italic',
+  instrumentBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
   },
-  userRoles: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.7)',
-    marginTop: 4,
-    fontStyle: 'italic',
+  instrumentText: {
+    fontSize: 10,
+    color: '#aaa',
+    letterSpacing: 0.5,
   },
   bioContainer: {
-    marginTop: 10,
-    paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.2)',
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    paddingTop: 12,
+    marginBottom: 14,
   },
   bioText: {
     fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.8)',
-    lineHeight: 16,
+    color: '#777',
+    lineHeight: 18,
+    fontStyle: 'italic',
   },
-  userIdContainer: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  idContainer: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
     borderRadius: 8,
-    padding: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 12,
   },
-  userIdLabelRow: {
+  idRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 6,
   },
-  userIdLabel: {
-    fontSize: 11,
+  idLabel: {
+    fontSize: 9,
+    letterSpacing: 2,
+    color: '#555',
     fontWeight: '600',
-    color: 'rgba(255, 255, 255, 0.9)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
-  userId: {
-    fontSize: 12,
+  copyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  copyText: {
+    fontSize: 9,
+    letterSpacing: 1,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  idValue: {
+    fontSize: 13,
     fontFamily: 'monospace',
     color: '#fff',
-    marginBottom: 4,
+    letterSpacing: 1,
   },
-  userIdHint: {
-    fontSize: 10,
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontStyle: 'italic',
-  },
-  menuContainer: {
+
+  // ── Menu ────────────────────────────────────────────────
+  menuScroll: {
     flex: 1,
-    paddingVertical: 16,
+  },
+  menuContent: {
+    paddingHorizontal: 20,
+    paddingTop: 24,
+  },
+  sectionLabel: {
+    fontSize: 9,
+    letterSpacing: 2.5,
+    color: '#bbb',
+    fontWeight: '700',
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  expandButton: {
+    padding: 4,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
     gap: 12,
   },
-  menuItemText: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#333',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#e5e5e5',
-    marginVertical: 8,
-    marginHorizontal: 16,
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 24,
-    paddingVertical: 12,
+  menuIcon: {
+    width: 32,
+    height: 32,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f44',
-  },
-  logoutButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#f44',
-  },
-  friendsSection: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  friendsHeader: {
-    flexDirection: 'row',
+    backgroundColor: '#f5f5f5',
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  menuLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1a1a1a',
+    letterSpacing: 0.1,
+  },
+
+  // ── Friends ─────────────────────────────────────────────
+  friendsContainer: {
+    backgroundColor: '#fafafa',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#f0f0f0',
+    overflow: 'hidden',
+  },
+  emptyFriends: {
+    alignItems: 'center',
+    paddingVertical: 20,
     gap: 8,
-    marginBottom: 8,
   },
-  friendsTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#007AFF',
-    textTransform: 'uppercase',
-  },
-  friendsList: {
-    maxHeight: 200,
-  },
-  noFriendsText: {
-    fontSize: 13,
-    color: '#999',
+  emptyFriendsText: {
+    fontSize: 12,
+    color: '#bbb',
     fontStyle: 'italic',
-    paddingVertical: 8,
   },
   friendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    backgroundColor: '#fff',
-    marginBottom: 6,
-    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#efefef',
+    gap: 10,
   },
   friendAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#000',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  friendAvatarText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#fff',
   },
   friendInfo: {
     flex: 1,
   },
   friendName: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#333',
+    color: '#1a1a1a',
   },
   friendId: {
-    fontSize: 11,
-    color: '#999',
-    marginTop: 2,
+    fontSize: 10,
+    color: '#bbb',
+    marginTop: 1,
+    fontFamily: 'monospace',
+    letterSpacing: 0.5,
   },
-  highlightedMenuItem: {
-    backgroundColor: '#E3F2FD',
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#1a1a1a',
+  },
+  countRow: {
+    marginTop: 8,
+    alignItems: 'flex-end',
+  },
+  countText: {
+    fontSize: 10,
+    color: '#ccc',
+    letterSpacing: 0.5,
+  },
+
+  // ── Footer ───────────────────────────────────────────────
+  footer: {
+    paddingHorizontal: 20,
+    paddingBottom: 32,
+  },
+  footerDivider: {
+    height: 1,
+    backgroundColor: '#f0f0f0',
+    marginBottom: 14,
+  },
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 13,
     borderRadius: 8,
-    marginHorizontal: 8,
-    paddingHorizontal: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#007AFF',
+    borderWidth: 1.5,
+    borderColor: '#e0e0e0',
+    backgroundColor: '#fafafa',
   },
-  keyPitchHighlight: {
-    backgroundColor: '#FFF3E0',
-    borderRadius: 8,
-    marginHorizontal: 8,
-    paddingHorizontal: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#FF9500',
-  },
-  vocalRemoverMenuItem: {
-    backgroundColor: '#FFE8E8',
-    borderRadius: 8,
-    marginHorizontal: 8,
-    paddingHorizontal: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#FF6B6B',
-  },
-  keyChangerContent: {
-    flex: 1,
-  },
-  menuItemSubtext: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 2,
+  signOutText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+    letterSpacing: 0.3,
   },
 })

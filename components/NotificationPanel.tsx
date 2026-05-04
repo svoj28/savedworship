@@ -15,7 +15,6 @@ import { AppNotification, MuteOption, getMuteLabel, isMuted } from '../lib/notif
 import { updateContact, getContactsByUserId, getContactByUserIdAndContactUserId, deleteContact, addContact } from '../db/queries'
 import { notifyContactAccepted, notifyContactRejected } from '../lib/notifications'
 
-
 const MUTE_OPTIONS: { label: string; value: MuteOption }[] = [
   { label: 'Turn on notifications', value: 'unmuted' },
   { label: 'Mute for 1 hour', value: '1h' },
@@ -26,22 +25,38 @@ const MUTE_OPTIONS: { label: string; value: MuteOption }[] = [
 
 function notifIcon(type: AppNotification['type']): keyof typeof Ionicons.glyphMap {
   switch (type) {
-    case 'new_upload': return 'musical-notes'
-    case 'contact_request': return 'person-add'
-    case 'contact_accepted': return 'checkmark-circle'
-    case 'contact_rejected': return 'close-circle'
-    default: return 'notifications'
+    case 'new_upload': return 'musical-notes-outline'
+    case 'contact_request': return 'person-add-outline'
+    case 'contact_accepted': return 'checkmark-circle-outline'
+    case 'contact_rejected': return 'close-circle-outline'
+    default: return 'notifications-outline'
   }
 }
 
-function notifColor(type: AppNotification['type']): string {
+// All icons use monochrome tones
+function notifIconColor(type: AppNotification['type']): string {
   switch (type) {
-    case 'new_upload': return '#007AFF'
-    case 'contact_request': return '#FF9500'
-    case 'contact_accepted': return '#34C759'
-    case 'contact_rejected': return '#FF3B30'
-    default: return '#8E8E93'
+    case 'new_upload': return '#1a1a1a'
+    case 'contact_request': return '#444'
+    case 'contact_accepted': return '#1a1a1a'
+    case 'contact_rejected': return '#888'
+    default: return '#aaa'
   }
+}
+
+function notifIconBg(type: AppNotification['type']): string {
+  switch (type) {
+    case 'new_upload': return '#f0f0f0'
+    case 'contact_request': return '#e8e8e8'
+    case 'contact_accepted': return '#1a1a1a'
+    case 'contact_rejected': return '#f5f5f5'
+    default: return '#f5f5f5'
+  }
+}
+
+function notifIconTint(type: AppNotification['type']): string {
+  // accepted gets white icon on dark bg
+  return type === 'contact_accepted' ? '#fff' : notifIconColor(type)
 }
 
 function timeAgo(ts: number): string {
@@ -65,61 +80,48 @@ export default function NotificationPanel({ visible, onClose }: Props) {
   const [showMuteMenu, setShowMuteMenu] = useState(false)
   const muted = isMuted(muteState)
 
-
   const handleContactResponse = async (notif: AppNotification, action: 'accept' | 'reject') => {
-  try {
-    const requesterId = notif.data?.fromUserId  // the person who sent the request
-    const currentUserId = notif.userId           // the person who received it (me)
+    try {
+      const requesterId = notif.data?.fromUserId
+      const currentUserId = notif.userId
 
-    if (!requesterId || !currentUserId) return
+      if (!requesterId || !currentUserId) return
 
-    // Find the incoming record on MY side (userId = me, contactUserId = requester)
-    const incomingContact = await getContactByUserIdAndContactUserId(currentUserId, requesterId)
-    if (!incomingContact) {
-      Alert.alert('Error', 'Contact request not found')
-      return
-    }
+      const incomingContact = await getContactByUserIdAndContactUserId(currentUserId, requesterId)
+      if (!incomingContact) {
+        Alert.alert('Error', 'Contact request not found')
+        return
+      }
 
-    // Find the outgoing record on THEIR side (userId = requester, contactUserId = me)
-    const outgoingContact = await getContactByUserIdAndContactUserId(requesterId, currentUserId)
+      const outgoingContact = await getContactByUserIdAndContactUserId(requesterId, currentUserId)
 
-    if (action === 'accept') {
-      // Update MY side
-      await updateContact(incomingContact.id, { status: 'accepted', updatedAt: Date.now() })
-
-      // Update THEIR side — this is what makes it show on the sender's friends list
-      if (outgoingContact) {
-        await updateContact(outgoingContact.id, { status: 'accepted', updatedAt: Date.now() })
+      if (action === 'accept') {
+        await updateContact(incomingContact.id, { status: 'accepted', updatedAt: Date.now() })
+        if (outgoingContact) {
+          await updateContact(outgoingContact.id, { status: 'accepted', updatedAt: Date.now() })
+        } else {
+          await addContact({
+            userId: requesterId,
+            contactUserId: currentUserId,
+            status: 'accepted',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            synced: false,
+          })
+        }
+        await notifyContactAccepted(requesterId, 'Your contact request was accepted')
       } else {
-        // Outgoing record doesn't exist yet — create it so sender sees the friend
-        await addContact({
-          userId: requesterId,
-          contactUserId: currentUserId,
-          status: 'accepted',
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          synced: false,
-        })
+        await deleteContact(incomingContact.id)
+        if (outgoingContact) await deleteContact(outgoingContact.id)
+        await notifyContactRejected(requesterId, 'Your contact request was declined')
       }
 
-      await notifyContactAccepted(requesterId, 'Your contact request was accepted')
-
-    } else {
-      // Reject — delete both sides so it disappears everywhere
-      await deleteContact(incomingContact.id)
-      if (outgoingContact) {
-        await deleteContact(outgoingContact.id)
-      }
-      await notifyContactRejected(requesterId, 'Your contact request was declined')
+      await markRead(notif.id)
+    } catch (err) {
+      console.error('Contact response error:', err)
+      Alert.alert('Error', `Failed to ${action} contact request`)
     }
-
-    await markRead(notif.id)
-  } catch (err) {
-    console.error('Contact response error:', err)
-    Alert.alert('Error', `Failed to ${action} contact request`)
   }
-}
-
 
   const handleMuteOption = async (option: MuteOption) => {
     setShowMuteMenu(false)
@@ -127,11 +129,13 @@ export default function NotificationPanel({ visible, onClose }: Props) {
   }
 
   const handleClearAll = () => {
-    Alert.alert('Clear Notifications', 'Clear all notifications?', [
+    Alert.alert('Clear Notifications', 'Remove all notifications?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Clear All', style: 'destructive', onPress: clearAll },
     ])
   }
+
+  const unreadCount = notifications.filter(n => !n.read).length
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -139,39 +143,47 @@ export default function NotificationPanel({ visible, onClose }: Props) {
         <TouchableOpacity style={styles.backdrop} onPress={onClose} activeOpacity={1} />
 
         <View style={styles.panel}>
+          {/* Drag handle */}
+          <View style={styles.handle} />
+
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Notifications</Text>
+            <View style={styles.headerLeft}>
+              <Text style={styles.headerTitle}>Notifications</Text>
+              {unreadCount > 0 && (
+                <View style={styles.unreadCountBadge}>
+                  <Text style={styles.unreadCountText}>{unreadCount}</Text>
+                </View>
+              )}
+            </View>
+
             <View style={styles.headerActions}>
-              {/* Mute button */}
               <TouchableOpacity
-                style={[styles.headerBtn, muted && styles.headerBtnMuted]}
+                style={[styles.headerBtn, showMuteMenu && styles.headerBtnActive, muted && styles.headerBtnMuted]}
                 onPress={() => setShowMuteMenu(v => !v)}
+                activeOpacity={0.65}
               >
                 <Ionicons
-                  name={muted ? 'notifications-off' : 'notifications'}
-                  size={20}
-                  color={muted ? '#FF3B30' : '#007AFF'}
+                  name={muted ? 'notifications-off-outline' : 'notifications-outline'}
+                  size={18}
+                  color={muted ? '#888' : '#1a1a1a'}
                 />
               </TouchableOpacity>
 
-              {/* Mark all read */}
-              {notifications.some(n => !n.read) && (
-                <TouchableOpacity style={styles.headerBtn} onPress={markAllAsRead}>
-                  <Ionicons name="checkmark-done" size={20} color="#007AFF" />
+              {unreadCount > 0 && (
+                <TouchableOpacity style={styles.headerBtn} onPress={markAllAsRead} activeOpacity={0.65}>
+                  <Ionicons name="checkmark-done-outline" size={18} color="#1a1a1a" />
                 </TouchableOpacity>
               )}
 
-              {/* Clear all */}
               {notifications.length > 0 && (
-                <TouchableOpacity style={styles.headerBtn} onPress={handleClearAll}>
-                  <Ionicons name="trash-outline" size={20} color="#8E8E93" />
+                <TouchableOpacity style={styles.headerBtn} onPress={handleClearAll} activeOpacity={0.65}>
+                  <Ionicons name="trash-outline" size={18} color="#888" />
                 </TouchableOpacity>
               )}
 
-              {/* Close */}
-              <TouchableOpacity style={styles.headerBtn} onPress={onClose}>
-                <Ionicons name="close" size={22} color="#333" />
+              <TouchableOpacity style={[styles.headerBtn, styles.closeBtn]} onPress={onClose} activeOpacity={0.65}>
+                <Ionicons name="close" size={18} color="#1a1a1a" />
               </TouchableOpacity>
             </View>
           </View>
@@ -179,7 +191,7 @@ export default function NotificationPanel({ visible, onClose }: Props) {
           {/* Mute status bar */}
           {muted && (
             <View style={styles.muteBar}>
-              <Ionicons name="notifications-off" size={14} color="#FF3B30" />
+              <Ionicons name="notifications-off-outline" size={13} color="#888" />
               <Text style={styles.muteBarText}>{getMuteLabel(muteState)}</Text>
             </View>
           )}
@@ -187,14 +199,16 @@ export default function NotificationPanel({ visible, onClose }: Props) {
           {/* Mute dropdown */}
           {showMuteMenu && (
             <View style={styles.muteMenu}>
-              {MUTE_OPTIONS.map(opt => (
+              {MUTE_OPTIONS.map((opt, index) => (
                 <TouchableOpacity
                   key={opt.value}
                   style={[
                     styles.muteOption,
                     muteState.option === opt.value && styles.muteOptionActive,
+                    index === MUTE_OPTIONS.length - 1 && { borderBottomWidth: 0 },
                   ]}
                   onPress={() => handleMuteOption(opt.value)}
+                  activeOpacity={0.6}
                 >
                   <Text
                     style={[
@@ -205,66 +219,84 @@ export default function NotificationPanel({ visible, onClose }: Props) {
                     {opt.label}
                   </Text>
                   {muteState.option === opt.value && (
-                    <Ionicons name="checkmark" size={16} color="#007AFF" />
+                    <View style={styles.muteCheckDot} />
                   )}
                 </TouchableOpacity>
               ))}
             </View>
           )}
 
-          {/* Notification List */}
+          {/* Content */}
           {loading ? (
             <View style={styles.centered}>
-              <ActivityIndicator color="#007AFF" />
+              <ActivityIndicator color="#1a1a1a" size="small" />
             </View>
           ) : notifications.length === 0 ? (
             <View style={styles.centered}>
-              <Ionicons name="notifications-outline" size={52} color="#ccc" />
-              <Text style={styles.emptyText}>No notifications</Text>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="notifications-outline" size={32} color="#ccc" />
+              </View>
+              <Text style={styles.emptyTitle}>All clear</Text>
+              <Text style={styles.emptySubtext}>No notifications at this time</Text>
             </View>
           ) : (
             <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-              {notifications.map(notif => (
+              {notifications.map((notif, index) => (
                 <TouchableOpacity
-  key={notif.id}
-  style={[styles.notifCard, !notif.read && styles.notifCardUnread]}
-  onPress={() => markRead(notif.id)}
-  activeOpacity={0.7}
->
-  <View style={[styles.notifIcon, { backgroundColor: notifColor(notif.type) + '20' }]}>
-    <Ionicons name={notifIcon(notif.type)} size={20} color={notifColor(notif.type)} />
-  </View>
-  <View style={styles.notifBody}>
-    <View style={styles.notifTopRow}>
-      <Text style={styles.notifTitle} numberOfLines={1}>{notif.title}</Text>
-      <Text style={styles.notifTime}>{timeAgo(notif.createdAt)}</Text>
-    </View>
-    <Text style={styles.notifMessage} numberOfLines={2}>{notif.body}</Text>
+                  key={notif.id}
+                  style={[
+                    styles.notifCard,
+                    !notif.read && styles.notifCardUnread,
+                    index === 0 && { borderTopWidth: 0 },
+                  ]}
+                  onPress={() => markRead(notif.id)}
+                  activeOpacity={0.65}
+                >
+                  {/* Icon */}
+                  <View style={[styles.notifIconWrap, { backgroundColor: notifIconBg(notif.type) }]}>
+                    <Ionicons
+                      name={notifIcon(notif.type)}
+                      size={18}
+                      color={notifIconTint(notif.type)}
+                    />
+                  </View>
 
-    {/* Accept / Reject buttons — only for unread contact requests */}
-    {notif.type === 'contact_request' && !notif.read && notif.data?.fromUserId && (
-      <View style={styles.responseButtons}>
-        <TouchableOpacity
-          style={styles.acceptBtn}
-          onPress={() => handleContactResponse(notif, 'accept')}
-        >
-          <Ionicons name="checkmark" size={14} color="#fff" />
-          <Text style={styles.acceptBtnText}>Accept</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.rejectBtn}
-          onPress={() => handleContactResponse(notif, 'reject')}
-        >
-          <Ionicons name="close" size={14} color="#fff" />
-          <Text style={styles.rejectBtnText}>Decline</Text>
-        </TouchableOpacity>
-      </View>
-    )}
-  </View>
-  {!notif.read && <View style={styles.unreadDot} />}
-</TouchableOpacity>
+                  {/* Body */}
+                  <View style={styles.notifBody}>
+                    <View style={styles.notifTopRow}>
+                      <Text style={styles.notifTitle} numberOfLines={1}>{notif.title}</Text>
+                      <Text style={styles.notifTime}>{timeAgo(notif.createdAt)}</Text>
+                    </View>
+                    <Text style={styles.notifMessage} numberOfLines={2}>{notif.body}</Text>
+
+                    {/* Contact request actions */}
+                    {notif.type === 'contact_request' && !notif.read && notif.data?.fromUserId && (
+                      <View style={styles.responseButtons}>
+                        <TouchableOpacity
+                          style={styles.acceptBtn}
+                          onPress={() => handleContactResponse(notif, 'accept')}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="checkmark" size={13} color="#fff" />
+                          <Text style={styles.acceptBtnText}>Accept</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.declineBtn}
+                          onPress={() => handleContactResponse(notif, 'reject')}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="close" size={13} color="#555" />
+                          <Text style={styles.declineBtnText}>Decline</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Unread indicator */}
+                  {!notif.read && <View style={styles.unreadDot} />}
+                </TouchableOpacity>
               ))}
-              <View style={{ height: 24 }} />
+              <View style={{ height: 32 }} />
             </ScrollView>
           )}
         </View>
@@ -274,102 +306,124 @@ export default function NotificationPanel({ visible, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-    responseButtons: {
-  flexDirection: 'row',
-  gap: 8,
-  marginTop: 8,
-},
-acceptBtn: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 4,
-  backgroundColor: '#34C759',
-  paddingHorizontal: 12,
-  paddingVertical: 6,
-  borderRadius: 6,
-},
-acceptBtnText: {
-  color: '#fff',
-  fontSize: 12,
-  fontWeight: '600',
-},
-rejectBtn: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 4,
-  backgroundColor: '#FF3B30',
-  paddingHorizontal: 12,
-  paddingVertical: 6,
-  borderRadius: 6,
-},
-rejectBtnText: {
-  color: '#fff',
-  fontSize: 12,
-  fontWeight: '600',
-},
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.3)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
   },
   panel: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: '80%',
+    maxHeight: '82%',
     minHeight: 300,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 10,
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 12,
   },
+
+  // ── Handle ───────────────────────────────────────────────
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#ddd',
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+
+  // ── Header ───────────────────────────────────────────────
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 20,
-    paddingBottom: 12,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
-    color: '#111',
+    color: '#0a0a0a',
+    letterSpacing: 0.1,
+  },
+  unreadCountBadge: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  unreadCountText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   headerActions: {
     flexDirection: 'row',
     gap: 4,
+    alignItems: 'center',
   },
   headerBtn: {
-    padding: 8,
+    width: 32,
+    height: 32,
     borderRadius: 8,
+    backgroundColor: '#f5f5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#efefef',
+  },
+  headerBtnActive: {
+    backgroundColor: '#e8e8e8',
+    borderColor: '#ddd',
   },
   headerBtnMuted: {
-    backgroundColor: '#FFF0EE',
+    backgroundColor: '#f0f0f0',
   },
+  closeBtn: {
+    marginLeft: 2,
+  },
+
+  // ── Mute bar ─────────────────────────────────────────────
   muteBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#FFF0EE',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    backgroundColor: '#f7f7f7',
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: '#efefef',
   },
   muteBarText: {
-    color: '#FF3B30',
+    color: '#777',
     fontSize: 12,
     fontWeight: '500',
+    letterSpacing: 0.2,
   },
+
+  // ── Mute menu ────────────────────────────────────────────
   muteMenu: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
     backgroundColor: '#fafafa',
+    borderBottomWidth: 1,
+    borderBottomColor: '#efefef',
   },
   muteOption: {
     flexDirection: 'row',
@@ -377,85 +431,154 @@ rejectBtnText: {
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   muteOptionActive: {
-    backgroundColor: '#EAF2FF',
+    backgroundColor: '#f0f0f0',
   },
   muteOptionText: {
-    fontSize: 15,
-    color: '#333',
+    fontSize: 14,
+    color: '#444',
   },
   muteOptionTextActive: {
-    color: '#007AFF',
+    color: '#0a0a0a',
     fontWeight: '600',
   },
+  muteCheckDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#1a1a1a',
+  },
+
+  // ── Empty / Loading ──────────────────────────────────────
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 60,
-    gap: 12,
+    paddingVertical: 64,
+    gap: 10,
   },
-  emptyText: {
-    color: '#aaa',
+  emptyIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#f5f5f5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyTitle: {
     fontSize: 15,
+    fontWeight: '600',
+    color: '#555',
   },
+  emptySubtext: {
+    fontSize: 12,
+    color: '#bbb',
+  },
+
+  // ── Notification card ────────────────────────────────────
   list: {
     flex: 1,
   },
   notifCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f5f5f5',
+    borderTopWidth: 1,
+    borderTopColor: '#f5f5f5',
     gap: 12,
     position: 'relative',
   },
   notifCardUnread: {
-    backgroundColor: '#F0F6FF',
+    backgroundColor: '#fafafa',
   },
-  notifIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  notifIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   notifBody: {
     flex: 1,
-    gap: 3,
   },
   notifTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 3,
   },
   notifTitle: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#111',
+    color: '#0a0a0a',
     flex: 1,
+    letterSpacing: 0.1,
   },
   notifTime: {
-    fontSize: 11,
-    color: '#999',
+    fontSize: 10,
+    color: '#bbb',
     flexShrink: 0,
+    letterSpacing: 0.2,
   },
   notifMessage: {
-    fontSize: 13,
-    color: '#555',
-    lineHeight: 18,
+    fontSize: 12,
+    color: '#666',
+    lineHeight: 17,
   },
+
+  // ── Contact request buttons ──────────────────────────────
+  responseButtons: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  acceptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#1a1a1a',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 7,
+  },
+  acceptBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  declineBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  declineBtnText: {
+    color: '#555',
+    fontSize: 12,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+
+  // ── Unread dot ───────────────────────────────────────────
   unreadDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 4,
-    backgroundColor: '#007AFF',
-    marginTop: 6,
+    backgroundColor: '#1a1a1a',
+    marginTop: 5,
     flexShrink: 0,
   },
 })

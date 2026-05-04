@@ -14,15 +14,17 @@ export default function NotificationBell() {
     <>
       <TouchableOpacity
         onPress={() => setPanelVisible(true)}
-        style={styles.button}
+        style={[styles.button, muted && styles.buttonMuted]}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        activeOpacity={0.65}
       >
         <Ionicons
           name={muted ? 'notifications-off-outline' : 'notifications-outline'}
-          size={24}
-          color={muted ? '#8E8E93' : '#007AFF'}
+          size={20}
+          color={muted ? '#aaa' : '#1a1a1a'}
         />
-        {unreadCount > 0 && (
+
+        {unreadCount > 0 && !muted && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>
               {unreadCount > 99 ? '99+' : unreadCount}
@@ -41,21 +43,29 @@ export default function NotificationBell() {
 
 const styles = StyleSheet.create({
   button: {
-    marginRight: 16,
-    position: 'relative',
-    width: 32,
-    height: 32,
+    marginRight: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#f2f2f2',
+    borderWidth: 1,
+    borderColor: '#e8e8e8',
+    position: 'relative',
+  },
+  buttonMuted: {
+    backgroundColor: '#fafafa',
+    borderColor: '#efefef',
   },
   badge: {
     position: 'absolute',
-    top: -4,
-    right: -6,
-    backgroundColor: '#FF3B30',
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
+    top: -5,
+    right: -5,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 9,
+    minWidth: 17,
+    height: 17,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
@@ -64,7 +74,8 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
+    letterSpacing: 0.2,
   },
 })

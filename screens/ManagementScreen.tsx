@@ -9,6 +9,7 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
+StatusBar,
 } from 'react-native'
 import * as DocumentPicker from 'expo-document-picker'
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -33,7 +34,7 @@ import {
 } from '../db/queries'
 import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
 import { useRole } from '../lib/useRole'
-import { notifyNewUpload, notifyContactRequest, notifyContactAccepted } from '../lib/notifications'
+import { notifyNewUpload } from '../lib/notifications'
 
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
 
@@ -46,20 +47,42 @@ interface FormData {
   fileName?: string
 }
 
+interface SectionConfig {
+  key: Exclude<Section, null>
+  label: string
+  icon: any
+  countKey?: string
+  countLabel: string
+}
+
+const SECTIONS: SectionConfig[] = [
+  { key: 'lineup',        label: 'Lineup',         icon: 'list-outline',        countKey: 'lineups',       countLabel: 'items'   },
+  { key: 'conversation',  label: 'Conversation',   icon: 'chatbubbles-outline', countKey: undefined,       countLabel: 'messages'},
+  { key: 'files',         label: 'Files',          icon: 'folder-outline',      countKey: 'files',         countLabel: 'files'   },
+  { key: 'announcements', label: 'Announcements',  icon: 'megaphone-outline',   countKey: 'announcements', countLabel: 'items'   },
+  { key: 'versions',      label: 'Versions',       icon: 'play-circle-outline', countKey: 'versions',      countLabel: 'videos'  },
+]
+
+const SECTION_TITLES: Record<Exclude<Section, null>, string> = {
+  lineup:        'Lineup Posted',
+  conversation:  'Conversation',
+  files:         'File Dropper',
+  announcements: 'Announcements',
+  versions:      'Version Dropper',
+}
+
 export default function ManagementScreen() {
   const [activeSection, setActiveSection] = useState<Section>(null)
   const [userId, setUserId] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const { canManageContent } = useRole()
 
-  // Data states
-  const [lineups, setLineups] = useState<Lineup[]>([])
+    const [lineups, setLineups] = useState<Lineup[]>([])
   const [files, setFiles] = useState<FileDropper[]>([])
   const [announcements, setAnnouncements] = useState<ImportantAnnouncement[]>([])
   const [versions, setVersions] = useState<VersionDropper[]>([])
 
-  // Form states
-  const [showForm, setShowForm] = useState(false)
+    const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState<FormData>({})
   const [editingId, setEditingId] = useState<string | null>(null)
   const [pickingFile, setPickingFile] = useState(false)
@@ -95,11 +118,26 @@ export default function ManagementScreen() {
     }
   }
 
-  const handleAddNew = () => {
-    setEditingId(null)
-    setFormData({})
-    setShowForm(true)
+const getCount = (key?: string): number => {
+    if (!key) return 0
+    const map: Record<string, number> = {
+      lineups: lineups.length,
+      files: files.length,
+      announcements: announcements.length,
+      versions: versions.length,
+    }
+    return map[key] ?? 0
   }
+
+  const getItems = (): any[] => {
+    if (activeSection === 'lineup') return lineups
+    if (activeSection === 'files') return files
+    if (activeSection === 'announcements') return announcements
+    if (activeSection === 'versions') return versions
+    return []
+  }
+
+  const handleAddNew = () => {     setEditingId(null);     setFormData({});     setShowForm(true)   }
 
   const handleEdit = (item: any) => {
     setEditingId(item.id)
@@ -117,215 +155,178 @@ export default function ManagementScreen() {
   const handlePickFile = async () => {
     try {
       setPickingFile(true)
-      const result = await DocumentPicker.getDocumentAsync({
-        type: '*/*',
-      })
-
+      const result = await DocumentPicker.getDocumentAsync({         type: '*/*'       })
       if (!result.canceled && result.assets.length > 0) {
-        const selectedAsset = result.assets[0]
-        setFormData((prev) => ({
-          ...prev,
-          fileUrl: selectedAsset.uri,
-          fileName: selectedAsset.name,
-        }))
+        const asset = result.assets[0]
+        setFormData(prev => ({           ...prev,           fileUrl: asset.uri,           fileName: asset.name         }))
       }
     } catch (err) {
-      console.error('Error picking file:', err)
-      Alert.alert('Error', 'Failed to pick file')
+            Alert.alert('Error', 'Failed to pick file')
     } finally {
       setPickingFile(false)
     }
   }
 
   const handleSubmit = async () => {
-    if (!formData.title?.trim()) {
-      Alert.alert('Error', 'Please enter a title')
-      return
-    }
-
+    if (!formData.title?.trim()) {       Alert.alert('Error', 'Please enter a title');       return }
     try {
       const now = Date.now()
-
       if (activeSection === 'lineup') {
-        if (editingId) {
-          await updateLineup(editingId, {
-            title: formData.title,
-            description: formData.description,
-            updatedAt: now,
-          })
-        } else {
-          await createLineup({
-            title: formData.title,
-            description: formData.description,
-            userId,
-            createdAt: now,
-            updatedAt: now,
-            synced: false,
-          })
-          await notifyNewUpload(userId, formData.title)
-        }
+        if (editingId)           await updateLineup(editingId, {             title: formData.title,             description: formData.description,             updatedAt: now           })
+        else {           await createLineup({             title: formData.title,             description: formData.description,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
       } else if (activeSection === 'files') {
-        if (!formData.fileUrl?.trim()) {
-          Alert.alert('Error', 'Please enter a file URL')
-          return
-        }
-        if (editingId) {
-          await updateFileDropper(editingId, {
-            title: formData.title,
-            description: formData.description,
-            fileUrl: formData.fileUrl,
-            updatedAt: now,
-          })
-        } else {
-          await createFileDropper({
-            title: formData.title,
-            description: formData.description,
-            fileUrl: formData.fileUrl,
-            userId,
-            createdAt: now,
-            updatedAt: now,
-            synced: false,
-          })
-          await notifyNewUpload(userId, formData.title)
-        }
+        if (!formData.fileUrl?.trim()) {           Alert.alert('Error', 'Please enter a file URL');           return         }
+        if (editingId)           await updateFileDropper(editingId, {             title: formData.title,             description: formData.description,             fileUrl: formData.fileUrl,             updatedAt: now           })
+        else {           await createFileDropper({             title: formData.title,             description: formData.description,             fileUrl: formData.fileUrl,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
       } else if (activeSection === 'announcements') {
-        if (!formData.content?.trim()) {
-          Alert.alert('Error', 'Please enter announcement content')
-          return
-        }
-        if (editingId) {
-          await updateAnnouncement(editingId, {
-            title: formData.title,
-            content: formData.content,
-            updatedAt: now,
-          })
-        } else {
-          await createImportantAnnouncement({
-            title: formData.title,
-            content: formData.content,
-            userId,
-            createdAt: now,
-            updatedAt: now,
-            synced: false,
-          })
-          await notifyNewUpload(userId, formData.title)
-        }
+        if (!formData.content?.trim()) {           Alert.alert('Error', 'Please enter announcement content');           return         }
+        if (editingId)           await updateAnnouncement(editingId, {             title: formData.title,             content: formData.content,             updatedAt: now           })
+        else {           await createImportantAnnouncement({             title: formData.title,             content: formData.content,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
       } else if (activeSection === 'versions') {
-        if (!formData.youtubeUrl?.trim()) {
-          Alert.alert('Error', 'Please enter a YouTube URL')
-          return
-        }
-        if (editingId) {
-          await updateVersionDropper(editingId, {
-            title: formData.title,
-            description: formData.description,
-            youtubeUrl: formData.youtubeUrl,
-            updatedAt: now,
-          })
-        } else {
-          await createVersionDropper({
-            title: formData.title,
-            description: formData.description,
-            youtubeUrl: formData.youtubeUrl,
-            userId,
-            createdAt: now,
-            updatedAt: now,
-            synced: false,
-          })
-          await notifyNewUpload(userId, formData.title)
-        }
+        if (!formData.youtubeUrl?.trim()) {           Alert.alert('Error', 'Please enter a YouTube URL');           return         }
+        if (editingId)           await updateVersionDropper(editingId, {             title: formData.title,             description: formData.description,             youtubeUrl: formData.youtubeUrl,             updatedAt: now           })
+        else {           await createVersionDropper({             title: formData.title,             description: formData.description,             youtubeUrl: formData.youtubeUrl,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
       }
-
-      setShowForm(false)
-      setFormData({})
-      await loadData(userId)
-    } catch (err) {
-      console.error('Error submitting form:', err)
-      Alert.alert('Error', 'Failed to save item')
-    }
+      setShowForm(false);       setFormData({});       await loadData(userId)
+    } catch (err) {       Alert.alert('Error', 'Failed to save item')     }
   }
 
   const handleDelete = async (id: string) => {
-    Alert.alert('Delete', 'Are you sure you want to delete this item?', [
-      { text: 'Cancel', onPress: () => {} },
+    Alert.alert('Delete Item', 'This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Delete',
+        text: 'Delete', style: 'destructive',
         onPress: async () => {
           try {
             if (activeSection === 'lineup') await deleteLineup(id)
             else if (activeSection === 'files') await deleteFileDropper(id)
             else if (activeSection === 'announcements') await deleteAnnouncement(id)
             else if (activeSection === 'versions') await deleteVersionDropper(id)
-
             await loadData(userId)
-          } catch (err) {
-            console.error('Error deleting item:', err)
-            Alert.alert('Error', 'Failed to delete item')
-          }
+          } catch (err) {             Alert.alert('Error', 'Failed to delete item')           }
         },
       },
     ])
   }
 
-  const renderSectionContent = () => {
-    if (loading) {
+  // ─── DASHBOARD ───
+  if (!activeSection) {
       return (
-        <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#007AFF" />
+        <ScrollView style={styles.container} contentContainerStyle={styles.dashboardContent}>
+          <StatusBar barStyle="dark-content" backgroundColor="#FAFAFA" />
+
+        <View style={styles.dashHeader}>
+          <Text style={styles.dashEyebrow}>ADMIN</Text>
+          <Text style={styles.dashTitle}>Management</Text>
         </View>
-      )
-    }
+      
+        {loading ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color="#0A0A0A" />
+          </View>
+        ) : (
+          <View style={styles.sectionGrid}>
+            {SECTIONS.map((section) => {
+              const count = getCount(section.countKey)
+              return (
+                <TouchableOpacity
+                  key={section.key}
+                  style={styles.sectionCard}
+                  onPress={() => setActiveSection(section.key)}
+                  activeOpacity={0.72}
+                >
+                  <View style={styles.sectionCardIcon}>
+                    <Ionicons name={section.icon} size={20} color="#0A0A0A" />
+                  </View>
+                  <View style={styles.sectionCardMeta}>
+                    <Text style={styles.sectionCardLabel}>{section.label}</Text>
+                    <Text style={styles.sectionCardCount}>
+                      {section.countKey ? `${count} ${section.countLabel}` : section.countLabel}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color="#D0D0D0" />
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        )}
+      </ScrollView>
+    )
+  }
 
-    let items: any[] = []
-    let emptyMessage = ''
+  // ─── SECTION DETAIL ───
+  const items = getItems()
+  const sectionTitle = SECTION_TITLES[activeSection]
+  const sectionIcon = SECTIONS.find(s => s.key === activeSection)?.icon ?? 'cube-outline'
 
-    if (activeSection === 'lineup') {
-      items = lineups
-      emptyMessage = 'No lineups created yet'
-    } else if (activeSection === 'files') {
-      items = files
-      emptyMessage = 'No files added yet'
-    } else if (activeSection === 'announcements') {
-      items = announcements
-      emptyMessage = 'No announcements created yet'
-    } else if (activeSection === 'versions') {
-      items = versions
-      emptyMessage = 'No versions added yet'
-    }
-
-    if (items.length === 0) {
       return (
-        <View style={styles.centerContent}>
-          <Text style={styles.emptyText}>{emptyMessage}</Text>
-          {canManageContent && (
-          <TouchableOpacity style={styles.addButton} onPress={handleAddNew}>
-            <Ionicons name="add-circle" size={40} color="#007AFF" />
-            <Text style={styles.addButtonText}>Add New</Text>
+<View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFF" />
+
+      <View style={styles.sectionHeader}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => setActiveSection(null)} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={16} color="#0A0A0A" />
+        </TouchableOpacity>
+        <View style={styles.sectionHeaderMeta}>
+          <Text style={styles.sectionHeaderEyebrow}>MANAGEMENT</Text>
+          <Text style={styles.sectionHeaderTitle}>{sectionTitle}</Text>
+        </View>
+        {canManageContent ? (
+          <TouchableOpacity style={styles.addBtn} onPress={handleAddNew} activeOpacity={0.8}>
+            <Ionicons name="add" size={18} color="#FAFAFA" />
           </TouchableOpacity>
-          )}
+        ) : <View style={{ width: 34 }} />}
+      </View>
+
+      {loading ? (
+        <View style={styles.centerContent}>
+          <ActivityIndicator size="large" color="#0A0A0A" />
+                    </View>
+      ) : items.length === 0 ? (
+        <View style={styles.centerContent}>
+          <View style={styles.emptyIconWrap}>
+            <Ionicons name={sectionIcon} size={28} color="#B0B0B0" />
+          </View>
+          <Text style={styles.emptyTitle}>Nothing here yet</Text>
+          <Text style={styles.emptySubtitle}>
+            {canManageContent ? 'Tap + to add your first item' : 'No items have been added'}
+          </Text>
         </View>
-      )
-    }
+      ) : (
+        <ScrollView contentContainerStyle={styles.itemsContent} showsVerticalScrollIndicator={false}>
+          <Text style={styles.itemsSectionLabel}>
+            {items.length} {items.length === 1 ? 'ITEM' : 'ITEMS'}
+          </Text>
 
-    return (
-      <View style={styles.itemsContainer}>
-        {items.map((item) => (
+          {items.map((item, idx) => (
           <View key={item.id} style={styles.itemCard}>
-            <View style={styles.itemContent}>
+            <View style={styles.itemIndexWrap}>
+                <Text style={styles.itemIndex}>{idx + 1}</Text>
+              </View>
+              <View style={styles.itemBody}>
               <Text style={styles.itemTitle}>{item.title}</Text>
-              {item.description && <Text style={styles.itemDescription}>{item.description}</Text>}
-              {item.content && <Text style={styles.itemDescription}>{item.content}</Text>}
-              {item.youtubeUrl && <Text style={styles.itemUrl}>{item.youtubeUrl}</Text>}
-              {item.fileUrl && <Text style={styles.itemUrl}>{item.fileUrl}</Text>}
+              {item.description ? <Text style={styles.itemMeta} numberOfLines={2}>{item.description}</Text> : null}
+              {item.content ? <Text style={styles.itemMeta} numberOfLines={2}>{item.content}</Text> : null}
+              {item.youtubeUrl ? (
+                  <View style={styles.itemUrlRow}>
+                    <Ionicons name="logo-youtube" size={11} color="#ADADAD" />
+<Text style={styles.itemUrl} numberOfLines={1}>{item.youtubeUrl}</Text>
             </View>
-
+) : null}
+                {item.fileUrl ? (
+                  <View style={styles.itemUrlRow}>
+                    <Ionicons name="attach-outline" size={11} color="#ADADAD" />
+                    <Text style={styles.itemUrl} numberOfLines={1}>{item.fileUrl}</Text>
+                  </View>
+                ) : null}
+              </View>
             {canManageContent && (
             <View style={styles.itemActions}>
-              <TouchableOpacity onPress={() => handleEdit(item)} style={styles.actionButton}>
-                <Ionicons name="pencil" size={20} color="#007AFF" />
+              <TouchableOpacity style={styles.itemActionBtn} onPress={() => handleEdit(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                <Ionicons name="pencil-outline" size={15} color="#0A0A0A" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.actionButton}>
-                <Ionicons name="trash" size={20} color="#FF3B30" />
+              <TouchableOpacity style={[styles.itemActionBtn, styles.itemActionBtnDestructive]} onPress={() => handleDelete(item.id)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                <Ionicons name="trash-outline" size={15} color="#C0C0C0" />
               </TouchableOpacity>
             </View>
             )}
@@ -333,445 +334,257 @@ export default function ManagementScreen() {
         ))}
 
          {canManageContent && (
-        <TouchableOpacity style={styles.addMoreButton} onPress={handleAddNew}>
-          <Ionicons name="add-circle" size={30} color="#007AFF" />
+        <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddNew} activeOpacity={0.7}>
+          <Ionicons name="add" size={17} color="#0A0A0A" />
           <Text style={styles.addMoreText}>Add Another</Text>
         </TouchableOpacity>
         )}
-      </View>
-    )
-  }
+      <View style={{ height: 40 }} />
+        </ScrollView>
+    )  }
 
-  const renderForm = () => {
-    return (
+  {/* ─── FORM MODAL ─── */}
       <Modal visible={showForm} transparent animationType="slide">
-        <View style={styles.formContainer}>
-          <View style={styles.formContent}>
-            <View style={styles.formHeader}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHead}>
               <TouchableOpacity onPress={() => setShowForm(false)}>
-                <Ionicons name="close" size={28} color="#007AFF" />
+                <Text style={styles.modalCancel}>Cancel</Text>
               </TouchableOpacity>
-              <Text style={styles.formTitle}>
-                {editingId ? 'Edit Item' : `Add New ${activeSection}`}
+              <Text style={styles.modalTitle}>
+                {editingId ? 'Edit Item' : `Add ${sectionTitle}`}
               </Text>
-              <TouchableOpacity onPress={handleSubmit}>
-                <Ionicons name="checkmark" size={28} color="#34C759" />
+              <TouchableOpacity onPress={handleSubmit} style={styles.modalSaveBtn}>
+                <Text style={styles.modalSave}>Save</Text>
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.formScroll}>
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+<Text style={styles.fieldLabel}>TITLE</Text>
               <TextInput
-                style={styles.input}
-                placeholder="Title"
+                style={styles.textInput}
+                placeholder="Enter title…"
+                placeholderTextColor="#C4C4C4"
                 value={formData.title || ''}
                 onChangeText={(text) => setFormData({ ...formData, title: text })}
-                placeholderTextColor="#999"
-              />
+                              />
 
               {activeSection === 'announcements' && (
+<>
+                  <Text style={[styles.fieldLabel, { marginTop: 20 }]}>CONTENT</Text>
                 <TextInput
-                  style={[styles.input, styles.textArea]}
-                  placeholder="Announcement Content"
+                  style={[styles.textInput, styles.textArea]}
+                  placeholder="Write your announcement…"
+                    placeholderTextColor="#C4C4C4"
                   value={formData.content || ''}
                   onChangeText={(text) => setFormData({ ...formData, content: text })}
-                  multiline
-                  numberOfLines={5}
-                  placeholderTextColor="#999"
+                  multiline                   numberOfLines={5} textAlignVertical="top"
                 />
+</>
               )}
 
               {activeSection === 'files' && (
                 <>
-                  <View style={styles.filePickerContainer}>
-                    <TouchableOpacity
-                      style={styles.filePickerButton}
-                      onPress={handlePickFile}
-                      disabled={pickingFile}
-                    >
-                      <Ionicons name="folder-open" size={20} color="#fff" />
-                      <Text style={styles.filePickerButtonText}>
-                        {pickingFile ? 'Picking...' : 'Pick File from Device'}
-                      </Text>
+                  <Text style={[styles.fieldLabel, { marginTop: 20 }]}>FILE</Text>
+                    <TouchableOpacity                       style={styles.filePickerBtn}                       onPress={handlePickFile}                       disabled={pickingFile} activeOpacity={0.8}>
+                    {pickingFile
+                      ? <ActivityIndicator size="small" color="#FAFAFA" />
+                      :                       <Ionicons name="folder-open-outline" size={16} color="#FAFAFA" />
+}
+                      <Text style={styles.filePickerBtnText}>                        {pickingFile ? 'Picking file…' : 'Pick from Device'}                      </Text>
                     </TouchableOpacity>
-                  </View>
-
-                  {formData.fileName && (
-                    <View style={styles.selectedFileInfo}>
-                      <Ionicons name="document" size={18} color="#007AFF" />
-                      <View style={styles.fileNameContainer}>
+                  
+                  {formData.fileName ? (
+                    <View style={styles.selectedFile}>
+                      <Ionicons name="document-outline" size={16} color="#555" />
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.selectedFileName}>{formData.fileName}</Text>
-                        {formData.fileUrl && (
-                          <Text style={styles.selectedFileUrl} numberOfLines={1}>
-                            {formData.fileUrl}
-                          </Text>
-                        )}
+                        {formData.fileUrl &&                           <Text style={styles.selectedFileUrl} numberOfLines={1}>                            {formData.fileUrl}                          </Text>}
                       </View>
-                      <TouchableOpacity onPress={() => setFormData({ ...formData, fileUrl: '', fileName: '' })}>
-                        <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                      <TouchableOpacity onPress={() => setFormData({ ...formData, fileUrl: '', fileName: '' })} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close-circle" size={18} color="#C0C0C0" />
                       </TouchableOpacity>
                     </View>
-                  )}
+                  ) : null}
 
-                  <Text style={styles.orText}>Or enter manually:</Text>
-
+<Text style={styles.orDivider}>— or enter URL manually —</Text>
                   <TextInput
-                    style={styles.input}
-                    placeholder="File URL (if not using picker)"
+                    style={styles.textInput}
+                    placeholder="https://…"
+                    placeholderTextColor="#C4C4C4"
                     value={formData.fileUrl || ''}
                     onChangeText={(text) => setFormData({ ...formData, fileUrl: text })}
-                    placeholderTextColor="#999"
+                    autoCapitalize="none" keyboardType="url"
                   />
                 </>
               )}
 
               {activeSection === 'versions' && (
+<>
+                  <Text style={[styles.fieldLabel, { marginTop: 20 }]}>YOUTUBE URL</Text>
                 <TextInput
-                  style={styles.input}
-                  placeholder="YouTube URL"
+                  style={styles.textInput}
+                  placeholder="https://youtube.com/…"
+                    placeholderTextColor="#C4C4C4"
                   value={formData.youtubeUrl || ''}
                   onChangeText={(text) => setFormData({ ...formData, youtubeUrl: text })}
-                  placeholderTextColor="#999"
+                  autoCapitalize="none" keyboardType="url"
                 />
+</>
               )}
 
               {(activeSection === 'lineup' || activeSection === 'files' || activeSection === 'versions') && (
+<>
+                  <Text style={[styles.fieldLabel, { marginTop: 20 }]}>DESCRIPTION</Text>
                 <TextInput
-                  style={[styles.input, styles.textArea]}
-                  placeholder="Description (optional)"
+                  style={[styles.textInput, styles.textArea]}
+                  placeholder="Optional description…"
+                    placeholderTextColor="#C4C4C4"
                   value={formData.description || ''}
                   onChangeText={(text) => setFormData({ ...formData, description: text })}
-                  multiline
-                  numberOfLines={4}
-                  placeholderTextColor="#999"
+                  multiline                   numberOfLines={4} textAlignVertical="top"
                 />
+</>
               )}
+<View style={{ height: 30 }} />
             </ScrollView>
           </View>
         </View>
       </Modal>
-    )
-  }
-
-  if (!activeSection) {
-    return (
-      <ScrollView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Management Panel</Text>
         </View>
-
-        <View style={styles.sectionGrid}>
-          <TouchableOpacity
-            style={styles.sectionCard}
-            onPress={() => setActiveSection('lineup')}
-          >
-            <Ionicons name="list" size={40} color="#007AFF" />
-            <Text style={styles.sectionTitle}>Lineup Posted</Text>
-            <Text style={styles.sectionCount}>{lineups.length} items</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.sectionCard}
-            onPress={() => setActiveSection('conversation')}
-          >
-            <Ionicons name="chatbubbles" size={40} color="#FF9500" />
-            <Text style={styles.sectionTitle}>Conversation</Text>
-            <Text style={styles.sectionCount}>Messages</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.sectionCard}
-            onPress={() => setActiveSection('files')}
-          >
-            <Ionicons name="folder" size={40} color="#5AC8FA" />
-            <Text style={styles.sectionTitle}>File Dropper</Text>
-            <Text style={styles.sectionCount}>{files.length} files</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.sectionCard}
-            onPress={() => setActiveSection('announcements')}
-          >
-            <Ionicons name="megaphone" size={40} color="#FF2D55" />
-            <Text style={styles.sectionTitle}>Announcements</Text>
-            <Text style={styles.sectionCount}>{announcements.length} items</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.sectionCard}
-            onPress={() => setActiveSection('versions')}
-          >
-            <Ionicons name="play-circle" size={40} color="#FF3B30" />
-            <Text style={styles.sectionTitle}>Version Dropper</Text>
-            <Text style={styles.sectionCount}>{versions.length} videos</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    )
-  }
-
-  return (
-    <View style={styles.container}>
-      <View style={styles.sectionHeader}>
-        <TouchableOpacity onPress={() => setActiveSection(null)}>
-          <Ionicons name="arrow-back" size={28} color="#007AFF" />
-        </TouchableOpacity>
-        <Text style={styles.sectionHeaderTitle}>
-          {activeSection === 'lineup' && 'Lineup Posted'}
-          {activeSection === 'conversation' && 'Conversation'}
-          {activeSection === 'files' && 'File Dropper'}
-          {activeSection === 'announcements' && 'Important Announcements'}
-          {activeSection === 'versions' && 'Version Dropper'}
-        </Text>
-        {canManageContent && (
-        <TouchableOpacity onPress={handleAddNew}>
-          <Ionicons name="add" size={28} color="#007AFF" />
-        </TouchableOpacity>
-        )}
-        {!canManageContent && <View style={{ width: 28 }} />}
-      </View>
-
-      {renderSectionContent()}
-      {renderForm()}
-    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  header: {
-    padding: 16,
-    backgroundColor: '#FFF',
+  container: {     flex: 1,     backgroundColor: '#FAFAFA' },
+
+  // Dashboard
+  dashboardContent: { paddingBottom: 60   },
+  dashHeader: {
+        backgroundColor: '#FFF',
+paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 18,
     borderBottomWidth: 1,
-    borderBottomColor: '#E8E8E8',
+    borderBottomColor: '#EBEBEB',
   },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  sectionGrid: {
-    padding: 12,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
+  dashEyebrow: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, marginBottom: 2 },
+  dashTitle: { fontSize: 28, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.8 },
+  loadingWrap: { paddingTop: 80, alignItems: 'center' },
+
+  // Section Grid — now a vertical list for consistency
+  sectionGrid: { paddingHorizontal: 16, paddingTop: 16, gap: 10 },
   sectionCard: {
-    width: '48%',
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  gap: 14,
+    backgroundColor: '#FFF',
+borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 8,
-    color: '#000',
-    textAlign: 'center',
-  },
-  sectionCount: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 4,
-  },
+  sectionCardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#F2F2F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    },
+  sectionCardMeta: { flex: 1, gap: 3 },
+  sectionCardLabel: { fontSize: 15, fontWeight: '700', color: '#0A0A0A', letterSpacing: -0.2 },
+  sectionCardCount: {     fontSize: 11,     color: '#ADADAD', fontWeight: '500'   },
+
+  // Section Header
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#FFF',
+        backgroundColor: '#FFF',
+paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#E8E8E8',
+    borderBottomColor: '#EBEBEB',
+    gap: 12,
   },
-  sectionHeaderTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000',
-    flex: 1,
-    textAlign: 'center',
-  },
-  centerContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#999',
-    marginBottom: 20,
-  },
-  addButton: {
-    alignItems: 'center',
-  },
-  addButtonText: {
-    fontSize: 14,
-    color: '#007AFF',
-    marginTop: 8,
-  },
-  itemsContainer: {
-    padding: 12,
-  },
+  backBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center' },
+  sectionHeaderMeta: { flex: 1, gap: 2 },
+  sectionHeaderEyebrow: { fontSize: 9, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2 },
+  sectionHeaderTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
+  addBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#0A0A0A', justifyContent: 'center', alignItems: 'center' },
+
+  // Center / Empty
+  centerContent: { flex: 1,     justifyContent: 'center',     alignItems: 'center', gap: 8, paddingBottom: 80 },
+  emptyIconWrap: { width: 60, height: 60, borderRadius: 18, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#1A1A1A', letterSpacing: -0.2 },
+  emptySubtitle: { fontSize: 13, color: '#B0B0B0' },
+
+  // Items
+  itemsContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 40 },
+  itemsSectionLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 1.8, marginBottom: 12 },
   itemCard: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  itemContent: {
-    flex: 1,
-    marginRight: 12,
-  },
-  itemTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 4,
-  },
-  itemDescription: {
-    fontSize: 13,
-    color: '#666',
-    marginTop: 2,
-  },
-  itemUrl: {
-    fontSize: 12,
-    color: '#007AFF',
-    marginTop: 2,
-  },
-  itemActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  actionButton: {
-    padding: 8,
-  },
-  addMoreButton: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#007AFF',
-    borderStyle: 'dashed',
-    marginTop: 8,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  addMoreText: {
-    fontSize: 14,
-    color: '#007AFF',
-    fontWeight: '600',
-  },
-  formContainer: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  formContent: {
-    backgroundColor: '#FFF',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: '90%',
-  },
-  formHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E8E8E8',
-  },
-  formTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
-  },
-  formScroll: {
-    padding: 16,
-  },
-  input: {
-    backgroundColor: '#F8F9FA',
+        flexDirection: 'row',
+    alignItems: 'flex-start',
+      backgroundColor: '#FFF',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E8E8E8',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-    marginBottom: 12,
-    color: '#000',
-  },
-  textArea: {
-    textAlignVertical: 'top',
-    paddingTop: 12,
-    minHeight: 100,
-  },
-  filePickerContainer: {
-    marginBottom: 12,
-  },
-  filePickerButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  filePickerButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  selectedFileInfo: {
-    backgroundColor: '#F0F8FF',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-  },
-  fileNameContainer: {
-    flex: 1,
-  },
-  selectedFileName: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 2,
-  },
-  selectedFileUrl: {
-    fontSize: 11,
-    color: '#666',
-  },
-  orText: {
-    fontSize: 12,
-    color: '#999',
+    borderColor: '#EBEBEB',
+        paddingHorizontal: 14,
+    paddingVertical: 14,
     marginBottom: 10,
-    textAlign: 'center',
-    fontStyle: 'italic',
+    gap: 12,
   },
+  itemIndexWrap: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', marginTop: 1, flexShrink: 0 },
+  itemIndex: { fontSize: 11, fontWeight: '800', color: '#ADADAD' },
+  itemBody: { flex: 1, gap: 4 },
+  itemTitle: { fontSize: 14, fontWeight: '700', color: '#0A0A0A', letterSpacing: -0.1 },
+  itemMeta: { fontSize: 12, color: '#ADADAD', lineHeight: 17 },
+  itemUrlRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  itemUrl: { fontSize: 11, color: '#ADADAD', flex: 1 },
+  itemActions: { flexDirection: 'row', gap: 6, marginTop: 2, flexShrink: 0 },
+  itemActionBtn: { width: 32, height: 32, borderRadius: 9, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center' },
+  itemActionBtnDestructive: { backgroundColor: '#F8F8F8' },
+  addMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E0E0E0',
+    borderStyle: 'dashed',
+    paddingVertical: 14,
+    marginTop: 4,
+  },
+  addMoreText: { fontSize: 13, fontWeight: '700', color: '#0A0A0A' },
+
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, maxHeight: '92%', paddingBottom: 36 },
+  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 12, marginBottom: 4 },
+  modalHead: {
+    flexDirection: 'row',
+justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  modalTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
+  modalCancel: { fontSize: 14, color: '#ADADAD', fontWeight: '500', minWidth: 54 },
+  modalSaveBtn: { backgroundColor: '#0A0A0A', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, minWidth: 54, alignItems: 'center' },
+  modalSave: { fontSize: 13, fontWeight: '700', color: '#FAFAFA' },
+  modalBody: { paddingHorizontal: 20, paddingTop: 20 },
+  fieldLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, marginBottom: 9, textTransform: 'uppercase' },
+  textInput: { backgroundColor: '#F7F7F7', borderRadius: 13, borderWidth: 1.5, borderColor: '#EBEBEB', paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: '#0A0A0A', fontWeight: '500' },
+  textArea: { minHeight: 100, textAlignVertical: 'top' },
+  filePickerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#0A0A0A', borderRadius: 13, paddingVertical: 14, marginBottom: 12 },
+  filePickerBtnText: { fontSize: 14, fontWeight: '700', color: '#FAFAFA' },
+  selectedFile: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 12, borderWidth: 1, borderColor: '#EBEBEB', padding: 12, marginBottom: 12 },
+  selectedFileName: { fontSize: 13, fontWeight: '600', color: '#0A0A0A' },
+  selectedFileUrl: { fontSize: 11, color: '#ADADAD', marginTop: 2 },
+  orDivider: { fontSize: 11, color: '#C8C8C8', textAlign: 'center', fontWeight: '500', letterSpacing: 0.5, marginVertical: 12 },
 })

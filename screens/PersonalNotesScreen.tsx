@@ -1,5 +1,5 @@
 // screens/PersonalNotesScreen.tsx
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import {
   View,
   ScrollView,
@@ -10,6 +10,8 @@ import {
   Alert,
   TextInput,
   FlatList,
+Modal,
+  StatusBar,
 } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import { ChordList, Artist } from '../db/models'
@@ -31,15 +33,14 @@ export default function PersonalNotesScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true)
   const [userId, setUserId] = useState<string | null>(null)
   const [searchText, setSearchText] = useState('')
+const [searchFocused, setSearchFocused] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newListTitle, setNewListTitle] = useState('')
   const [selectedArtist, setSelectedArtist] = useState<string | null>(null)
   const [artists, setArtists] = useState<Artist[]>([])
-  const [uploading, setUploading] = useState(false)
-  const [uploadedToCloud, setUploadedToCloud] = useState(false)
+  const [uploading, setUploading] = useState<string | null>(null) // track by id
 
-  // Load personal notes on screen focus
-  useFocusEffect(
+    useFocusEffect(
     React.useCallback(() => {
       loadPersonalNotes()
     }, [])
@@ -48,27 +49,27 @@ export default function PersonalNotesScreen({ navigation }: Props) {
 const handleUploadToCloud = async (noteId: string) => {
   Alert.alert(
     'Upload to Cloud',
-    'This note will be backed up to the cloud. Are you sure?',
+    'This note will be backed up to the cloud.',
     [
-      { text: 'Cancel' },
+      { text: 'Cancel', style: 'cancel' },
       {
         text: 'Upload',
         onPress: async () => {
           try {
-            setUploading(true)
+            setUploading(noteId)
             const note = await getChordListById(noteId)
             if (note) {
               await syncRowToSupabase('chord_lists', note)
-              await loadPersonalNotes()  // ← reload to reflect new synced state
+              await loadPersonalNotes()
               Alert.alert('Success', 'Note backed up to cloud!')
             }
           } catch (err) {
             Alert.alert('Error', 'Failed to upload note')
           } finally {
-            setUploading(false)
-          }
-        }
+            setUploading(null)
       }
+},
+        },
     ]
   )
 }
@@ -76,24 +77,18 @@ const handleUploadToCloud = async (noteId: string) => {
   const loadPersonalNotes = async () => {
     try {
       setLoading(true)
-
-      // Get current user
       const user = await getCurrentUser()
       if (!user) {
         Alert.alert('Error', 'Not authenticated')
         return
       }
-
       setUserId(user.id)
 
-      // Load all chord lists for this user that are marked as private
-      console.log('Loading chord lists for user:', user.id)
-      const listRows: any[] = await query(
-        'SELECT * FROM chord_lists WHERE user_id = ? AND is_private = 1 ORDER BY title',
+            const listRows: any[] = await query(
+        'SELECT * FROM chord_lists WHERE user_id = ? AND is_private = 1 ORDER BY updated_at DESC',
         [user.id]
       )
-      console.log('Loaded chord lists:', listRows.length)
-
+      
       const mapped: ChordList[] = (listRows || []).map(row => ({
         id: row.id,
         title: row.title,
@@ -108,24 +103,18 @@ const handleUploadToCloud = async (noteId: string) => {
       setChordLists(mapped)
       setFilteredLists(mapped)
 
-      // Load artists for dropdown
-      console.log('Loading artists for user:', user.id)
-      const artistRows: any[] = await query(
+            const artistRows: any[] = await query(
         'SELECT * FROM artists WHERE user_id = ? ORDER BY name',
         [user.id]
       )
-      console.log('Loaded artists:', artistRows.length)
-
-      const mappedArtists: Artist[] = (artistRows || []).map(row => ({
+      setArtists((artistRows || []).map(row => ({
         id: row.id,
         name: row.name,
         userId: row.user_id,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         synced: Boolean(row._synced),
-      }))
-
-      setArtists(mappedArtists)
+      })))
     } catch (err) {
       console.error('Error loading personal notes:', err)
       Alert.alert('Error', 'Failed to load personal notes')
@@ -136,19 +125,18 @@ const handleUploadToCloud = async (noteId: string) => {
 
   const handleSearch = (text: string) => {
     setSearchText(text)
-    const filtered = chordLists.filter(
-      (list) =>
+    setFilteredLists(
+chordLists.filter      (list =>
         list.title.toLowerCase().includes(text.toLowerCase())
+)
     )
-    setFilteredLists(filtered)
-  }
+      }
 
   const handleCreateList = async () => {
     if (!newListTitle.trim()) {
       Alert.alert('Error', 'Please enter a title')
       return
     }
-
     if (!userId) return
 
     try {
@@ -156,16 +144,14 @@ const handleUploadToCloud = async (noteId: string) => {
       const now = Date.now()
 
       if (!artistId || artistId === 'new') {
-        // Create a generic "Personal" artist
-        artistId = uuid.v4()
+                artistId = uuid.v4() as string
         await execute(
           'INSERT INTO artists (id, name, user_id, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?)',
           [artistId, 'Personal', userId, now, now, 0]
         )
       }
 
-      // Create new chord list
-      const listId = uuid.v4()
+            const listId = uuid.v4() as string
       await execute(
         'INSERT INTO chord_lists (id, title, artist_id, user_id, is_private, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         [listId, newListTitle, artistId, userId, 1, now, now, 0]
@@ -182,19 +168,18 @@ const handleUploadToCloud = async (noteId: string) => {
   }
 
   const handleDeleteList = async (listId: string) => {
-    Alert.alert('Delete', 'Delete this chord list?', [
-      { text: 'Cancel' },
+    Alert.alert('Delete Note', 'This will permanently delete the note and its songs.', [
+      { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
+style: 'destructive',
         onPress: async () => {
           try {
-            // Delete songs in this list first
-            await execute('DELETE FROM songs WHERE chord_list_id = ?', [listId])
-            // Delete the chord list
-            await execute('DELETE FROM chord_lists WHERE id = ?', [listId])
+                        await execute('DELETE FROM songs WHERE chord_list_id = ?', [listId])
+                        await execute('DELETE FROM chord_lists WHERE id = ?', [listId])
             loadPersonalNotes()
           } catch (err) {
-            Alert.alert('Error', 'Failed to delete chord list')
+            Alert.alert('Error', 'Failed to delete note')
           }
         },
       },
@@ -202,351 +187,531 @@ const handleUploadToCloud = async (noteId: string) => {
   }
 
   const handleSelectList = (list: ChordList) => {
-    // Navigate to NoteDetailScreen to edit the note
-    navigation.navigate('NoteDetail', { noteId: list.id })
+        navigation.navigate('NoteDetail', { noteId: list.id })
+  }
+
+  const formatDate = (ts: number) => {
+    const d = new Date(ts)
+    const now = new Date()
+    const diff = now.getTime() - d.getTime()
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+    if (days === 0) return 'Today'
+    if (days === 1) return 'Yesterday'
+    if (days < 7) return `${days}d ago`
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#007AFF" />
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#0A0A0A" />
+<Text style={styles.loadingText}>Loading notes…</Text>
       </View>
     )
   }
 
+  const syncedCount = chordLists.filter(l => l.synced).length
+  const localCount = chordLists.length - syncedCount
+
   return (
     <View style={styles.container}>
-      {/* Header */}
-      {/* <View style={styles.header}>
-        <Text style={styles.title}>Notes</Text>
-      </View> */}
+      <StatusBar barStyle="dark-content" backgroundColor="#FAFAFA" />
 
-      {/* Search */}
-      <View style={styles.searchContainer}>
+      {/* ─── HEADER ─── */}
+      <View style={styles.header}>
+        <View style={styles.headerTop}>
+          <View>
+            <Text style={styles.headerEyebrow}>PERSONAL</Text>
+            <Text style={styles.headerTitle}>Notes</Text>
+          </View>
+<View style={styles.headerStats}>
+        <View style={styles.statPill}>
+              <Ionicons name="document-text-outline" size={12} color="#888" />
+              <Text style={styles.statText}>{chordLists.length}</Text>
+            </View>
+            {localCount > 0 && (
+              <View style={[styles.statPill, styles.statPillLocal]}>
+                <Ionicons name="phone-portrait-outline" size={12} color="#888" />
+                <Text style={styles.statText}>{localCount} local</Text>
+      </View>
+            )}
+          </View>
+        </View>
+
+        {/* Search Bar */}
+      <View style={[styles.searchBar, searchFocused && styles.searchBarFocused]}>
+          <Ionicons name="search-outline" size={16} color="#C0C0C0" style={{ marginRight: 8 }} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search notes..."
-          placeholderTextColor="#999"
+          placeholder="Search notes…"
+          placeholderTextColor="#C0C0C0"
           value={searchText}
           onChangeText={handleSearch}
-        />
+        onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+          />
+          {searchText.length > 0 && (
+            <TouchableOpacity onPress={() => handleSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={16} color="#C0C0C0" />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
-      {/* Notes List */}
+      {/* ─── LIST ─── */}
       {filteredLists.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>📝</Text>
-          <Text style={styles.emptyText}>
-            {chordLists.length === 0 ? 'No notes yet' : 'No results'}
+        <View style={styles.emptyState}>
+          <View style={styles.emptyIconWrap}>
+            <Ionicons name="document-text-outline" size={28} color="#B0B0B0" />
+          </View>
+          <Text style={styles.emptyTitle}>
+            {chordLists.length === 0 ? 'No notes yet' : 'No results found'}
+</Text>
+          <Text style={styles.emptySubtitle}>
+            {chordLists.length === 0 ? 'Tap + to create your first note' : `No notes matching "${searchText}"`}
           </Text>
         </View>
       ) : (
         <FlatList
           data={filteredLists}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContainer}
-renderItem={({ item }) => (
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+renderItem={({ item, index }) => (
   <TouchableOpacity
     style={styles.noteCard}
     onPress={() => handleSelectList(item)}
-  >
-    <View style={styles.noteCardContent}>
-      <Text style={styles.noteTitle}>{item.title}</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-        <Text style={styles.noteDate}>
-          {new Date(item.createdAt).toLocaleDateString()}
-        </Text>
-        {/* Cloud sync indicator */}
-        <View style={[styles.syncBadge, item.synced ? styles.syncBadgeSynced : styles.syncBadgeLocal]}>
+  activeOpacity={0.72}
+            >
+              {/* Left: index number */}
+              <View style={styles.noteIndexWrap}>
+                <Text style={styles.noteIndex}>{index + 1}</Text>
+              </View>
+
+              {/* Center: title + meta */}
+              <View style={styles.noteContent}>
+      <Text style={styles.noteTitle} numberOfLines={1}>{item.title}</Text>
+      <View style={styles.noteMeta}>
+        <Text style={styles.noteDate}>{formatDate(item.updatedAt || item.createdAt)}        </Text>
+        <Text style={styles.noteDot}>·</Text>
+                  <View style={styles.syncChip}>
           <Ionicons
             name={item.synced ? 'cloud-done-outline' : 'phone-portrait-outline'}
-            size={11}
-            color={item.synced ? '#34C759' : '#FF9500'}
+            size={10}
+            color={item.synced ? '#888' : '#ADADAD'}
           />
-          <Text style={[styles.syncBadgeText, { color: item.synced ? '#34C759' : '#FF9500' }]}>
-            {item.synced ? 'Cloud' : 'Local only'}
+          <Text style={[styles.syncChipText, item.synced && styles.syncChipTextSynced]}>
+            {item.synced ? 'Backed up' : 'Local'}
           </Text>
         </View>
       </View>
     </View>
 
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      {/* Hide upload button if already synced */}
-      {!item.synced && (
+{/* Right: actions */}
+    <View style={styles.noteActions}>
+            {!item.synced && (
         <TouchableOpacity
-          style={styles.cloudButton}
+          style={styles.uploadBtn}
           onPress={(e) => {
             e.stopPropagation()
             handleUploadToCloud(item.id)
           }}
-          disabled={uploading}
+          disabled={uploading === item.id}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
-          {uploading
-            ? <ActivityIndicator size="small" color="#007AFF" />
-            : <Ionicons name="cloud-upload-outline" size={20} color="#007AFF" />
+          {uploading === item.id
+            ? <ActivityIndicator size="small" color="#0A0A0A" />
+            : <Ionicons name="cloud-upload-outline" size={17} color="#0A0A0A" />
           }
         </TouchableOpacity>
       )}
+
       <TouchableOpacity
-        style={styles.noteDeleteButton}
+        style={styles.deleteBtn}
         onPress={(e) => {
           e.stopPropagation()
           handleDeleteList(item.id)
         }}
+hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
       >
-        <Text style={styles.noteDeleteIcon}>✕</Text>
+        <Ionicons name="trash-outline" size={15} color="#C8C8C8" />
       </TouchableOpacity>
+
+                <Ionicons name="chevron-forward" size={14} color="#D8D8D8" />
     </View>
   </TouchableOpacity>
 )}
         />
       )}
 
-      {/* Floating Action Button */}
+      {/* ─── FAB ─── */}
       <TouchableOpacity
         style={styles.fab}
         onPress={() => setShowCreateModal(true)}
+activeOpacity={0.82}
       >
-        <Text style={styles.fabText}>+</Text>
+        <Ionicons name="add" size={24} color="#FAFAFA" />
       </TouchableOpacity>
 
-      {/* Create Modal */}
-      {showCreateModal && (
+      {/* ─── CREATE MODAL ─── */}
+<Modal visible=      {showCreateModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Add Note</Text>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Title"
-              placeholderTextColor="#999"
-              value={newListTitle}
-              onChangeText={setNewListTitle}
-            />
-
-            <View style={styles.modalButtons}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHead}>
               <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
+                                onPress={() => {
                   setShowCreateModal(false)
                   setNewListTitle('')
                 }}
               >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={styles.modalCancel}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.createButton]}
-                onPress={handleCreateList}
-              >
-                <Text style={styles.createButtonText}>Create</Text>
+              <Text style={styles.modalTitle}>New Note</Text>
+              <TouchableOpacity                 onPress={handleCreateList} style={styles.modalActionBtn}              >
+                <Text style={styles.modalAction}>Create</Text>
               </TouchableOpacity>
+</View>
 
-              
+            <View style={styles.modalBody}>
+              <Text style={styles.fieldLabel}>TITLE</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Note title…"
+                placeholderTextColor="#C4C4C4"
+                value={newListTitle}
+                onChangeText={setNewListTitle}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={handleCreateList}
+              />
+              <Text style={styles.fieldHint}>
+                A "Personal" artist will be created automatically to organize your notes.
+              </Text>
             </View>
           </View>
         </View>
-      )}
+      </Modal>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  syncBadge: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 3,
-  paddingHorizontal: 6,
-  paddingVertical: 2,
-  borderRadius: 10,
-  backgroundColor: '#f5f5f5',
-},
-syncBadgeSynced: {
-  backgroundColor: '#f0fff4',
-},
-syncBadgeLocal: {
-  backgroundColor: '#fff8f0',
-},
-syncBadgeText: {
-  fontSize: 10,
-  fontWeight: '600',
-},
-  cloudButton: {
-  padding: 8,
-  borderRadius: 6,
-  backgroundColor: '#f0f0f0',
-  alignItems: 'center',
-  justifyContent: 'center',
-},
-  container: {
+    container: {
     flex: 1,
-    backgroundColor: '#fafafa',
+    backgroundColor: '#FAFAFA',
   },
-  center: {
+  loadingContainer: {
     flex: 1,
+backgroundColor: '#FAFAFA',
     justifyContent: 'center',
     alignItems: 'center',
+  gap: 14,
   },
+  loadingText: {
+    fontSize: 12,
+    letterSpacing: 1.4,
+    color: '#ADADAD',
+    textTransform: 'uppercase',
+    fontWeight: '600',
+  },
+
+  // Header
   header: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 16,
+    backgroundColor: '#FFF',
+    paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 8,
+    paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#e5e5e5',
+    borderBottomColor: '#EBEBEB',
+    gap: 14,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#000',
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
   },
-  searchContainer: {
-    padding: 12,
-    backgroundColor: '#fff',
+  headerEyebrow: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#C0C0C0',
+    letterSpacing: 2,
+    marginBottom: 2,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#0A0A0A',
+    letterSpacing: -0.8,
+    lineHeight: 32,
+  },
+  headerStats: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingBottom: 4,
+  },
+  statPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F2F2F2',
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  statPillLocal: {
+    backgroundColor: '#F5F5F5',
+  },
+  statText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#888',
+  },
+
+  // Search
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  searchBarFocused: {
+    backgroundColor: '#FFF',
+    borderColor: '#E0E0E0',
   },
   searchInput: {
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: '#333',
-    backgroundColor: '#f9f9f9',
+    flex: 1,
+        fontSize: 14,
+    color: '#0A0A0A',
+    fontWeight: '500',
+padding: 0,
   },
-  emptyContainer: {
+
+  // Empty state
+  emptyState: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+gap: 8,
+    paddingBottom: 80,
   },
-  emptyIcon: {
-    fontSize: 60,
-    marginBottom: 16,
+  emptyIconWrap: {
+    width: 60,
+    height: 60,
+borderRadius: 18,
+    backgroundColor: '#F0F0F0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
   },
-  emptyText: {
+  emptyTitle: {
     fontSize: 16,
-    color: '#999',
+fontWeight: '700',
+    color: '#1A1A1A',
+    letterSpacing: -0.2,
   },
-  listContainer: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  noteCard: {
-    backgroundColor: '#fff',
-    marginHorizontal: 6,
-    marginVertical: 6,
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    borderLeftWidth: 4,
-    borderLeftColor: '#007AFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  noteCardContent: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  noteTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 4,
-  },
-  noteDate: {
+  emptySubtitle: {
     fontSize: 13,
-    color: '#999',
+    color: '#B0B0B0',
+letterSpacing: 0.1,
   },
-  noteDeleteButton: {
+
+  // List
+  listContent: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 100,
+  },
+
+  // Note Card
+  noteCard: {
+        flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginBottom: 8,
+    gap: 12,
+  },
+  noteIndexWrap: {
     width: 32,
     height: 32,
+    borderRadius: 9,
+    backgroundColor: '#F2F2F2',
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 16,
+    flexShrink: 0,
   },
-  noteDeleteIcon: {
-    fontSize: 20,
-    color: '#ccc',
+  noteIndex: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#ADADAD',
   },
+  noteContent: {
+    flex: 1,
+    gap: 5,
+  },
+  noteTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0A0A0A',
+    letterSpacing: -0.2,
+  },
+  noteMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  noteDate: {
+    fontSize: 11,
+    color: '#B8B8B8',
+    fontWeight: '500',
+  },
+  noteDot: {
+    fontSize: 11,
+    color: '#D8D8D8',
+  },
+  syncChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  syncChipText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#C4C4C4',
+  },
+  syncChipTextSynced: {
+    color: '#ADADAD',
+  },
+  noteActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  uploadBtn: {
+    width: 32,
+    height: 32,
+borderRadius: 9,
+    backgroundColor: '#F2F2F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+    },
+  deleteBtn: {
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  // FAB
   fab: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 28,
     right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#007AFF',
+    width: 54,
+    height: 54,
+    borderRadius: 17,
+    backgroundColor: '#0A0A0A',
     justifyContent: 'center',
     alignItems: 'center',
+elevation: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 8,
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
   },
-  fabText: {
-    fontSize: 32,
-    color: '#fff',
-    fontWeight: '300',
-    lineHeight: 36,
-  },
+  
+  // Modal
   modalOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
   },
-  modal: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 24,
-    width: '85%',
-    maxWidth: 400,
+  modalSheet: {
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingBottom: 36,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 20,
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E0E0E0',
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 4,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 20,
-    fontSize: 16,
-    color: '#333',
-  },
-  modalButtons: {
+  modalHead: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+      alignItems: 'center',
+  paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
   },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
+  modalTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0A0A0A',
+letterSpacing: -0.3,
+  },
+  modalCancel: {
+    fontSize: 14,
+  color: '#ADADAD',
+    fontWeight: '500',
+    minWidth: 54,
+  },
+  modalActionBtn: {
+    backgroundColor: '#0A0A0A',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    minWidth: 54,
     alignItems: 'center',
   },
-  cancelButton: {
-    backgroundColor: '#f0f0f0',
-    marginRight: 10,
+  modalAction: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FAFAFA',
   },
-  cancelButtonText: {
-    color: '#333',
-    fontWeight: 'bold',
-    fontSize: 14,
+  modalBody: {
+    paddingHorizontal: 20,
+    paddingTop: 22,
+    gap: 8,
   },
-  createButton: {
-    backgroundColor: '#007AFF',
+  fieldLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#C0C0C0',
+    letterSpacing: 2,
+    marginBottom: 1,
   },
-  createButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 14,
+  textInput: {
+    backgroundColor: '#F7F7F7',
+    borderRadius: 13,
+    borderWidth: 1.5,
+    borderColor: '#EBEBEB',
+    paddingHorizontal: 15,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: '#0A0A0A',
+    fontWeight: '500',
+    },
+  fieldHint: {
+    fontSize: 12,
+    color: '#C0C0C0',
+    lineHeight: 17,
+    marginTop: 4,
   },
 })

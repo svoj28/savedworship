@@ -14,6 +14,17 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { Picker } from '@react-native-picker/picker'
 
+// Monochrome palette - Formal & Professional
+const COLORS = {
+  black: '#1a1a1a',
+  darkGray: '#333333',
+  mediumGray: '#666666',
+  lightGray: '#cccccc',
+  veryLightGray: '#f0f0f0',
+  offWhite: '#fafafa',
+  white: '#ffffff',
+}
+
 interface Props {
   navigation: any
 }
@@ -318,7 +329,7 @@ export default function ManualTransposeScreen({ navigation }: Props) {
             placeholder={mode === 'chords' 
               ? "e.g., [C] [G] [Am] Amazing [G] grace" 
               : "e.g., [I] [V] [VIm] Some lyrics [IV]"}
-            placeholderTextColor="#999"
+            placeholderTextColor={COLORS.mediumGray}
             value={chords}
             onChangeText={setChords}
             multiline
@@ -327,7 +338,7 @@ export default function ManualTransposeScreen({ navigation }: Props) {
 
         {/* Button */}
         <TouchableOpacity style={styles.transposeButton} onPress={handleTranspose}>
-          <Ionicons name="swap-vertical" size={20} color="#fff" />
+          <Ionicons name="swap-vertical" size={20} color={COLORS.white} />
           <Text style={styles.transposeButtonText}>Transpose</Text>
         </TouchableOpacity>
 
@@ -339,7 +350,7 @@ export default function ManualTransposeScreen({ navigation }: Props) {
               <Text style={styles.resultText}>{result}</Text>
             </View>
             <TouchableOpacity style={styles.copyButton} onPress={handleCopy}>
-              <Ionicons name="copy" size={18} color="#007AFF" />
+              <Ionicons name="copy" size={18} color={COLORS.black} />
               <Text style={styles.copyButtonText}>Copy Result</Text>
             </TouchableOpacity>
           </View>
@@ -357,102 +368,132 @@ export default function ManualTransposeScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: COLORS.offWhite,
   },
   content: {
-    padding: 16,
+    padding: 18,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 24,
+    fontSize: 30,
+    fontWeight: '800',
+    color: COLORS.black,
+    marginBottom: 26,
+    letterSpacing: 0.3,
   },
   section: {
-    marginBottom: 24,
+    marginBottom: 26,
   },
   sectionTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 12,
+    fontWeight: '800',
+    color: COLORS.black,
+    marginBottom: 14,
+    letterSpacing: 0.2,
   },
   pickerContainer: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
+    backgroundColor: COLORS.white,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
     overflow: 'hidden',
+elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
   },
   picker: {
-    height: 50,
-    color: '#333',
+    height: 52,
+    color: COLORS.black,
   },
   input: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    padding: 12,
-    fontSize: 14,
-    minHeight: 100,
-    color: '#333',
+    backgroundColor: COLORS.white,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    padding: 14,
+    fontSize: 15,
+    minHeight: 110,
+    color: COLORS.black,
+    fontWeight: '500',
+elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
   },
   transposeButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: COLORS.black,
+    borderRadius: 8,
+    paddingVertical: 16,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 24,
+    gap: 10,
+    marginBottom: 26,
+    elevation: 3,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
   },
   transposeButtonText: {
-    color: '#fff',
+    color: COLORS.white,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
+letterSpacing: 0.3,
   },
   resultBox: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e5e5',
-    padding: 12,
-    minHeight: 100,
+    backgroundColor: COLORS.white,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    padding: 14,
+    minHeight: 110,
+elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
   },
   resultText: {
-    fontSize: 14,
-    color: '#333',
-    lineHeight: 22,
+    fontSize: 15,
+    color: COLORS.black,
+    lineHeight: 23,
+    fontWeight: '500',
   },
   copyButton: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 12,
-    paddingVertical: 10,
+    gap: 9,
+    marginTop: 14,
+    paddingVertical: 11,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#007AFF',
+    borderWidth: 1.5,
+    borderColor: COLORS.black,
+    backgroundColor: COLORS.offWhite,
   },
   copyButtonText: {
-    color: '#007AFF',
-    fontSize: 14,
-    fontWeight: '600',
+    color: COLORS.black,
+    fontSize: 15,
+    fontWeight: '700',
+letterSpacing: 0.2,
   },
   clearButton: {
-    backgroundColor: '#fee',
-    borderRadius: 12,
-    paddingVertical: 12,
+    backgroundColor: COLORS.veryLightGray,
+    borderRadius: 8,
+    paddingVertical: 13,
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 22,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
   },
   clearButtonText: {
-    color: '#f44',
+    color: COLORS.mediumGray,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
+letterSpacing: 0.2,
   },
   modeToggle: {
     flexDirection: 'row',
@@ -460,44 +501,56 @@ const styles = StyleSheet.create({
   },
   modeButton: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#e5e5e5',
-    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: COLORS.darkGray,
+    backgroundColor: COLORS.white,
     alignItems: 'center',
+elevation: 1,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
   },
   modeButtonActive: {
-    borderColor: '#007AFF',
-    backgroundColor: '#e3f2fd',
+    borderColor: COLORS.black,
+    backgroundColor: COLORS.black,
+    borderWidth: 2,
   },
   modeButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.mediumGray,
   },
   modeButtonTextActive: {
-    color: '#007AFF',
+    color: COLORS.white,
+    fontWeight: '800',
   },
   shortcutsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 9,
   },
   shortcutButton: {
     width: '23%',
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: 8,
-    backgroundColor: '#007AFF',
+    backgroundColor: COLORS.black,
     alignItems: 'center',
     justifyContent: 'center',
+elevation: 2,
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
   },
   shortcutButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
+    color: COLORS.white,
+    fontSize: 14,
+    fontWeight: '700',
   },
   modifierButton: {
-    backgroundColor: '#34C759',
+    backgroundColor: COLORS.darkGray,
   },
 })

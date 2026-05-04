@@ -192,6 +192,118 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
   try {
     for (const tableName of TABLES) {
       try {
+
+        // ─── MESSAGES: special handling ───────────────────────────────────
+        if (tableName === 'messages') {
+          const { data: ownMessages } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('user_id', userId)
+
+          const { data: overallMessages } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('receiver_id', 'overall-chat')
+
+          const combined = [
+            ...(ownMessages || []),
+            ...(overallMessages || []),
+          ]
+
+          const seen = new Set()
+          const data = combined.filter(row => {
+            if (seen.has(row.id)) return false
+            seen.add(row.id)
+            return true
+          })
+
+          if (data.length > 0) {
+            await transaction(async () => {
+              for (const serverRecord of data) {
+                try {
+                  const localRecord: any = await query(
+                    `SELECT * FROM messages WHERE id = ?`,
+                    [serverRecord.id]
+                  )
+                  const snakeCaseRecord = convertToSnakeCase(serverRecord)
+
+                  if (localRecord && localRecord.length > 0) {
+                    const localTime = localRecord[0].updated_at || 0
+                    const serverTime = serverRecord.updated_at || 0
+                    if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+                      const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
+                      await execute(
+                        `UPDATE messages SET ${updates}, _synced = 1 WHERE id = ?`,
+                        [...Object.values(snakeCaseRecord), serverRecord.id]
+                      )
+                    }
+                  } else {
+                    const columns = Object.keys(snakeCaseRecord).join(', ')
+                    const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+                    await execute(
+                      `INSERT INTO messages (${columns}, _synced) VALUES (${placeholders}, 1)`,
+                      Object.values(snakeCaseRecord)
+                    )
+                  }
+                } catch (err) {
+                  console.error(`Error upserting messages/${serverRecord.id}:`, err)
+                }
+              }
+            })
+          }
+          continue
+        }
+
+        // ─── USER_PROFILES: pull all profiles ────────────────────────────
+        if (tableName === 'user_profiles') {
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('*')
+
+  if (error) {
+    console.error(`Failed to fetch user_profiles:`, error)
+    continue
+  }
+
+  if (!data || data.length === 0) continue
+
+  await transaction(async () => {
+    for (const serverRecord of data) {
+      try {
+        // Check by user_id instead of id since that's the unique key
+        const localRecord: any = await query(
+          `SELECT * FROM user_profiles WHERE user_id = ?`,
+          [serverRecord.user_id]
+        )
+        const snakeCaseRecord = convertToSnakeCase(serverRecord)
+
+        if (localRecord && localRecord.length > 0) {
+          const localTime = localRecord[0].updated_at || 0
+          const serverTime = serverRecord.updated_at || 0
+          if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+            const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
+            await execute(
+              `UPDATE user_profiles SET ${updates}, _synced = 1 WHERE user_id = ?`,
+              [...Object.values(snakeCaseRecord), serverRecord.user_id]
+            )
+          }
+        } else {
+          const columns = Object.keys(snakeCaseRecord).join(', ')
+          const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+          await execute(
+            `INSERT OR REPLACE INTO user_profiles (${columns}, _synced) VALUES (${placeholders}, 1)`,
+            Object.values(snakeCaseRecord)
+          )
+        }
+      } catch (err) {
+        console.error(`Error upserting user_profiles/${serverRecord.id}:`, err)
+      }
+    }
+  })
+  continue
+}
+
+        // ─── ALL OTHER TABLES: normal handling ────────────────────────────
         let supabaseQuery = supabase
           .from(tableName)
           .select('*')
@@ -218,32 +330,24 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
                 `SELECT * FROM ${tableName} WHERE id = ?`,
                 [serverRecord.id]
               )
-
               const snakeCaseRecord = convertToSnakeCase(serverRecord)
 
               if (localRecord && localRecord.length > 0) {
                 const localTime = localRecord[0].updated_at || 0
                 const serverTime = serverRecord.updated_at || 0
-
                 if (conflictResolution === 'server-wins' || serverTime >= localTime) {
-                  const updates = Object.keys(snakeCaseRecord)
-                    .map((key) => `${key} = ?`)
-                    .join(', ')
-                  const values = Object.values(snakeCaseRecord)
-
+                  const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
                   await execute(
                     `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
-                    [...values, serverRecord.id]
+                    [...Object.values(snakeCaseRecord), serverRecord.id]
                   )
                 }
               } else {
                 const columns = Object.keys(snakeCaseRecord).join(', ')
                 const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
-                const values = Object.values(snakeCaseRecord)
-
                 await execute(
                   `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
-                  values
+                  Object.values(snakeCaseRecord)
                 )
               }
             } catch (err) {
@@ -251,6 +355,7 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
             }
           }
         })
+
       } catch (err) {
         console.error(`Error pulling ${tableName}:`, err)
       }

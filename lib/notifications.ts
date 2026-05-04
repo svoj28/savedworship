@@ -1,0 +1,265 @@
+import * as Notifications from 'expo-notifications'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Platform } from 'react-native'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export type NotificationType = 'new_upload' | 'contact_request' | 'contact_accepted' | 'contact_rejected'
+
+export interface AppNotification {
+  id: string
+  type: NotificationType
+  title: string
+  body: string
+  data?: Record<string, any>
+  createdAt: number
+  read: boolean
+  userId: string
+}
+
+export type MuteOption = 'unmuted' | '1h' | '8h' | '24h' | 'always'
+
+export interface MuteState {
+  option: MuteOption
+  until: number | null // timestamp, null = always or unmuted
+}
+
+// ─── Storage Keys ─────────────────────────────────────────────────────────────
+
+const NOTIFICATIONS_KEY = (userId: string) => `notifications:${userId}`
+const MUTE_KEY = (userId: string) => `notifications:mute:${userId}`
+const LAST_CHECKED_KEY = (userId: string) => `notifications:lastChecked:${userId}`
+
+// ─── Notification Handler Setup ───────────────────────────────────────────────
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+})
+
+// ─── Permission & Token ───────────────────────────────────────────────────────
+
+export async function registerForPushNotificationsAsync(): Promise<string | null> {
+  if (Platform.OS === 'web') return null
+
+  const { status: existingStatus } = await Notifications.getPermissionsAsync()
+  let finalStatus = existingStatus
+
+  if (existingStatus !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync()
+    finalStatus = status
+  }
+
+  if (finalStatus !== 'granted') return null
+
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#007AFF',
+    })
+  }
+
+  return 'local' // Using local notifications only
+}
+
+// ─── Mute Logic ───────────────────────────────────────────────────────────────
+
+export async function getMuteState(userId: string): Promise<MuteState> {
+  try {
+    const raw = await AsyncStorage.getItem(MUTE_KEY(userId))
+    if (!raw) return { option: 'unmuted', until: null }
+    const state: MuteState = JSON.parse(raw)
+
+    // If timed mute has expired, auto-unmute
+    if (state.option !== 'unmuted' && state.option !== 'always' && state.until) {
+      if (Date.now() >= state.until) {
+        const unmuted: MuteState = { option: 'unmuted', until: null }
+        await AsyncStorage.setItem(MUTE_KEY(userId), JSON.stringify(unmuted))
+        return unmuted
+      }
+    }
+    return state
+  } catch {
+    return { option: 'unmuted', until: null }
+  }
+}
+
+export async function setMuteState(userId: string, option: MuteOption): Promise<MuteState> {
+  const durationMap: Record<MuteOption, number | null> = {
+    unmuted: null,
+    '1h': 60 * 60 * 1000,
+    '8h': 8 * 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    always: null,
+  }
+
+  const duration = durationMap[option]
+  const state: MuteState = {
+    option,
+    until: duration ? Date.now() + duration : null,
+  }
+  await AsyncStorage.setItem(MUTE_KEY(userId), JSON.stringify(state))
+  return state
+}
+
+export function isMuted(muteState: MuteState): boolean {
+  if (muteState.option === 'unmuted') return false
+  if (muteState.option === 'always') return true
+  if (muteState.until && Date.now() < muteState.until) return true
+  return false
+}
+
+export function getMuteLabel(muteState: MuteState): string {
+  if (muteState.option === 'unmuted') return 'Notifications on'
+  if (muteState.option === 'always') return 'Muted always'
+  if (muteState.until) {
+    const remaining = muteState.until - Date.now()
+    const hours = Math.ceil(remaining / (1000 * 60 * 60))
+    const mins = Math.ceil(remaining / (1000 * 60))
+    if (hours >= 1) return `Muted for ~${hours}h`
+    return `Muted for ~${mins}m`
+  }
+  return 'Muted'
+}
+
+// ─── In-App Notification Store ────────────────────────────────────────────────
+
+export async function getNotifications(userId: string): Promise<AppNotification[]> {
+  try {
+    const raw = await AsyncStorage.getItem(NOTIFICATIONS_KEY(userId))
+    if (!raw) return []
+    return JSON.parse(raw)
+  } catch {
+    return []
+  }
+}
+
+export async function saveNotification(notification: AppNotification): Promise<void> {
+  const existing = await getNotifications(notification.userId)
+  // Keep last 50 notifications
+  const updated = [notification, ...existing].slice(0, 50)
+  await AsyncStorage.setItem(NOTIFICATIONS_KEY(notification.userId), JSON.stringify(updated))
+}
+
+export async function markAllRead(userId: string): Promise<void> {
+  const notifications = await getNotifications(userId)
+  const updated = notifications.map(n => ({ ...n, read: true }))
+  await AsyncStorage.setItem(NOTIFICATIONS_KEY(userId), JSON.stringify(updated))
+}
+
+export async function markOneRead(userId: string, notifId: string): Promise<void> {
+  const notifications = await getNotifications(userId)
+  const updated = notifications.map(n => n.id === notifId ? { ...n, read: true } : n)
+  await AsyncStorage.setItem(NOTIFICATIONS_KEY(userId), JSON.stringify(updated))
+}
+
+export async function clearAllNotifications(userId: string): Promise<void> {
+  await AsyncStorage.removeItem(NOTIFICATIONS_KEY(userId))
+}
+
+export async function getUnreadCount(userId: string): Promise<number> {
+  const notifications = await getNotifications(userId)
+  return notifications.filter(n => !n.read).length
+}
+
+// ─── Last Checked Timestamp ───────────────────────────────────────────────────
+
+export async function getLastChecked(userId: string): Promise<number> {
+  try {
+    const raw = await AsyncStorage.getItem(LAST_CHECKED_KEY(userId))
+    return raw ? parseInt(raw) : 0
+  } catch {
+    return 0
+  }
+}
+
+export async function setLastChecked(userId: string): Promise<void> {
+  await AsyncStorage.setItem(LAST_CHECKED_KEY(userId), Date.now().toString())
+}
+
+// ─── Send Local Push Notification ─────────────────────────────────────────────
+
+export async function sendLocalNotification(
+  userId: string,
+  title: string,
+  body: string,
+  type: NotificationType,
+  data?: Record<string, any>
+): Promise<void> {
+  const muteState = await getMuteState(userId)
+
+  // Save to in-app store regardless of mute
+  const notification: AppNotification = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    type,
+    title,
+    body,
+    data,
+    createdAt: Date.now(),
+    read: false,
+    userId,
+  }
+  await saveNotification(notification)
+
+  // Only fire OS notification if not muted
+  if (!isMuted(muteState)) {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        data: { type, userId, ...data },
+        sound: true,
+      },
+      trigger: null, // fire immediately
+    })
+  }
+}
+
+// ─── Helpers to create typed notifications ────────────────────────────────────
+
+export async function notifyNewUpload(userId: string, songTitle: string) {
+  await sendLocalNotification(
+    userId,
+    'New Song Added',
+    `"${songTitle}" was added to the chord list.`,
+    'new_upload',
+    { songTitle }
+  )
+}
+
+export async function notifyContactRequest(userId: string, fromName: string, fromUserId?: string) {
+  await sendLocalNotification(
+    userId,
+    'New Contact Request',
+    `${fromName} wants to add you as a contact.`,
+    'contact_request',
+    { fromName, fromUserId }
+  )
+}
+
+export async function notifyContactAccepted(userId: string, contactName: string) {
+  await sendLocalNotification(
+    userId,
+    'Contact Request Accepted',
+    `${contactName} accepted your contact request.`,
+    'contact_accepted',
+    { contactName }
+  )
+}
+
+export async function notifyContactRejected(userId: string, contactName: string) {
+  await sendLocalNotification(
+    userId,
+    'Contact Request Declined',
+    `${contactName} declined your contact request.`,
+    'contact_rejected',
+    { contactName }
+  )
+}

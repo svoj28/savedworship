@@ -9,13 +9,16 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 // Initialize database
 import { initializeDatabase } from './db/index'
 
-
 // Auth
 import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
 
 // Sync
 import { stampUserIdOnUnsyncedRows, startPeriodicSync, removeOrphanedUnsyncedRows } from './lib/sync'
 import { startNetworkSync, stopNetworkSync } from './lib/networkSync'
+
+// Notifications
+import { NotificationProvider } from './lib/NotificationContext'
+import NotificationBell from './components/NotificationBell'
 
 // Screens
 import SignInScreen from './screens/SignInScreen'
@@ -40,24 +43,15 @@ import CustomDrawerContent from './components/CustomDrawerContent'
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
 
-/**
- * Auth Stack - Sign In / Sign Up
- */
+// ─── Auth Stack ───────────────────────────────────────────────────────────────
+
 function AuthStack() {
   const [showSignUp, setShowSignUp] = useState(false)
 
   return (
-    <Stack.Navigator
-      id="auth-stack"
-      screenOptions={{
-        headerShown: false,
-      }}
-    >
+    <Stack.Navigator id="auth-stack" screenOptions={{ headerShown: false }}>
       {showSignUp ? (
-        <Stack.Screen
-          name="SignUp"
-          options={{}}
-        >
+        <Stack.Screen name="SignUp" options={{}}>
           {(props: any) => (
             <SignUpScreen
               {...props}
@@ -67,10 +61,7 @@ function AuthStack() {
           )}
         </Stack.Screen>
       ) : (
-        <Stack.Screen
-          name="SignIn"
-          options={{}}
-        >
+        <Stack.Screen name="SignIn" options={{}}>
           {(props: any) => (
             <SignInScreen
               {...props}
@@ -84,69 +75,40 @@ function AuthStack() {
   )
 }
 
-/**
- * Chord Lists Stack - Browse and view chord lists
- */
+// ─── Chord Lists Stack ────────────────────────────────────────────────────────
+
 function ChordListsStack() {
   const { canManageChords } = useRole()
   return (
     <Stack.Navigator
       id="chord-lists-stack"
-      screenOptions={{
-        headerTintColor: '#007AFF',
-        headerShown: false,
-      }}
+      screenOptions={{ headerTintColor: '#007AFF', headerShown: false }}
     >
-      <Stack.Screen
-        name="ChordListsHome"
-        component={ChordListsHomeScreen}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="ChordList"
-        component={ChordListScreen}
-        options={{ title: 'Song', headerLeft: () => null }}
-      />
+      <Stack.Screen name="ChordListsHome" component={ChordListsHomeScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="ChordList" component={ChordListScreen} options={{ title: 'Song', headerLeft: () => null }} />
       {canManageChords && (
-      <Stack.Screen
-        name="AddSong"
-        component={AddSongScreen}
-        options={{ title: 'Add Song', headerLeft: () => null }}
-      />
+        <Stack.Screen name="AddSong" component={AddSongScreen} options={{ title: 'Add Song', headerLeft: () => null }} />
       )}
     </Stack.Navigator>
   )
 }
 
-/**
- * Personal Notes Stack - View and edit personal notes
- */
+// ─── Personal Notes Stack ─────────────────────────────────────────────────────
+
 function PersonalNotesStack() {
   return (
     <Stack.Navigator
       id="personal-notes-stack"
-      screenOptions={{
-        headerTintColor: '#007AFF',
-        headerShown: true,
-      }}
+      screenOptions={{ headerTintColor: '#007AFF', headerShown: true }}
     >
-      <Stack.Screen
-        name="PersonalNotesHome"
-        component={PersonalNotesScreen}
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen
-        name="NoteDetail"
-        component={NoteDetailScreen}
-        options={{ title: 'Note', headerLeft: () => null }}
-      />
+      <Stack.Screen name="PersonalNotesHome" component={PersonalNotesScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="NoteDetail" component={NoteDetailScreen} options={{ title: 'Note', headerLeft: () => null }} />
     </Stack.Navigator>
   )
 }
 
-/**
- * App Tab Navigator - Main authenticated screens (Chords, Notes, Management, Conversation)
- */
+// ─── Tab Navigator ────────────────────────────────────────────────────────────
+
 function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean) => void }) {
   return (
     <Tab.Navigator
@@ -154,6 +116,7 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean)
       screenOptions={({ route }) => ({
         headerShown: true,
         headerTintColor: '#007AFF',
+        // Hamburger menu on the LEFT
         headerLeft: () => (
           <TouchableOpacity
             onPress={() => setDrawerVisible(true)}
@@ -162,6 +125,8 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean)
             <Ionicons name="menu" size={24} color="#007AFF" />
           </TouchableOpacity>
         ),
+        // Notification bell on the RIGHT
+        headerRight: () => <NotificationBell />,
         tabBarIcon: ({ focused, color, size }) => {
           let iconName: keyof typeof Ionicons.glyphMap
 
@@ -183,54 +148,27 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (visible: boolean)
         tabBarInactiveTintColor: '#999',
       })}
     >
-      <Tab.Screen
-        name="ChordListsTab"
-        component={ChordListsStack}
-        options={{
-          title: 'Chords',
-        }}
-      />
-      <Tab.Screen
-        name="PersonalNotesTab"
-        component={PersonalNotesStack}
-        options={{
-          title: 'Notes',
-        }}
-      />
-      <Tab.Screen
-        name="ManagementTab"
-        component={ManagementScreen}
-        options={{
-          title: 'Management',
-        }}
-      />
-      <Tab.Screen
-        name="ConversationTab"
-        component={ConversationScreen}
-        options={{
-          title: 'Conversation',
-        }}
-      />
+      <Tab.Screen name="ChordListsTab" component={ChordListsStack} options={{ title: 'Chords' }} />
+      <Tab.Screen name="PersonalNotesTab" component={PersonalNotesStack} options={{ title: 'Notes' }} />
+      <Tab.Screen name="ManagementTab" component={ManagementScreen} options={{ title: 'Management' }} />
+      <Tab.Screen name="ConversationTab" component={ConversationScreen} options={{ title: 'Conversation' }} />
     </Tab.Navigator>
   )
 }
 
-/**
- * App Stack Navigator - Tabs + Drawer Screens
- */
-function AppTabs({ drawerVisible, setDrawerVisible }: { drawerVisible: boolean; setDrawerVisible: (visible: boolean) => void }) {
+// ─── App Stack ────────────────────────────────────────────────────────────────
+
+function AppTabs({
+  drawerVisible,
+  setDrawerVisible,
+}: {
+  drawerVisible: boolean
+  setDrawerVisible: (visible: boolean) => void
+}) {
   return (
     <>
-      <Stack.Navigator
-        id="app-stack"
-        screenOptions={{
-          headerShown: false,
-        }}
-      >
-        <Stack.Screen
-          name="TabsStack"
-          options={{ headerShown: false }}
-        >
+      <Stack.Navigator id="app-stack" screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="TabsStack" options={{ headerShown: false }}>
           {() => <TabsScreen setDrawerVisible={setDrawerVisible} />}
         </Stack.Screen>
         <Stack.Screen
@@ -268,12 +206,7 @@ function AppTabs({ drawerVisible, setDrawerVisible }: { drawerVisible: boolean; 
         onRequestClose={() => setDrawerVisible(false)}
       >
         <View style={{ flex: 1, flexDirection: 'row' }}>
-          {/* Drawer Content */}
-          <CustomDrawerContent
-            visible={drawerVisible}
-            onClose={() => setDrawerVisible(false)}
-          />
-          {/* Overlay */}
+          <CustomDrawerContent visible={drawerVisible} onClose={() => setDrawerVisible(false)} />
           <TouchableOpacity
             style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)' }}
             onPress={() => setDrawerVisible(false)}
@@ -284,9 +217,8 @@ function AppTabs({ drawerVisible, setDrawerVisible }: { drawerVisible: boolean; 
   )
 }
 
-/**
- * Root Navigation - Auth or App
- */
+// ─── Root ─────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
@@ -296,13 +228,6 @@ export default function App() {
   const [dbReady, setDbReady] = useState(false)
 
   useEffect(() => {
-
-//     const startSync = async () => {
-//   await stampUserIdOnUnsyncedRows(user.id) // fix any rows missing user_id
-//   const cleanup = await startPeriodicSync(user.id, 60000)
-//   periodicSyncCleanupRef.current = cleanup
-// }
-    // Initialize database and auth sequentially
     const initializeApp = async () => {
       try {
         console.log('Initializing database...')
@@ -310,7 +235,6 @@ export default function App() {
         console.log('Database ready')
         setDbReady(true)
 
-        // Check current auth state
         const authUser = await getCurrentUser()
         setUser(authUser)
       } catch (err) {
@@ -324,7 +248,6 @@ export default function App() {
 
     initializeApp()
 
-    // Listen for auth state changes
     const unsubscribe = onAuthStateChange((authUser) => {
       setUser(authUser)
     })
@@ -334,40 +257,39 @@ export default function App() {
     }
   }, [])
 
-  // Start periodic sync when user is authenticated
   useEffect(() => {
-  if (!user || !dbReady) {
-    if (periodicSyncCleanupRef.current) {
-      periodicSyncCleanupRef.current()
-      periodicSyncCleanupRef.current = null
+    if (!user || !dbReady) {
+      if (periodicSyncCleanupRef.current) {
+        periodicSyncCleanupRef.current()
+        periodicSyncCleanupRef.current = null
+      }
+      stopNetworkSync()
+      return
     }
-    stopNetworkSync()
-    return
-  }
 
-  const startSync = async () => {
-    try {
-      console.log('Starting periodic sync for user:', user.id)
-      await removeOrphanedUnsyncedRows(user.id)
-      await stampUserIdOnUnsyncedRows(user.id)
-      const cleanup = await startPeriodicSync(user.id, 60000)
-      periodicSyncCleanupRef.current = cleanup
-      startNetworkSync()
-    } catch (err) {
-      console.error('Failed to start periodic sync:', err)
+    const startSync = async () => {
+      try {
+        console.log('Starting periodic sync for user:', user.id)
+        await removeOrphanedUnsyncedRows(user.id)
+        await stampUserIdOnUnsyncedRows(user.id)
+        const cleanup = await startPeriodicSync(user.id, 60000)
+        periodicSyncCleanupRef.current = cleanup
+        startNetworkSync()
+      } catch (err) {
+        console.error('Failed to start periodic sync:', err)
+      }
     }
-  }
 
-  startSync()
+    startSync()
 
-  return () => {
-    if (periodicSyncCleanupRef.current) {
-      periodicSyncCleanupRef.current()
-      periodicSyncCleanupRef.current = null
+    return () => {
+      if (periodicSyncCleanupRef.current) {
+        periodicSyncCleanupRef.current()
+        periodicSyncCleanupRef.current = null
+      }
+      stopNetworkSync()
     }
-    stopNetworkSync()
-  }
-}, [user, dbReady])
+  }, [user, dbReady])
 
   if (dbError) {
     return (
@@ -386,18 +308,21 @@ export default function App() {
   }
 
   return (
-    <NavigationContainer>
-      {user ? (
-        <>
-          <AppTabs drawerVisible={drawerVisible} setDrawerVisible={setDrawerVisible} />
-          <StatusBar style="auto" />
-        </>
-      ) : (
-        <>
-          <AuthStack />
-          <StatusBar style="auto" />
-        </>
-      )}
-    </NavigationContainer>
+    // NotificationProvider scoped to the logged-in user (or null = no notifications)
+    <NotificationProvider userId={user?.id ?? null}>
+      <NavigationContainer>
+        {user ? (
+          <>
+            <AppTabs drawerVisible={drawerVisible} setDrawerVisible={setDrawerVisible} />
+            <StatusBar style="auto" />
+          </>
+        ) : (
+          <>
+            <AuthStack />
+            <StatusBar style="auto" />
+          </>
+        )}
+      </NavigationContainer>
+    </NotificationProvider>
   )
 }

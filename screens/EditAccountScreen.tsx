@@ -9,12 +9,14 @@ import {
   Alert,
   ActivityIndicator,
   Image,
+  Switch,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as ImagePicker from 'expo-image-picker'
 import { getCurrentUser } from '../lib/auth'
 import { getUserProfileByUserId, createUserProfile, updateUserProfile } from '../db/queries'
 import { UserProfile } from '../db/models'
+import { uploadAvatar } from '../lib/uploadAvatar'
 
 const ROLES = [
   'Vocals',
@@ -31,6 +33,7 @@ interface FormData {
   bio: string
   avatarUrl: string
   roles: string
+  isPrivate: boolean
 }
 
 export default function EditAccountScreen() {
@@ -43,6 +46,7 @@ export default function EditAccountScreen() {
     bio: '',
     avatarUrl: '',
     roles: '',
+    isPrivate: false,
   })
 
   useEffect(() => {
@@ -58,14 +62,17 @@ export default function EditAccountScreen() {
         const userProfile = await getUserProfileByUserId(currentUser.id)
         if (userProfile) {
           setProfile(userProfile)
+          const rawBio = userProfile.bio || ''
+          const isPrivate = rawBio.startsWith('[private]')
+          const cleanBio = rawBio.replace('[private]', '').trim()
           setFormData({
             nickname: userProfile.nickname || '',
-            bio: userProfile.bio || '',
+            bio: cleanBio,
             avatarUrl: userProfile.avatarUrl || '',
             roles: userProfile.instruments || '',
+            isPrivate,
           })
         } else {
-          // Create empty profile if it doesn't exist
           const newProfile = await createUserProfile({
             userId: currentUser.id,
             createdAt: Date.now(),
@@ -85,12 +92,16 @@ export default function EditAccountScreen() {
 
   const handleSaveProfile = async () => {
     if (!user) return
-
     try {
       setSaving(true)
+      // Prepend [private] marker to bio if privacy is on
+      const bioToSave = formData.isPrivate
+        ? `[private]${formData.bio}`
+        : formData.bio
+
       await updateUserProfile(user.id, {
         nickname: formData.nickname,
-        bio: formData.bio,
+        bio: bioToSave,
         avatarUrl: formData.avatarUrl,
         instruments: formData.roles,
         updatedAt: Date.now(),
@@ -106,21 +117,31 @@ export default function EditAccountScreen() {
   }
 
   const handlePickImage = async () => {
+    if (!user) return
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
-        quality: 0.8,
+        quality: 0.7,
       })
 
       if (!result.canceled && result.assets[0]) {
-        const uri = result.assets[0].uri
-        setFormData({ ...formData, avatarUrl: uri })
+        const localUri = result.assets[0].uri
+        setSaving(true)
+        const publicUrl = await uploadAvatar(user.id, localUri)
+        if (publicUrl) {
+          await updateUserProfile(user.id, { avatarUrl: publicUrl })
+          setFormData({ ...formData, avatarUrl: publicUrl })
+        } else {
+          Alert.alert('Error', 'Failed to upload avatar')
+        }
+        setSaving(false)
       }
     } catch (err) {
       console.error('Error picking image:', err)
       Alert.alert('Error', 'Failed to pick image')
+      setSaving(false)
     }
   }
 
@@ -140,27 +161,19 @@ export default function EditAccountScreen() {
         {
           text: 'Delete',
           onPress: () => {
-            Alert.alert(
-              'Confirm Delete',
-              'Type your email to confirm deletion:',
-              [
-                {
-                  text: 'Cancel',
-                  onPress: () => {},
-                  style: 'cancel',
+            Alert.alert('Confirm Delete', 'Type your email to confirm deletion:', [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete My Account',
+                onPress: () => {
+                  Alert.alert(
+                    'Account Deletion',
+                    'Account deletion would require backend implementation.\n\nPlease contact support to delete your account.'
+                  )
                 },
-                {
-                  text: 'Delete My Account',
-                  onPress: () => {
-                    Alert.alert(
-                      'Account Deletion',
-                      'Account deletion would require backend implementation.\n\nPlease contact support to delete your account.'
-                    )
-                  },
-                  style: 'destructive',
-                },
-              ]
-            )
+                style: 'destructive',
+              },
+            ])
           },
           style: 'destructive',
         },
@@ -169,34 +182,19 @@ export default function EditAccountScreen() {
   }
 
   const toggleInstrument = (instrument: string) => {
-    const instruments = formData.roles
-      .split(',')
-      .map(i => i.trim())
-      .filter(i => i)
-
+    const instruments = formData.roles.split(',').map(i => i.trim()).filter(i => i)
     if (instruments.includes(instrument)) {
-      const updated = instruments.filter(i => i !== instrument)
-      setFormData({
-        ...formData,
-        roles: updated.join(', '),
-      })
+      setFormData({ ...formData, roles: instruments.filter(i => i !== instrument).join(', ') })
     } else {
-      instruments.push(instrument)
-      setFormData({
-        ...formData,
-        roles: instruments.join(', '),
-      })
+      setFormData({ ...formData, roles: [...instruments, instrument].join(', ') })
     }
   }
 
-  const selectedInstruments = formData.roles
-    .split(',')
-    .map(i => i.trim())
-    .filter(i => i)
+  const selectedInstruments = formData.roles.split(',').map(i => i.trim()).filter(i => i)
 
   if (loading) {
     return (
-      <View style={styles.container}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007AFF" />
       </View>
     )
@@ -207,24 +205,16 @@ export default function EditAccountScreen() {
       {/* Avatar Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Profile Picture</Text>
-        
         <View style={styles.avatarPreviewContainer}>
           {formData.avatarUrl ? (
-            <Image
-              source={{ uri: formData.avatarUrl }}
-              style={styles.avatarPreview}
-            />
+            <Image source={{ uri: formData.avatarUrl }} style={styles.avatarPreview} />
           ) : (
             <View style={[styles.avatarPreview, styles.avatarPlaceholder]}>
               <Ionicons name="person" size={64} color="#ccc" />
             </View>
           )}
         </View>
-
-        <TouchableOpacity
-          style={styles.uploadButton}
-          onPress={handlePickImage}
-        >
+        <TouchableOpacity style={styles.uploadButton} onPress={handlePickImage}>
           <Ionicons name="image" size={20} color="#fff" />
           <Text style={styles.uploadButtonText}>Choose Photo</Text>
         </TouchableOpacity>
@@ -238,9 +228,7 @@ export default function EditAccountScreen() {
           style={styles.input}
           placeholder="Your nickname"
           value={formData.nickname}
-          onChangeText={(text) =>
-            setFormData({ ...formData, nickname: text })
-          }
+          onChangeText={text => setFormData({ ...formData, nickname: text })}
           maxLength={30}
         />
         <Text style={styles.hint}>{formData.nickname.length}/30 characters</Text>
@@ -253,9 +241,7 @@ export default function EditAccountScreen() {
           style={[styles.input, styles.bioInput]}
           placeholder="Tell others about yourself..."
           value={formData.bio}
-          onChangeText={(text) =>
-            setFormData({ ...formData, bio: text })
-          }
+          onChangeText={text => setFormData({ ...formData, bio: text })}
           multiline
           numberOfLines={4}
           maxLength={200}
@@ -267,9 +253,8 @@ export default function EditAccountScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Your Roles</Text>
         <Text style={styles.hint}>Select all roles you have in your worship team</Text>
-        
         <View style={styles.instrumentsGrid}>
-          {ROLES.map((role) => (
+          {ROLES.map(role => (
             <TouchableOpacity
               key={role}
               style={[
@@ -294,6 +279,76 @@ export default function EditAccountScreen() {
         </View>
       </View>
 
+      {/* Privacy Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Privacy</Text>
+        <View style={styles.privacyRow}>
+          <View style={styles.privacyInfo}>
+            <View style={styles.privacyLabelRow}>
+              <Ionicons
+                name={formData.isPrivate ? 'lock-closed' : 'lock-open'}
+                size={18}
+                color={formData.isPrivate ? '#FF9500' : '#34C759'}
+              />
+              <Text style={styles.privacyLabel}>
+                {formData.isPrivate ? 'Private Profile' : 'Public Profile'}
+              </Text>
+            </View>
+            <Text style={styles.privacyDescription}>
+              {formData.isPrivate
+                ? 'Only your name and photo are visible to others. Bio and roles are hidden.'
+                : 'Your full profile (bio, roles) is visible to everyone in the community.'}
+            </Text>
+          </View>
+          <Switch
+            value={formData.isPrivate}
+            onValueChange={val => setFormData({ ...formData, isPrivate: val })}
+            trackColor={{ false: '#E0E0E0', true: '#FFD580' }}
+            thumbColor={formData.isPrivate ? '#FF9500' : '#FFF'}
+          />
+        </View>
+
+        {/* Visual preview */}
+        <View style={styles.privacyPreview}>
+          <Text style={styles.privacyPreviewLabel}>What others see:</Text>
+          <View style={styles.privacyPreviewCard}>
+            <View style={styles.privacyPreviewAvatar}>
+              {formData.avatarUrl ? (
+                <Image source={{ uri: formData.avatarUrl }} style={styles.privacyPreviewImg} />
+              ) : (
+                <View style={[styles.privacyPreviewImg, styles.privacyPreviewAvatarFallback]}>
+                  <Ionicons name="person" size={22} color="#BBB" />
+                </View>
+              )}
+            </View>
+            <View style={styles.privacyPreviewText}>
+              <Text style={styles.privacyPreviewName}>
+                {formData.nickname || 'Your Name'}
+              </Text>
+              {formData.isPrivate ? (
+                <View style={styles.privacyHiddenBadge}>
+                  <Ionicons name="lock-closed" size={10} color="#888" />
+                  <Text style={styles.privacyHiddenText}>Profile hidden</Text>
+                </View>
+              ) : (
+                <>
+                  {formData.bio ? (
+                    <Text style={styles.privacyPreviewBio} numberOfLines={2}>
+                      {formData.bio}
+                    </Text>
+                  ) : null}
+                  {selectedInstruments.length > 0 && (
+                    <Text style={styles.privacyPreviewRoles} numberOfLines={1}>
+                      {selectedInstruments.join(' · ')}
+                    </Text>
+                  )}
+                </>
+              )}
+            </View>
+          </View>
+        </View>
+      </View>
+
       {/* Save Button */}
       <TouchableOpacity
         style={[styles.primaryButton, saving && styles.disabledButton]}
@@ -313,20 +368,12 @@ export default function EditAccountScreen() {
       {/* Account Actions Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account</Text>
-
-        <TouchableOpacity
-          style={styles.actionButton}
-          onPress={handleChangePassword}
-        >
+        <TouchableOpacity style={styles.actionButton} onPress={handleChangePassword}>
           <Ionicons name="lock-closed" size={20} color="#007AFF" />
           <Text style={styles.actionButtonText}>Change Password</Text>
           <Ionicons name="chevron-forward" size={20} color="#ccc" />
         </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionButton}
-          onPress={handleDeleteAccount}
-        >
+        <TouchableOpacity style={styles.actionButton} onPress={handleDeleteAccount}>
           <Ionicons name="trash" size={20} color="#f44" />
           <Text style={[styles.actionButtonText, styles.deleteText]}>Delete Account</Text>
           <Ionicons name="chevron-forward" size={20} color="#ccc" />
@@ -345,6 +392,12 @@ export default function EditAccountScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+  },
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -441,6 +494,97 @@ const styles = StyleSheet.create({
   },
   instrumentCheck: {
     marginLeft: 6,
+  },
+  // Privacy styles
+  privacyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 12,
+  },
+  privacyInfo: {
+    flex: 1,
+  },
+  privacyLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  privacyLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+  },
+  privacyDescription: {
+    fontSize: 12,
+    color: '#888',
+    lineHeight: 17,
+  },
+  privacyPreview: {
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  privacyPreviewLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#AAA',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  privacyPreviewCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  privacyPreviewAvatar: {},
+  privacyPreviewImg: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  privacyPreviewAvatarFallback: {
+    backgroundColor: '#E8E8E8',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  privacyPreviewText: {
+    flex: 1,
+  },
+  privacyPreviewName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#222',
+    marginBottom: 3,
+  },
+  privacyPreviewBio: {
+    fontSize: 12,
+    color: '#666',
+    lineHeight: 16,
+    marginBottom: 3,
+  },
+  privacyPreviewRoles: {
+    fontSize: 11,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  privacyHiddenBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EEEEEE',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    alignSelf: 'flex-start',
+  },
+  privacyHiddenText: {
+    fontSize: 11,
+    color: '#888',
   },
   primaryButton: {
     flexDirection: 'row',

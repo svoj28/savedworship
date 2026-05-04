@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import {
   View,
   Text,
@@ -10,12 +10,15 @@ import {
   ActivityIndicator,
   Share,
   Image,
+  Modal,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { CameraView, Camera, BarcodeScanningResult } from 'expo-camera'
 import { getCurrentUser } from '../lib/auth'
-import { addContact, getContactsByUserId, deleteContact } from '../db/queries'
+import { addContact, getContactsByUserId, deleteContact, getUserProfileByShortId, updateContact } from '../db/queries'
 import { Contact } from '../db/models'
 import { generateShortId } from '../lib/shortId'
+import { notifyNewUpload, notifyContactRequest, notifyContactAccepted, notifyContactRejected } from '../lib/notifications'
 
 type TabType = 'share' | 'add' | 'contacts'
 
@@ -30,6 +33,12 @@ export default function AddContactsScreen() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [formData, setFormData] = useState<AddContactFormData>({ recipientId: '' })
   const [addingContact, setAddingContact] = useState(false)
+
+  // QR Scanner state
+  const [scannerVisible, setScannerVisible] = useState(false)
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null)
+  const [scanned, setScanned] = useState(false)
+
 
   useEffect(() => {
     loadUserAndContacts()
@@ -52,40 +61,53 @@ export default function AddContactsScreen() {
     }
   }
 
-  const handleAddContact = async () => {
-    if (!formData.recipientId.trim()) {
+  const handleAddContact = async (recipientId?: string) => {
+    let idToAdd = (recipientId ?? formData.recipientId).trim()
+
+    if (!idToAdd) {
       Alert.alert('Error', 'Please enter a recipient ID')
       return
     }
 
-    if (formData.recipientId === user?.id) {
+    if (idToAdd === user?.id) {
       Alert.alert('Error', 'You cannot add yourself')
       return
+    }
+
+    // If not a UUID, try to resolve as short ID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!uuidRegex.test(idToAdd)) {
+      // Try to find user by short ID
+      const profile = await getUserProfileByShortId(idToAdd)
+      if (!profile) {
+        Alert.alert('Error', 'No user found with that Recipient ID')
+        return
+      }
+      idToAdd = profile.userId
     }
 
     try {
       setAddingContact(true)
 
-      // Check if contact already exists
-      const existing = contacts.find(c => c.contactUserId === formData.recipientId)
+      const existing = contacts.find(c => c.contactUserId === idToAdd)
       if (existing) {
         Alert.alert('Error', 'This contact already exists')
         return
       }
 
-      // Create contact
       const newContact = await addContact({
-        userId: user.id,
-        contactUserId: formData.recipientId,
-        status: 'pending',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        synced: false,
-      })
+  userId: idToAdd,
+  contactUserId: user.id,
+  status: 'pending',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  synced: false,
+})
 
-      setContacts([newContact, ...contacts])
-      setFormData({ recipientId: '' })
-      Alert.alert('Success', 'Contact added successfully')
+setContacts([newContact, ...contacts])
+await notifyContactRequest(idToAdd, user?.displayName || 'Someone', user.id)
+setFormData({ recipientId: '' })
+Alert.alert('Success', 'Contact request sent')
     } catch (err) {
       console.error('Error adding contact:', err)
       Alert.alert('Error', 'Failed to add contact')
@@ -113,6 +135,39 @@ export default function AddContactsScreen() {
     ])
   }
 
+const handleAcceptContact = async (contact: Contact) => {
+  try {
+    await updateContact(contact.id, { status: 'accepted', updatedAt: Date.now() })
+    setContacts(contacts.map(c =>
+      c.id === contact.id ? { ...c, status: 'accepted' } : c
+    ))
+    await notifyContactAccepted(contact.contactUserId, user?.displayName || 'Someone')
+  } catch (err) {
+    Alert.alert('Error', 'Failed to accept contact')
+  }
+}
+
+const handleRejectContact = async (contact: Contact) => {
+  Alert.alert('Reject Contact', 'Are you sure you want to reject this request?', [
+    { text: 'Cancel', style: 'cancel' },
+    {
+      text: 'Reject',
+      style: 'destructive',
+      onPress: async () => {
+        try {
+          await updateContact(contact.id, { status: 'blocked', updatedAt: Date.now() })
+          setContacts(contacts.map(c =>
+            c.id === contact.id ? { ...c, status: 'blocked' } : c
+          ))
+          await notifyContactRejected(contact.contactUserId, user?.displayName || 'Someone')
+        } catch (err) {
+          Alert.alert('Error', 'Failed to reject contact')
+        }
+      },
+    },
+  ])
+}
+
   const handleShareQRCode = async () => {
     try {
       await Share.share({
@@ -124,9 +179,53 @@ export default function AddContactsScreen() {
     }
   }
 
-  const handleScanQRCode = () => {
-    Alert.alert('QR Code Scanner', 'QR code scanning feature coming soon')
+  // ─── QR Scanner logic ────────────────────────────────────────────────────────
+
+  const handleScanQRCode = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync()
+    if (status === 'granted') {
+      setHasPermission(true)
+      setScanned(false)
+      setScannerVisible(true)
+    } else {
+      setHasPermission(false)
+      Alert.alert(
+        'Camera Permission Required',
+        'Please enable camera access in your device settings to scan QR codes.',
+        [{ text: 'OK' }]
+      )
+    }
   }
+
+  const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
+    if (scanned) return
+    setScanned(true)
+    setScannerVisible(false)
+
+    // The QR code encodes the full user ID — use it directly
+    Alert.alert(
+      'QR Code Scanned',
+      `Found ID: ${data.substring(0, 20)}...\n\nAdd this person as a contact?`,
+      [
+        {
+          text: 'Cancel',
+          onPress: () => setScanned(false),
+          style: 'cancel',
+        },
+        {
+          text: 'Add Contact',
+          onPress: () => handleAddContact(data),
+        },
+      ]
+    )
+  }
+
+  const closeScanner = () => {
+    setScannerVisible(false)
+    setScanned(false)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -138,6 +237,56 @@ export default function AddContactsScreen() {
 
   return (
     <View style={styles.container}>
+      {/* QR Scanner Modal */}
+      <Modal
+        visible={scannerVisible}
+        animationType="slide"
+        onRequestClose={closeScanner}
+      >
+        <View style={styles.scannerContainer}>
+          <View style={styles.scannerHeader}>
+            <TouchableOpacity onPress={closeScanner} style={styles.closeButton}>
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.scannerTitle}>Scan QR Code</Text>
+            <View style={{ width: 44 }} />
+          </View>
+
+          {hasPermission && (
+            <CameraView
+              style={styles.camera}
+              facing="back"
+              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+              onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+            />
+          )}
+
+          <View style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame}>
+              {/* Corner marks */}
+              <View style={[styles.corner, styles.cornerTL]} />
+              <View style={[styles.corner, styles.cornerTR]} />
+              <View style={[styles.corner, styles.cornerBL]} />
+              <View style={[styles.corner, styles.cornerBR]} />
+            </View>
+          </View>
+
+          <View style={styles.scannerFooter}>
+            <Text style={styles.scannerHint}>
+              Point your camera at the recipient's QR code
+            </Text>
+            {scanned && (
+              <TouchableOpacity
+                style={styles.rescanButton}
+                onPress={() => setScanned(false)}
+              >
+                <Text style={styles.rescanText}>Tap to Scan Again</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </Modal>
+
       {/* Tabs */}
       <View style={styles.tabContainer}>
         <TouchableOpacity
@@ -172,7 +321,7 @@ export default function AddContactsScreen() {
           <View style={styles.tabContent}>
             <Text style={styles.sectionTitle}>Share Your ID</Text>
             <Text style={styles.description}>
-              Others can enter your Recipient ID to add you as a contact.
+              Others can scan your QR code or enter your Recipient ID to add you as a contact.
             </Text>
 
             {user?.id && (
@@ -223,7 +372,7 @@ export default function AddContactsScreen() {
 
             <TouchableOpacity
               style={[styles.primaryButton, addingContact && styles.disabledButton]}
-              onPress={handleAddContact}
+              onPress={() => handleAddContact()}
               disabled={addingContact}
             >
               {addingContact ? (
@@ -260,30 +409,37 @@ export default function AddContactsScreen() {
               </View>
             ) : (
               contacts.map((contact) => (
-                <View key={contact.id} style={styles.contactCard}>
-                  <View style={styles.contactInfo}>
-                    <View style={styles.contactAvatar}>
-                      <Ionicons name="person" size={24} color="#007AFF" />
-                    </View>
-                    <View style={styles.contactDetails}>
-                      <Text style={styles.contactName}>
-                        {contact.contactName || 'Unknown Contact'}
-                      </Text>
-                      <Text style={styles.contactId}>
-                        ID: {generateShortId(contact.contactUserId)}
-                      </Text>
-                      <Text style={[styles.contactStatus, contact.status === 'accepted' && styles.statusAccepted]}>
-                        {contact.status === 'pending' ? '⏳ Pending' : '✓ Connected'}
-                      </Text>
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    style={styles.deleteButton}
-                    onPress={() => handleDeleteContact(contact.id)}
-                  >
-                    <Ionicons name="trash" size={20} color="#f44" />
-                  </TouchableOpacity>
-                </View>
+<View key={contact.id} style={styles.contactCard}>
+  <View style={styles.contactInfo}>
+    <View style={styles.contactAvatar}>
+      <Ionicons name="person" size={24} color="#007AFF" />
+    </View>
+    <View style={styles.contactDetails}>
+      <Text style={styles.contactName}>
+        {contact.contactName || 'Unknown Contact'}
+      </Text>
+      <Text style={styles.contactId}>
+        ID: {generateShortId(contact.contactUserId)}
+      </Text>
+      <Text style={[
+        styles.contactStatus,
+        contact.status === 'accepted' && styles.statusAccepted,
+        contact.status === 'blocked' && styles.statusRejected,
+      ]}>
+        {contact.status === 'pending' && '⏳ Pending'}
+        {contact.status === 'accepted' && '✓ Connected'}
+        {contact.status === 'blocked' && '✗ Rejected'}
+      </Text>
+    </View>
+  </View>
+
+  <TouchableOpacity
+  style={styles.deleteButton}
+  onPress={() => handleDeleteContact(contact.id)}
+>
+  <Ionicons name="trash" size={20} color="#f44" />
+</TouchableOpacity>
+</View>
               ))
             )}
           </View>
@@ -294,10 +450,104 @@ export default function AddContactsScreen() {
 }
 
 const styles = StyleSheet.create({
+  cardActions: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+},
+acceptButton: {
+  backgroundColor: '#34C759',
+  borderRadius: 6,
+  padding: 7,
+},
+rejectButton: {
+  backgroundColor: '#FF3B30',
+  borderRadius: 6,
+  padding: 7,
+},
+statusRejected: {
+  color: '#FF3B30',
+},
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
+
+  // ─── Scanner Modal ───────────────────────────────────────────────────────────
+  scannerContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  scannerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 56,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    zIndex: 10,
+  },
+  closeButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scannerTitle: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  camera: {
+    flex: 1,
+  },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Darken the area around the frame via the frame itself being transparent
+  },
+  scannerFrame: {
+    width: 240,
+    height: 240,
+    position: 'relative',
+    marginTop: 80, // push down to account for header
+  },
+  corner: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderColor: '#fff',
+    borderWidth: 3,
+  },
+  cornerTL: { top: 0, left: 0, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 4 },
+  cornerTR: { top: 0, right: 0, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 4 },
+  cornerBL: { bottom: 0, left: 0, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 4 },
+  cornerBR: { bottom: 0, right: 0, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 4 },
+  scannerFooter: {
+    paddingBottom: 48,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  scannerHint: {
+    color: '#ccc',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  rescanButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+  },
+  rescanText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+
+  // ─── Tabs ────────────────────────────────────────────────────────────────────
   tabContainer: {
     flexDirection: 'row',
     backgroundColor: '#fff',
@@ -322,6 +572,8 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: '#007AFF',
   },
+
+  // ─── Content ─────────────────────────────────────────────────────────────────
   content: {
     flex: 1,
   },

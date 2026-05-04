@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getCurrentUser } from './auth'
 import { getUserProfileByUserId } from '../db/queries'
+import { supabase } from './supabase'
 
 export type UserRole = 'superadmin' | 'admin' | 'user' | 'guest'
 
@@ -12,9 +13,40 @@ export function useRole() {
     const load = async () => {
       try {
         const user = await getCurrentUser()
-        if (!user) { setRole('guest'); return }
+        if (!user) { setRole('guest'); setLoading(false); return }
+
+        // Try local first
         const profile = await getUserProfileByUserId(user.id)
-        setRole((profile?.role as UserRole) ?? 'user')
+        const localRole = profile?.role as UserRole | undefined
+
+        if (localRole && localRole !== 'user') {
+          // Has a specific role set locally
+          setRole(localRole)
+          setLoading(false)
+          return
+        }
+
+        // Always verify role from Supabase to catch superadmin/admin
+        const { data } = await supabase
+          .from('user_profiles')
+          .select('role')
+          .eq('user_id', user.id)
+          .single()
+
+        if (data?.role) {
+          setRole(data.role as UserRole)
+
+          // Update local SQLite so future loads are fast
+          const { execute } = await import('../db/index')
+          try {
+            await execute(
+              `UPDATE user_profiles SET role = ? WHERE user_id = ?`,
+              [data.role, user.id]
+            )
+          } catch (e) {}
+        } else {
+          setRole(localRole ?? 'user')
+        }
       } catch {
         setRole('user')
       } finally {
@@ -30,8 +62,8 @@ export function useRole() {
     isSuperAdmin: role === 'superadmin',
     isAdmin: role === 'admin',
     isUser: role === 'user',
-    canManageChords: role === 'superadmin',                          // artists, chord_lists, songs
-    canManageContent: role === 'superadmin' || role === 'admin',     // lineups, files, announcements, versions
+    canManageChords: role === 'superadmin',
+    canManageContent: role === 'superadmin' || role === 'admin',
     canMessage: role !== 'guest',
     canEditProfile: role !== 'guest',
     canAddContacts: role !== 'guest',

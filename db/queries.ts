@@ -1,3 +1,16 @@
+import { generateShortId } from '../lib/shortId'
+
+// Find a user profile by shortId (searches all user_profiles)
+export async function getUserProfileByShortId(shortId: string): Promise<UserProfile | null> {
+  const results = await query('SELECT * FROM user_profiles')
+  for (const row of results) {
+    const r = row as any;
+    if (generateShortId(r.user_id) === shortId.toUpperCase()) {
+      return mapUserProfile(r)
+    }
+  }
+  return null
+}
 // db/queries.ts
 import { execute, query, queryOne, transaction } from './index'
 import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, Contact, UserProfile, Playlist, PlaylistItem } from './models'
@@ -374,8 +387,8 @@ export async function createUserProfile(data: Omit<UserProfile, 'id'>): Promise<
   const id = uuid.v4() as string
   const profile = { id, ...data }
   await execute(
-    'INSERT INTO user_profiles (id, user_id, nickname, bio, avatar_url, instruments, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [profile.id, profile.userId, profile.nickname || '', profile.bio || '', profile.avatarUrl || '', profile.instruments || '', profile.createdAt, profile.updatedAt, 0]
+    'INSERT INTO user_profiles (id, user_id, nickname, bio, avatar_url, instruments, role, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [profile.id, profile.userId, profile.nickname || '', profile.bio || '', profile.avatarUrl || '', profile.instruments || '', profile.role || 'user', profile.createdAt, profile.updatedAt, 0]
   )
   await syncRowToSupabase('user_profiles', profile)
   return profile
@@ -387,7 +400,9 @@ export async function getUserProfileByUserId(userId: string): Promise<UserProfil
 }
 
 export async function updateUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {
-  const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'synced', 'createdAt', 'updatedAt'].includes(key))
+  const filtered = Object.entries(data).filter(([key]) => 
+    !['id', 'userId', 'synced', 'createdAt', 'updatedAt'].includes(key)
+  )
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
   const values = filtered.map(([, val]) => val)
   if (!updates) return

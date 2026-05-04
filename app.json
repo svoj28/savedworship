@@ -34,10 +34,17 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-sqlite",
-      "expo-audio",
-      "expo-font",
-      "expo-asset"
-    ]
+  "expo-sqlite",
+  "expo-audio",
+  "expo-font",
+  "expo-asset",
+  [
+    "expo-camera",
+    {
+      "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan QR codes."
+    }
+  ],
+  ["expo-notifications", { "icon": "./assets/icon.png", "color": "#007AFF" }]
+]
   }
 }

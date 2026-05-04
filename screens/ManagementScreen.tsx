@@ -33,6 +33,7 @@ import {
 } from '../db/queries'
 import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
 import { useRole } from '../lib/useRole'
+import { notifyNewUpload, notifyContactRequest, notifyContactAccepted } from '../lib/notifications'
 
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
 
@@ -161,6 +162,7 @@ export default function ManagementScreen() {
             updatedAt: now,
             synced: false,
           })
+          await notifyNewUpload(userId, formData.title)
         }
       } else if (activeSection === 'files') {
         if (!formData.fileUrl?.trim()) {
@@ -184,6 +186,7 @@ export default function ManagementScreen() {
             updatedAt: now,
             synced: false,
           })
+          await notifyNewUpload(userId, formData.title)
         }
       } else if (activeSection === 'announcements') {
         if (!formData.content?.trim()) {
@@ -205,6 +208,7 @@ export default function ManagementScreen() {
             updatedAt: now,
             synced: false,
           })
+          await notifyNewUpload(userId, formData.title)
         }
       } else if (activeSection === 'versions') {
         if (!formData.youtubeUrl?.trim()) {
@@ -228,6 +232,7 @@ export default function ManagementScreen() {
             updatedAt: now,
             synced: false,
           })
+          await notifyNewUpload(userId, formData.title)
         }
       }
 

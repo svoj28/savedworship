@@ -1,4 +1,3 @@
-// screens/SignInScreen.tsx
 import React, { useState } from 'react'
 import {
   View,
@@ -11,6 +10,7 @@ import {
   Alert,
   Platform,
 } from 'react-native'
+import Ionicons from '@expo/vector-icons/Ionicons'
 import { signInWithEmail, signInWithGoogle } from '../lib/auth'
 
 interface Props {
@@ -22,6 +22,7 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
@@ -44,11 +45,7 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
     setLoading(true)
     const { error } = await signInWithGoogle()
     setLoading(false)
-
-    if (error) {
-      Alert.alert('Google Sign In Failed', error.message)
-    }
-    // Note: Google OAuth completes via deeplink, will trigger onSignInSuccess via state change
+    if (error) Alert.alert('Google Sign In Failed', error.message)
   }
 
   return (
@@ -67,26 +64,34 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
           editable={!loading}
         />
 
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#999"
-          secureTextEntry
-          value={password}
-          onChangeText={setPassword}
-          editable={!loading}
-        />
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Password"
+            placeholderTextColor="#999"
+            secureTextEntry={!showPassword}
+            value={password}
+            onChangeText={setPassword}
+            editable={!loading}
+          />
+          <TouchableOpacity
+            style={styles.eyeButton}
+            onPress={() => setShowPassword(prev => !prev)}
+          >
+            <Ionicons
+              name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+              size={22}
+              color="#999"
+            />
+          </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={[styles.button, styles.primaryButton, loading && styles.disabledButton]}
           onPress={handleSignIn}
           disabled={loading}
         >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Sign In</Text>
-          )}
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign In</Text>}
         </TouchableOpacity>
 
         {Platform.OS !== 'web' && (
@@ -108,61 +113,25 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  content: {
-    padding: 20,
-    justifyContent: 'center',
-    minHeight: '100%',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 30,
-    textAlign: 'center',
-    color: '#333',
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
+  content: { padding: 20, justifyContent: 'center', minHeight: '100%' },
+  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 30, textAlign: 'center', color: '#333' },
   input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 15,
-    fontSize: 16,
-    color: '#333',
+    borderWidth: 1, borderColor: '#ddd', borderRadius: 8,
+    padding: 12, marginBottom: 15, fontSize: 16, color: '#333',
   },
-  button: {
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+  passwordContainer: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 1, borderColor: '#ddd', borderRadius: 8,
     marginBottom: 15,
   },
-  primaryButton: {
-    backgroundColor: '#007AFF',
-  },
-  googleButton: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  googleButtonText: {
-    color: '#333',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  link: {
-    color: '#007AFF',
-    textAlign: 'center',
-    fontSize: 14,
-  },
+  passwordInput: { flex: 1, padding: 12, fontSize: 16, color: '#333' },
+  eyeButton: { padding: 12 },
+  button: { paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 15 },
+  primaryButton: { backgroundColor: '#007AFF' },
+  googleButton: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd' },
+  disabledButton: { opacity: 0.6 },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  googleButtonText: { color: '#333', fontSize: 16, fontWeight: 'bold' },
+  link: { color: '#007AFF', textAlign: 'center', fontSize: 14 },
 })

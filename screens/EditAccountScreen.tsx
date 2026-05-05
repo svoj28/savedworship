@@ -10,6 +10,9 @@ import {
   ActivityIndicator,
   Image,
   Switch,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as ImagePicker from 'expo-image-picker'
@@ -17,6 +20,7 @@ import { getCurrentUser } from '../lib/auth'
 import { getUserProfileByUserId, createUserProfile, updateUserProfile } from '../db/queries'
 import { UserProfile } from '../db/models'
 import { uploadAvatar } from '../lib/uploadAvatar'
+import { supabase } from '../lib/supabase'
 
 const ROLES = [
   'Vocals',
@@ -37,6 +41,7 @@ const COLORS = {
   veryLightGray: '#f0f0f0',
   offWhite: '#fafafa',
   white: '#ffffff',
+  error: '#c0392b',
 }
 
 interface FormData {
@@ -45,6 +50,12 @@ interface FormData {
   avatarUrl: string
   roles: string
   isPrivate: boolean
+}
+
+interface PasswordForm {
+  currentPassword: string
+  newPassword: string
+  confirmPassword: string
 }
 
 export default function EditAccountScreen() {
@@ -59,6 +70,19 @@ export default function EditAccountScreen() {
     roles: '',
     isPrivate: false,
   })
+
+  // Change Password Modal state
+  const [passwordModalVisible, setPasswordModalVisible] = useState(false)
+  const [passwordForm, setPasswordForm] = useState<PasswordForm>({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  })
+  const [passwordError, setPasswordError] = useState('')
+  const [changingPassword, setChangingPassword] = useState(false)
+  const [showCurrent, setShowCurrent] = useState(false)
+  const [showNew, setShowNew] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
 
   useEffect(() => {
     loadUserProfile()
@@ -105,7 +129,6 @@ export default function EditAccountScreen() {
     if (!user) return
     try {
       setSaving(true)
-      // Prepend [private] marker to bio if privacy is on
       const bioToSave = formData.isPrivate
         ? `[private]${formData.bio}`
         : formData.bio
@@ -156,12 +179,78 @@ export default function EditAccountScreen() {
     }
   }
 
-  const handleChangePassword = () => {
-    Alert.alert(
-      'Change Password',
-      'Password change functionality would require backend implementation.\n\nFor now, use Supabase dashboard or implement via auth flow.'
-    )
+  // ── Change Password ──────────────────────────────────────────────────────────
+
+  const openPasswordModal = () => {
+    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
+    setPasswordError('')
+    setShowCurrent(false)
+    setShowNew(false)
+    setShowConfirm(false)
+    setPasswordModalVisible(true)
   }
+
+  const closePasswordModal = () => {
+    setPasswordModalVisible(false)
+  }
+
+  const handleChangePassword = async () => {
+    const { currentPassword, newPassword, confirmPassword } = passwordForm
+    setPasswordError('')
+
+    // Client-side validation
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError('All fields are required.')
+      return
+    }
+    if (newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters.')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New passwords do not match.')
+      return
+    }
+    if (currentPassword === newPassword) {
+      setPasswordError('New password must differ from current password.')
+      return
+    }
+
+    try {
+      setChangingPassword(true)
+
+      // Step 1: Re-authenticate with current password to verify it's correct
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: currentPassword,
+      })
+
+      if (signInError) {
+        setPasswordError('Current password is incorrect.')
+        return
+      }
+
+      // Step 2: Update to new password
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword,
+      })
+
+      if (updateError) {
+        setPasswordError(updateError.message || 'Failed to update password.')
+        return
+      }
+
+      closePasswordModal()
+      Alert.alert('Success', 'Password changed successfully.')
+    } catch (err) {
+      console.error('Error changing password:', err)
+      setPasswordError('An unexpected error occurred. Please try again.')
+    } finally {
+      setChangingPassword(false)
+    }
+  }
+
+  // ── Delete Account ───────────────────────────────────────────────────────────
 
   const handleDeleteAccount = () => {
     Alert.alert(
@@ -212,193 +301,327 @@ export default function EditAccountScreen() {
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* Avatar Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Profile Picture</Text>
-        <View style={styles.avatarPreviewContainer}>
-          {formData.avatarUrl ? (
-            <Image source={{ uri: formData.avatarUrl }} style={styles.avatarPreview} />
-          ) : (
-            <View style={[styles.avatarPreview, styles.avatarPlaceholder]}>
-              <Ionicons name="person" size={64} color={COLORS.mediumGray} />
-            </View>
-          )}
-        </View>
-        <TouchableOpacity style={styles.uploadButton} onPress={handlePickImage}>
-          <Ionicons name="image" size={20} color={COLORS.white} />
-          <Text style={styles.uploadButtonText}>Choose Photo</Text>
-        </TouchableOpacity>
-        <Text style={styles.hint}>Tap to select an image from your device</Text>
-      </View>
-
-      {/* Nickname Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Nickname</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Your nickname"
-          value={formData.nickname}
-          onChangeText={text => setFormData({ ...formData, nickname: text })}
-          maxLength={30}
-        />
-        <Text style={styles.hint}>{formData.nickname.length}/30 characters</Text>
-      </View>
-
-      {/* Bio Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Bio</Text>
-        <TextInput
-          style={[styles.input, styles.bioInput]}
-          placeholder="Tell others about yourself..."
-          value={formData.bio}
-          onChangeText={text => setFormData({ ...formData, bio: text })}
-          multiline
-          numberOfLines={4}
-          maxLength={200}
-        />
-        <Text style={styles.hint}>{formData.bio.length}/200 characters</Text>
-      </View>
-
-      {/* Roles Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Your Roles</Text>
-        <Text style={styles.hint}>Select all roles you have in your worship team</Text>
-        <View style={styles.instrumentsGrid}>
-          {ROLES.map(role => (
-            <TouchableOpacity
-              key={role}
-              style={[
-                styles.instrumentButton,
-                selectedInstruments.includes(role) && styles.instrumentButtonActive,
-              ]}
-              onPress={() => toggleInstrument(role)}
-            >
-              <Text
-                style={[
-                  styles.instrumentButtonText,
-                  selectedInstruments.includes(role) && styles.instrumentButtonTextActive,
-                ]}
-              >
-                {role}
-              </Text>
-              {selectedInstruments.includes(role) && (
-                <Ionicons name="checkmark" size={16} color={COLORS.white} style={styles.instrumentCheck} />
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Privacy Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Privacy</Text>
-        <View style={styles.privacyRow}>
-          <View style={styles.privacyInfo}>
-            <View style={styles.privacyLabelRow}>
-              <Ionicons
-                name={formData.isPrivate ? 'lock-closed' : 'lock-open'}
-                size={18}
-                color={COLORS.black}
-              />
-              <Text style={styles.privacyLabel}>
-                {formData.isPrivate ? 'Private Profile' : 'Public Profile'}
-              </Text>
-            </View>
-            <Text style={styles.privacyDescription}>
-              {formData.isPrivate
-                ? 'Only your name and photo are visible to others. Bio and roles are hidden.'
-                : 'Your full profile (bio, roles) is visible to everyone in the community.'}
-            </Text>
+    <>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+        {/* Avatar Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Profile Picture</Text>
+          <View style={styles.avatarPreviewContainer}>
+            {formData.avatarUrl ? (
+              <Image source={{ uri: formData.avatarUrl }} style={styles.avatarPreview} />
+            ) : (
+              <View style={[styles.avatarPreview, styles.avatarPlaceholder]}>
+                <Ionicons name="person" size={64} color={COLORS.mediumGray} />
+              </View>
+            )}
           </View>
-          <Switch
-            value={formData.isPrivate}
-            onValueChange={val => setFormData({ ...formData, isPrivate: val })}
-            trackColor={{ false: COLORS.lightGray, true: COLORS.mediumGray }}
-            thumbColor={formData.isPrivate ? COLORS.black : COLORS.white}
+          <TouchableOpacity style={styles.uploadButton} onPress={handlePickImage}>
+            <Ionicons name="image" size={20} color={COLORS.white} />
+            <Text style={styles.uploadButtonText}>Choose Photo</Text>
+          </TouchableOpacity>
+          <Text style={styles.hint}>Tap to select an image from your device</Text>
+        </View>
+
+        {/* Nickname Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Nickname</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Your nickname"
+            value={formData.nickname}
+            onChangeText={text => setFormData({ ...formData, nickname: text })}
+            maxLength={30}
           />
+          <Text style={styles.hint}>{formData.nickname.length}/30 characters</Text>
         </View>
 
-        {/* Visual preview */}
-        <View style={styles.privacyPreview}>
-          <Text style={styles.privacyPreviewLabel}>What others see:</Text>
-          <View style={styles.privacyPreviewCard}>
-            <View style={styles.privacyPreviewAvatar}>
-              {formData.avatarUrl ? (
-                <Image source={{ uri: formData.avatarUrl }} style={styles.privacyPreviewImg} />
-              ) : (
-                <View style={[styles.privacyPreviewImg, styles.privacyPreviewAvatarFallback]}>
-                  <Ionicons name="person" size={22} color={COLORS.mediumGray} />
-                </View>
-              )}
-            </View>
-            <View style={styles.privacyPreviewText}>
-              <Text style={styles.privacyPreviewName}>
-                {formData.nickname || 'Your Name'}
+        {/* Bio Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Bio</Text>
+          <TextInput
+            style={[styles.input, styles.bioInput]}
+            placeholder="Tell others about yourself..."
+            value={formData.bio}
+            onChangeText={text => setFormData({ ...formData, bio: text })}
+            multiline
+            numberOfLines={4}
+            maxLength={200}
+          />
+          <Text style={styles.hint}>{formData.bio.length}/200 characters</Text>
+        </View>
+
+        {/* Roles Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Your Roles</Text>
+          <Text style={styles.hint}>Select all roles you have in your worship team</Text>
+          <View style={styles.instrumentsGrid}>
+            {ROLES.map(role => (
+              <TouchableOpacity
+                key={role}
+                style={[
+                  styles.instrumentButton,
+                  selectedInstruments.includes(role) && styles.instrumentButtonActive,
+                ]}
+                onPress={() => toggleInstrument(role)}
+              >
+                <Text
+                  style={[
+                    styles.instrumentButtonText,
+                    selectedInstruments.includes(role) && styles.instrumentButtonTextActive,
+                  ]}
+                >
+                  {role}
+                </Text>
+                {selectedInstruments.includes(role) && (
+                  <Ionicons name="checkmark" size={16} color={COLORS.white} style={styles.instrumentCheck} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Privacy Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Privacy</Text>
+          <View style={styles.privacyRow}>
+            <View style={styles.privacyInfo}>
+              <View style={styles.privacyLabelRow}>
+                <Ionicons
+                  name={formData.isPrivate ? 'lock-closed' : 'lock-open'}
+                  size={18}
+                  color={COLORS.black}
+                />
+                <Text style={styles.privacyLabel}>
+                  {formData.isPrivate ? 'Private Profile' : 'Public Profile'}
+                </Text>
+              </View>
+              <Text style={styles.privacyDescription}>
+                {formData.isPrivate
+                  ? 'Only your name and photo are visible to others. Bio and roles are hidden.'
+                  : 'Your full profile (bio, roles) is visible to everyone in the community.'}
               </Text>
-              {formData.isPrivate ? (
-                <View style={styles.privacyHiddenBadge}>
-                  <Ionicons name="lock-closed" size={10} color={COLORS.mediumGray} />
-                  <Text style={styles.privacyHiddenText}>Profile hidden</Text>
-                </View>
-              ) : (
-                <>
-                  {formData.bio ? (
-                    <Text style={styles.privacyPreviewBio} numberOfLines={2}>
-                      {formData.bio}
-                    </Text>
-                  ) : null}
-                  {selectedInstruments.length > 0 && (
-                    <Text style={styles.privacyPreviewRoles} numberOfLines={1}>
-                      {selectedInstruments.join(' · ')}
-                    </Text>
-                  )}
-                </>
-              )}
+            </View>
+            <Switch
+              value={formData.isPrivate}
+              onValueChange={val => setFormData({ ...formData, isPrivate: val })}
+              trackColor={{ false: COLORS.lightGray, true: COLORS.mediumGray }}
+              thumbColor={formData.isPrivate ? COLORS.black : COLORS.white}
+            />
+          </View>
+
+          {/* Visual preview */}
+          <View style={styles.privacyPreview}>
+            <Text style={styles.privacyPreviewLabel}>What others see:</Text>
+            <View style={styles.privacyPreviewCard}>
+              <View style={styles.privacyPreviewAvatar}>
+                {formData.avatarUrl ? (
+                  <Image source={{ uri: formData.avatarUrl }} style={styles.privacyPreviewImg} />
+                ) : (
+                  <View style={[styles.privacyPreviewImg, styles.privacyPreviewAvatarFallback]}>
+                    <Ionicons name="person" size={22} color={COLORS.mediumGray} />
+                  </View>
+                )}
+              </View>
+              <View style={styles.privacyPreviewText}>
+                <Text style={styles.privacyPreviewName}>
+                  {formData.nickname || 'Your Name'}
+                </Text>
+                {formData.isPrivate ? (
+                  <View style={styles.privacyHiddenBadge}>
+                    <Ionicons name="lock-closed" size={10} color={COLORS.mediumGray} />
+                    <Text style={styles.privacyHiddenText}>Profile hidden</Text>
+                  </View>
+                ) : (
+                  <>
+                    {formData.bio ? (
+                      <Text style={styles.privacyPreviewBio} numberOfLines={2}>
+                        {formData.bio}
+                      </Text>
+                    ) : null}
+                    {selectedInstruments.length > 0 && (
+                      <Text style={styles.privacyPreviewRoles} numberOfLines={1}>
+                        {selectedInstruments.join(' · ')}
+                      </Text>
+                    )}
+                  </>
+                )}
+              </View>
             </View>
           </View>
         </View>
-      </View>
 
-      {/* Save Button */}
-      <TouchableOpacity
-        style={[styles.primaryButton, saving && styles.disabledButton]}
-        onPress={handleSaveProfile}
-        disabled={saving}
+        {/* Save Button */}
+        <TouchableOpacity
+          style={[styles.primaryButton, saving && styles.disabledButton]}
+          onPress={handleSaveProfile}
+          disabled={saving}
+        >
+          {saving ? (
+            <ActivityIndicator color={COLORS.white} />
+          ) : (
+            <>
+              <Ionicons name="save" size={20} color={COLORS.white} />
+              <Text style={styles.primaryButtonText}>Save Profile</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/* Account Actions Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Account</Text>
+          <TouchableOpacity style={styles.actionButton} onPress={openPasswordModal}>
+            <Ionicons name="lock-closed" size={20} color={COLORS.black} />
+            <Text style={styles.actionButtonText}>Change Password</Text>
+            <Ionicons name="chevron-forward" size={20} color={COLORS.lightGray} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={handleDeleteAccount}>
+            <Ionicons name="trash" size={20} color={COLORS.black} />
+            <Text style={[styles.actionButtonText, styles.deleteText]}>Delete Account</Text>
+            <Ionicons name="chevron-forward" size={20} color={COLORS.lightGray} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Account Info */}
+        <View style={styles.infoSection}>
+          <Text style={styles.infoLabel}>Email:</Text>
+          <Text style={styles.infoValue}>{user?.email}</Text>
+        </View>
+
+        <View style={styles.spacer} />
+      </ScrollView>
+
+      {/* ── Change Password Modal ──────────────────────────────────────────────── */}
+      <Modal
+        visible={passwordModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={closePasswordModal}
       >
-        {saving ? (
-          <ActivityIndicator color={COLORS.white} />
-        ) : (
-          <>
-            <Ionicons name="save" size={20} color={COLORS.white} />
-            <Text style={styles.primaryButtonText}>Save Profile</Text>
-          </>
-        )}
-      </TouchableOpacity>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={styles.modalContainer}>
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Password</Text>
+              <TouchableOpacity onPress={closePasswordModal} style={styles.modalCloseButton}>
+                <Ionicons name="close" size={22} color={COLORS.darkGray} />
+              </TouchableOpacity>
+            </View>
 
-      {/* Account Actions Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Account</Text>
-        <TouchableOpacity style={styles.actionButton} onPress={handleChangePassword}>
-          <Ionicons name="lock-closed" size={20} color={COLORS.black} />
-          <Text style={styles.actionButtonText}>Change Password</Text>
-          <Ionicons name="chevron-forward" size={20} color={COLORS.lightGray} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionButton} onPress={handleDeleteAccount}>
-          <Ionicons name="trash" size={20} color={COLORS.black} />
-          <Text style={[styles.actionButtonText, styles.deleteText]}>Delete Account</Text>
-          <Ionicons name="chevron-forward" size={20} color={COLORS.lightGray} />
-        </TouchableOpacity>
-      </View>
+            <Text style={styles.modalSubtitle}>
+              Enter your current password, then choose a new one.
+            </Text>
 
-      {/* Account Info */}
-      <View style={styles.infoSection}>
-        <Text style={styles.infoLabel}>Email:</Text>
-        <Text style={styles.infoValue}>{user?.email}</Text>
-      </View>
+            {/* Current Password */}
+            <Text style={styles.modalFieldLabel}>Current Password</Text>
+            <View style={styles.passwordInputRow}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Enter current password"
+                placeholderTextColor={COLORS.lightGray}
+                secureTextEntry={!showCurrent}
+                value={passwordForm.currentPassword}
+                onChangeText={text => setPasswordForm({ ...passwordForm, currentPassword: text })}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                onPress={() => setShowCurrent(v => !v)}
+                style={styles.eyeButton}
+              >
+                <Ionicons
+                  name={showCurrent ? 'eye-off' : 'eye'}
+                  size={20}
+                  color={COLORS.mediumGray}
+                />
+              </TouchableOpacity>
+            </View>
 
-      <View style={styles.spacer} />
-    </ScrollView>
+            {/* New Password */}
+            <Text style={styles.modalFieldLabel}>New Password</Text>
+            <View style={styles.passwordInputRow}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="At least 8 characters"
+                placeholderTextColor={COLORS.lightGray}
+                secureTextEntry={!showNew}
+                value={passwordForm.newPassword}
+                onChangeText={text => setPasswordForm({ ...passwordForm, newPassword: text })}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                onPress={() => setShowNew(v => !v)}
+                style={styles.eyeButton}
+              >
+                <Ionicons
+                  name={showNew ? 'eye-off' : 'eye'}
+                  size={20}
+                  color={COLORS.mediumGray}
+                />
+              </TouchableOpacity>
+            </View>
+
+            {/* Confirm New Password */}
+            <Text style={styles.modalFieldLabel}>Confirm New Password</Text>
+            <View style={styles.passwordInputRow}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Repeat new password"
+                placeholderTextColor={COLORS.lightGray}
+                secureTextEntry={!showConfirm}
+                value={passwordForm.confirmPassword}
+                onChangeText={text => setPasswordForm({ ...passwordForm, confirmPassword: text })}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                onPress={() => setShowConfirm(v => !v)}
+                style={styles.eyeButton}
+              >
+                <Ionicons
+                  name={showConfirm ? 'eye-off' : 'eye'}
+                  size={20}
+                  color={COLORS.mediumGray}
+                />
+              </TouchableOpacity>
+            </View>
+
+            {/* Inline error */}
+            {passwordError ? (
+              <View style={styles.errorRow}>
+                <Ionicons name="alert-circle" size={15} color={COLORS.error} />
+                <Text style={styles.errorText}>{passwordError}</Text>
+              </View>
+            ) : null}
+
+            {/* Actions */}
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalCancelButton}
+                onPress={closePasswordModal}
+                disabled={changingPassword}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalConfirmButton, changingPassword && styles.disabledButton]}
+                onPress={handleChangePassword}
+                disabled={changingPassword}
+              >
+                {changingPassword ? (
+                  <ActivityIndicator color={COLORS.white} size="small" />
+                ) : (
+                  <Text style={styles.modalConfirmText}>Update Password</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </>
   )
 }
 
@@ -520,7 +743,6 @@ const styles = StyleSheet.create({
   instrumentCheck: {
     marginLeft: 6,
   },
-  // Privacy styles
   privacyRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -687,5 +909,119 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: 40,
+  },
+
+  // ── Modal styles ─────────────────────────────────────────────────────────────
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalContainer: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.black,
+    letterSpacing: 0.2,
+  },
+  modalCloseButton: {
+    padding: 4,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: COLORS.mediumGray,
+    marginBottom: 20,
+    lineHeight: 18,
+  },
+  modalFieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.darkGray,
+    marginBottom: 6,
+    letterSpacing: 0.2,
+  },
+  passwordInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    borderRadius: 6,
+    backgroundColor: COLORS.offWhite,
+    marginBottom: 14,
+    paddingRight: 10,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: COLORS.black,
+    fontWeight: '500',
+  },
+  eyeButton: {
+    padding: 4,
+  },
+  errorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fdf2f2',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#f5c6c6',
+  },
+  errorText: {
+    fontSize: 13,
+    color: COLORS.error,
+    fontWeight: '500',
+    flex: 1,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  modalCancelButton: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: COLORS.lightGray,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.darkGray,
+  },
+  modalConfirmButton: {
+    flex: 2,
+    paddingVertical: 13,
+    borderRadius: 6,
+    backgroundColor: COLORS.black,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalConfirmText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.white,
+    letterSpacing: 0.2,
   },
 })

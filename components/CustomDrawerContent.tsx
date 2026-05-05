@@ -122,7 +122,7 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
         {/* App title */}
         <View style={styles.appTitleRow}>
           <Ionicons name="musical-notes" size={14} color="#999" />
-          <Text style={styles.appTitle}>WORSHIP TEAM</Text>
+          <Text style={styles.appTitle}>SAVED WORSHIP</Text>
         </View>
 
         {/* Avatar & User Info */}

@@ -22,6 +22,11 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "pan",
+      "statusBar": {
+        "translucent": true,
+        "backgroundColor": "#00000000"
+      },
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
@@ -34,17 +39,17 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-  "expo-sqlite",
-  "expo-audio",
-  "expo-font",
-  "expo-asset",
-  [
-    "expo-camera",
-    {
-      "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan QR codes."
-    }
-  ],
-  ["expo-notifications", { "icon": "./assets/icon.png", "color": "#007AFF" }]
-]
+      "expo-sqlite",
+      "expo-audio",
+      "expo-font",
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan QR codes."
+        }
+      ],
+      ["expo-notifications", { "icon": "./assets/icon.png", "color": "#007AFF" }]
+    ]
   }
 }

@@ -3,11 +3,11 @@ import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import {
   ActivityIndicator,
   View,
   Text,
-  Alert,
   Modal,
   TouchableOpacity,
   StyleSheet,
@@ -45,6 +45,7 @@ import AddContactsScreen from './screens/AddContactsScreen'
 import EditAccountScreen from './screens/EditAccountScreen'
 import { useRole } from '../SavedWorshipMusicTool/lib/useRole'
 import AudioToolsScreen from './screens/AudioToolsScreen'
+import { StatusBar as RNStatusBar } from 'react-native'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
@@ -53,16 +54,26 @@ const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
 
 // ─── Theme Context ────────────────────────────────────────────────────────────
-
 type ThemeMode = 'dark' | 'light'
 
-interface ThemeContextType {
-  mode: ThemeMode
-  toggle: () => void
-  colors: typeof DARK_COLORS
+type AppColors = {
+  bg: string
+  surface: string
+  border: string
+  text: string
+  textSub: string
+  icon: string
+  iconInactive: string
+  tabBar: string
+  header: string
+  overlay: string
+  accent: string
+  accentText: string
+  hairline: string
+  statusBar: 'light' | 'dark'
 }
 
-const DARK_COLORS = {
+const DARK_COLORS: AppColors = {
   bg: '#0a0a0a',
   surface: '#141414',
   border: 'rgba(255,255,255,0.1)',
@@ -76,10 +87,10 @@ const DARK_COLORS = {
   accent: '#ffffff',
   accentText: '#0a0a0a',
   hairline: 'rgba(255,255,255,0.1)',
-  statusBar: 'light' as const,
+  statusBar: 'light',
 }
 
-const LIGHT_COLORS = {
+const LIGHT_COLORS: AppColors = {
   bg: '#f5f5f5',
   surface: '#ffffff',
   border: 'rgba(0,0,0,0.08)',
@@ -93,7 +104,13 @@ const LIGHT_COLORS = {
   accent: '#0a0a0a',
   accentText: '#ffffff',
   hairline: 'rgba(0,0,0,0.1)',
-  statusBar: 'dark' as const,
+  statusBar: 'dark',
+}
+
+interface ThemeContextType {
+  mode: ThemeMode
+  toggle: () => void
+  colors: AppColors
 }
 
 export const ThemeContext = createContext<ThemeContextType>({
@@ -224,11 +241,13 @@ function PersonalNotesStack() {
 
 // ─── Shared header options factory ───────────────────────────────────────────
 
-function makeHeaderOptions(colors: typeof DARK_COLORS) {
+function makeHeaderOptions(colors: AppColors) {
   return {
     headerShown: true,
     headerTintColor: colors.text,
-    headerStyle: { backgroundColor: colors.header },
+    headerStyle: { 
+      backgroundColor: colors.header,
+    },
     headerShadowVisible: false,
     headerTitleStyle: {
       fontWeight: '700' as const,
@@ -246,10 +265,10 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (v: boolean) => vo
 
   const tabIcon = (route: any, focused: boolean, color: string, size: number) => {
     const icons: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Ionicons.glyphMap]> = {
-      ChordListsTab:   ['musical-notes',  'musical-notes-outline'],
-      PersonalNotesTab:['shield',          'shield-outline'],
-      ManagementTab:   ['settings',        'settings-outline'],
-      ConversationTab: ['chatbubbles',     'chatbubbles-outline'],
+      ChordListsTab:    ['musical-notes',  'musical-notes-outline'],
+      PersonalNotesTab: ['shield',          'shield-outline'],
+      ManagementTab:    ['settings',        'settings-outline'],
+      ConversationTab:  ['chatbubbles',     'chatbubbles-outline'],
     }
     const [active, inactive] = icons[route.name] ?? ['ellipse', 'ellipse-outline']
     return <Ionicons name={focused ? active : inactive} size={size} color={color} />
@@ -370,12 +389,12 @@ function AppTabs({
 
 // ─── Loading Screen ───────────────────────────────────────────────────────────
 
-function LoadingScreen({ colors }: { colors: typeof DARK_COLORS }) {
+function LoadingScreen({ colors }: { colors: AppColors }) {
   return (
     <View style={[loadStyles.root, { backgroundColor: colors.bg }]}>
       <View style={[loadStyles.wordmarkRow]}>
-        <Text style={[loadStyles.wordmark, { color: colors.text }]}>WORSHIP</Text>
-        <Text style={[loadStyles.wordmarkLight, { color: colors.textSub }]}>TEAM</Text>
+        <Text style={[loadStyles.wordmark, { color: colors.text }]}>S A V E D</Text>
+        <Text style={[loadStyles.wordmarkLight, { color: colors.textSub }]}>WORSHIP</Text>
       </View>
       <View style={[loadStyles.spinnerWrap, { borderColor: colors.hairline }]}>
         <ActivityIndicator size="small" color={colors.text} />
@@ -473,7 +492,6 @@ function AppContent() {
     }
   }, [user, dbReady])
 
-  // Build nav theme from mode
   const navTheme = mode === 'dark'
     ? {
         ...DarkTheme,
@@ -492,8 +510,9 @@ function AppContent() {
     return <LoadingScreen colors={colors} />
   }
 
-  return (
-    <NotificationProvider userId={user?.id ?? null}>
+ return (
+  <NotificationProvider userId={user?.id ?? null}>
+    <View style={{ flex: 1, paddingTop: RNStatusBar.currentHeight ?? 0, backgroundColor: colors.header }}>
       <NavigationContainer theme={navTheme}>
         <StatusBar style={colors.statusBar} />
         {user ? (
@@ -502,8 +521,9 @@ function AppContent() {
           <AuthStack />
         )}
       </NavigationContainer>
-    </NotificationProvider>
-  )
+    </View>
+  </NotificationProvider>
+)
 }
 
 export default function App() {
@@ -511,12 +531,12 @@ export default function App() {
   const colors = mode === 'dark' ? DARK_COLORS : LIGHT_COLORS
 
   return (
-    
-    // value={{ mode, toggle: () => setMode(m => m === 'dark' ? 'light' : 'dark'), colors}}
-    <ThemeContext.Provider 
-      value={{ mode, toggle: () => setMode(m => m === 'dark' ? 'light' : 'dark'), colors }}
-    >
-      <AppContent />
-    </ThemeContext.Provider>
+    <SafeAreaProvider>
+      <ThemeContext.Provider
+        value={{ mode, toggle: () => setMode(m => m === 'dark' ? 'light' : 'dark'), colors }}
+      >
+        <AppContent />
+      </ThemeContext.Provider>
+    </SafeAreaProvider>
   )
 }

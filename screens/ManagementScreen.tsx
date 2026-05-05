@@ -36,6 +36,7 @@ import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../d
 import { useRole } from '../lib/useRole'
 import { notifyNewUpload } from '../lib/notifications'
 
+
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
 
 interface FormData {
@@ -57,7 +58,7 @@ interface SectionConfig {
 
 const SECTIONS: SectionConfig[] = [
   { key: 'lineup',        label: 'Lineup',         icon: 'list-outline',        countKey: 'lineups',       countLabel: 'items'   },
-  { key: 'conversation',  label: 'Conversation',   icon: 'chatbubbles-outline', countKey: undefined,       countLabel: 'messages'},
+  { key: 'conversation',  label: 'Important Messages',   icon: 'chatbubbles-outline', countKey: undefined,       countLabel: 'Messages needed to be pinned'   },
   { key: 'files',         label: 'Files',          icon: 'folder-outline',      countKey: 'files',         countLabel: 'files'   },
   { key: 'announcements', label: 'Announcements',  icon: 'megaphone-outline',   countKey: 'announcements', countLabel: 'items'   },
   { key: 'versions',      label: 'Versions',       icon: 'play-circle-outline', countKey: 'versions',      countLabel: 'videos'  },
@@ -65,7 +66,7 @@ const SECTIONS: SectionConfig[] = [
 
 const SECTION_TITLES: Record<Exclude<Section, null>, string> = {
   lineup:        'Lineup Posted',
-  conversation:  'Conversation',
+  conversation:  'Important Messages',
   files:         'File Dropper',
   announcements: 'Announcements',
   versions:      'Version Dropper',

@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/SavedLOGO.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/SavedLOGO.png",
@@ -13,12 +13,14 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.svojworship.savedworship"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/SavedLOGO.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#ffffff",
+        "monochromeImage": "./assets/SavedLOGO.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
@@ -29,11 +31,9 @@
       },
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-        "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
-      "package": "com.anonymous.SavedWorshipMusicTool"
+      "package": "com.svojworship.savedworship"
     },
     "web": {
       "favicon": "./assets/SavedLOGO.png"
@@ -44,12 +44,26 @@
       "expo-font",
       "expo-asset",
       [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24
+          }
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera to scan QR codes."
         }
       ],
-      ["expo-notifications", { "icon": "./assets/SavedLOGO.png", "color": "#007AFF" }]
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/SavedLOGO.png",
+          "color": "#007AFF"
+        }
+      ]
     ]
   }
 }

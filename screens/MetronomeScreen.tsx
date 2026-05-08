@@ -424,26 +424,26 @@ export default function MetronomeScreen() {
     }
   }, [bpm])
 
-  const handleTapTempo = async () => {
-    const now = Date.now()
-    const recentTaps = tapTempo.filter(t => now - t < 5000)
-    if (recentTaps.length > 0) {
-      const intervals: number[] = []
-      for (let i = 1; i < recentTaps.length; i++) {
-        intervals.push(recentTaps[i] - recentTaps[i - 1])
-      }
-      if (intervals.length > 0) {
-        const averageInterval = intervals.reduce((a, b) => a + b) / intervals.length
-        const calculatedBpm = Math.round(60000 / averageInterval)
-        setBpm(Math.max(40, Math.min(300, calculatedBpm)))
-        setActivePreset(null)
-      }
-    }
-    await playClickSound()
-    setTapTempo([...recentTaps, now])
-  }
+  // const handleTapTempo = async () => {
+  //   const now = Date.now()
+  //   const recentTaps = tapTempo.filter(t => now - t < 5000)
+  //   if (recentTaps.length > 0) {
+  //     const intervals: number[] = []
+  //     for (let i = 1; i < recentTaps.length; i++) {
+  //       intervals.push(recentTaps[i] - recentTaps[i - 1])
+  //     }
+  //     if (intervals.length > 0) {
+  //       const averageInterval = intervals.reduce((a, b) => a + b) / intervals.length
+  //       const calculatedBpm = Math.round(60000 / averageInterval)
+  //       setBpm(Math.max(40, Math.min(300, calculatedBpm)))
+  //       setActivePreset(null)
+  //     }
+  //   }
+  //   await playClickSound()
+  //   setTapTempo([...recentTaps, now])
+  // }
 
-  const resetTapTempo = () => setTapTempo([])
+  // const resetTapTempo = () => setTapTempo([])
 
   // ─── Derived lists ────────────────────────────────────────────────────────
 
@@ -503,7 +503,7 @@ export default function MetronomeScreen() {
       )}
 
       {/* Tap Tempo */}
-      <View style={styles.tapTempoSection}>
+      {/* <View style={styles.tapTempoSection}>
         <Text style={styles.tapTempoLabel}>Tap Tempo</Text>
         <TouchableOpacity style={styles.tapTempoButton} onPress={handleTapTempo}>
           <Text style={styles.tapTempoButtonText}>Tap Here</Text>
@@ -513,7 +513,7 @@ export default function MetronomeScreen() {
             <Text style={styles.resetButtonText}>Reset ({tapTempo.length} taps)</Text>
           </TouchableOpacity>
         )}
-      </View>
+      </View> */}
 
       {/* Default / Quick BPM Presets */}
       <View style={styles.presetsContainer}>

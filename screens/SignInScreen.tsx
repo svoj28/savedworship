@@ -14,6 +14,7 @@ import {
   StatusBar,
   Dimensions,
   Modal,
+  Image
 } from 'react-native'
 import Svg, { Circle, Line, G, Ellipse } from 'react-native-svg'
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -115,10 +116,8 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
   }
 
   const handleGoogleSignIn = async () => {
-    setLoading(true)
-    const { error } = await signInWithGoogle()
-    setLoading(false)
-    if (error) Alert.alert('Google Sign In Failed', error.message)
+    // Placeholder: Google Sign-In not yet fully integrated
+    Alert.alert('Feature Coming Soon', 'Continue with Google will be available shortly.')
   }
 
   // ── Forgot Password ──────────────────────────────────────────────────────────
@@ -186,10 +185,12 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
             {/* Logo area */}
             <View style={styles.logoArea}>
               <View style={styles.logoBox}>
-                <Ionicons name="musical-notes" size={28} color="#111" />
+                <Image
+                  source={require('../assets/SavedLOGOnobg.png')}
+                  style={{ width: 160, height: 160, borderRadius: 10 }}
+                  resizeMode="contain"
+                />
               </View>
-              <Text style={styles.appName}>S A V E D  W O R S H I P</Text>
-              <Text style={styles.appSub}>MUSIC TOOL</Text>
             </View>
 
             {/* Heading */}
@@ -411,7 +412,7 @@ const styles = StyleSheet.create({
   logoArea: { alignItems: 'center', marginBottom: 40 },
   logoBox: {
     width: 60, height: 60, borderRadius: 18,
-    backgroundColor: '#EBEBEB',
+    
     justifyContent: 'center', alignItems: 'center',
     marginBottom: 12,
   },

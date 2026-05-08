@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
+  Image
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 
@@ -23,6 +24,7 @@ import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
 
 // Sync
 import { stampUserIdOnUnsyncedRows, startPeriodicSync, removeOrphanedUnsyncedRows } from './lib/sync'
+import { pingSupabaseOncePerDay } from './lib/supabaseKeepAlive'
 import { startNetworkSync, stopNetworkSync } from './lib/networkSync'
 
 // Notifications
@@ -392,6 +394,11 @@ function AppTabs({
 function LoadingScreen({ colors }: { colors: AppColors }) {
   return (
     <View style={[loadStyles.root, { backgroundColor: colors.bg }]}>
+      <Image
+        source={require('./assets/SavedLOGO.png')}
+        style={loadStyles.logo}
+        resizeMode="contain"
+      />
       <View style={[loadStyles.wordmarkRow]}>
         <Text style={[loadStyles.wordmark, { color: colors.text }]}>S A V E D</Text>
         <Text style={[loadStyles.wordmarkLight, { color: colors.textSub }]}>WORSHIP</Text>
@@ -432,6 +439,11 @@ const loadStyles = StyleSheet.create({
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  logo: {
+    width: 80,
+    height: 80,
+    borderRadius: 20,  // remove if your logo has its own shape
   },
 })
 
@@ -478,6 +490,8 @@ function AppContent() {
         await removeOrphanedUnsyncedRows(user.id)
         await stampUserIdOnUnsyncedRows(user.id)
         const cleanup = await startPeriodicSync(user.id, 60000)
+          // Daily Supabase keep‑alive ping
+          await pingSupabaseOncePerDay(user.id)
         periodicSyncCleanupRef.current = cleanup
         startNetworkSync()
       } catch (err) {

@@ -2,7 +2,11 @@
 // Native implementation for iOS/Android - fully local pitch shifting with FFmpeg
 import { Audio } from 'expo-av'
 import * as FileSystem from 'expo-file-system/legacy'
-import { FFmpegKit, FFprobeKit, ReturnCode } from 'ffmpeg-kit-react-native'
+// import { FFmpegKit, FFprobeKit, ReturnCode } from 'ffmpeg-kit-react-native'
+// ffmpeg-kit-react-native removed - stubs keep TypeScript happy, never called at runtime
+const FFmpegKit: any = null
+const FFprobeKit: any = null
+const ReturnCode: any = null
 import { NativeModules } from 'react-native'
 
 /**

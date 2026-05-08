@@ -13,6 +13,7 @@ Animated,
   Platform,
   StatusBar,
   Dimensions,
+  Image
 } from 'react-native'
 import Svg, { Circle, Line } from 'react-native-svg'
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -177,7 +178,11 @@ const { displayName, email, password, confirmPassword } = values
             <Ionicons               name="arrow-back"               size={18}               color="#111"             />
           </TouchableOpacity>
 <View style={styles.logoBoxSmall}>
-                <Ionicons name="musical-notes" size={18} color="#111" />
+                <Image
+                    source={require('../assets/SavedLOGOnobg.png')}
+                    style={{ width: 90, height: 90, borderRadius: 6 }}
+                    resizeMode="contain"
+                  />
               </View>
         </View>
 
@@ -272,7 +277,7 @@ const styles = StyleSheet.create({
   },
   logoBoxSmall: {
     width: 40, height: 40, borderRadius: 12,
-    backgroundColor: '#EBEBEB',
+    
     justifyContent: 'center', alignItems: 'center',
   },
 

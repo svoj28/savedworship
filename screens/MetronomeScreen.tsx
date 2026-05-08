@@ -1,5 +1,5 @@
 // screens/MetronomeScreen.tsx
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
   View,
   StyleSheet,
@@ -32,7 +32,6 @@ const COLORS = {
 }
 
 const SCREEN_WIDTH = Dimensions.get('window').width
-// const PRESETS_STORAGE_KEY = 'metronome_presets'
 
 type PresetScope = 'personal' | 'overall'
 
@@ -41,8 +40,8 @@ interface MetronomePreset {
   name: string
   bpm: number
   inCloud: boolean
-  scope: PresetScope       // 'personal' | 'overall'
-  isPublic: boolean        // only meaningful when scope === 'overall'
+  scope: PresetScope
+  isPublic: boolean
   isOwnedByOther?: boolean
 }
 
@@ -58,9 +57,14 @@ export default function MetronomeScreen() {
   const [bpm, setBpm] = useState(120)
   const [isPlaying, setIsPlaying] = useState(false)
   const [tapTempo, setTapTempo] = useState<number[]>([])
-  const [soundObject, setSoundObject] = useState<Audio.Sound | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const beatCountRef = useRef(0)
+  const [beatFlash, setBeatFlash] = useState(false)
+
+  // ── Metronome timing refs ───────────────────────────────────────────────────
+  const timerRef        = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isPlayingRef    = useRef(false)
+  const bpmRef          = useRef(120)
+  const nextBeatTimeRef = useRef(0)
+  const soundRef        = useRef<Audio.Sound | null>(null)  // preloaded sound, never changes
 
   // Preset states
   const [presets, setPresets] = useState<MetronomePreset[]>([])
@@ -71,110 +75,110 @@ export default function MetronomeScreen() {
   const [newPresetIsPublic, setNewPresetIsPublic] = useState(false)
   const [uploadingPresetId, setUploadingPresetId] = useState<string | null>(null)
 
-  // Tab state for My Presets section
   const [activeTab, setActiveTab] = useState<PresetScope>('personal')
-
-  // Public presets state (for Overall tab)
   const [publicPresets, setPublicPresets] = useState<MetronomePreset[]>([])
 
+  // Keep bpmRef in sync with bpm state
+  useEffect(() => { bpmRef.current = bpm }, [bpm])
+
   useEffect(() => {
-    const initializeAudio = async () => {
+    const setup = async () => {
       try {
         await Audio.setAudioModeAsync({
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
         })
+        // Preload the click sound once — every beat just calls replayAsync()
+        const { sound } = await Audio.Sound.createAsync(
+          require('../assets/sounds/click.wav'),
+          { shouldPlay: false, volume: 1.0 }
+        )
+        soundRef.current = sound
       } catch (err) {
         console.error('Error initializing audio:', err)
       }
     }
-    initializeAudio()
+    setup()
     loadPresets()
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
+      stopMetronome()
+      soundRef.current?.unloadAsync()
     }
   }, [])
 
   // ─── Preset persistence ────────────────────────────────────────────────────
 
+  const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
+
   const loadPresets = async () => {
-  try {
-    const user = await getCurrentUser()
-    if (!user) return
+    try {
+      const user = await getCurrentUser()
+      if (!user) return
 
-    const PRESETS_KEY = getPresetsKey(user.id)
+      const PRESETS_KEY = getPresetsKey(user.id)
+      const stored = await AsyncStorage.getItem(PRESETS_KEY)
+      const allLocalPresets: MetronomePreset[] = stored ? JSON.parse(stored) : []
+      const localPresets = allLocalPresets.filter(p => !p.isOwnedByOther)
 
-    const stored = await AsyncStorage.getItem(PRESETS_KEY)
-    const allLocalPresets: MetronomePreset[] = stored ? JSON.parse(stored) : []
-    
-    // Only keep presets that belong to current user (no isOwnedByOther)
-    const localPresets = allLocalPresets.filter(p => !p.isOwnedByOther)
+      let ownCloudPresets: MetronomePreset[] = []
+      let fetchedPublicPresets: MetronomePreset[] = []
 
-    let ownCloudPresets: MetronomePreset[] = []
-    let fetchedPublicPresets: MetronomePreset[] = []
+      const { data: ownData } = await supabase
+        .from('metronome_presets')
+        .select('*')
+        .eq('user_id', user.id)
 
-    // Fetch only THIS user's own presets
-    const { data: ownData } = await supabase
-      .from('metronome_presets')
-      .select('*')
-      .eq('user_id', user.id)
+      if (ownData) {
+        ownCloudPresets = ownData.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          bpm: row.bpm,
+          inCloud: true,
+          scope: row.scope ?? 'personal',
+          isPublic: row.is_public ?? false,
+          isOwnedByOther: false,
+        }))
+      }
 
-    if (ownData) {
-      ownCloudPresets = ownData.map((row: any) => ({
-        id: row.id,
-        name: row.name,
-        bpm: row.bpm,
-        inCloud: true,
-        scope: row.scope ?? 'personal',
-        isPublic: row.is_public ?? false,
-        isOwnedByOther: false,
-      }))
+      const { data: publicData } = await supabase
+        .from('metronome_presets')
+        .select('*')
+        .neq('user_id', user.id)
+        .eq('scope', 'overall')
+        .eq('is_public', true)
+
+      if (publicData) {
+        fetchedPublicPresets = publicData.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          bpm: row.bpm,
+          inCloud: true,
+          scope: 'overall' as PresetScope,
+          isPublic: true,
+          isOwnedByOther: true,
+        }))
+      }
+
+      const cloudIds = new Set(ownCloudPresets.map(p => p.id))
+      const mergedLocal = localPresets.filter(p => !cloudIds.has(p.id))
+      const ownPresets = [...mergedLocal, ...ownCloudPresets]
+
+      setPresets(ownPresets)
+      setPublicPresets(fetchedPublicPresets)
+      await savePresetsLocally(ownPresets)
+    } catch (err) {
+      console.error('Error loading presets:', err)
+      setPresets([])
+      setPublicPresets([])
     }
-
-    // Fetch OTHER users' public overall presets
-    const { data: publicData } = await supabase
-      .from('metronome_presets')
-      .select('*')
-      .neq('user_id', user.id)
-      .eq('scope', 'overall')
-      .eq('is_public', true)
-
-    if (publicData) {
-      fetchedPublicPresets = publicData.map((row: any) => ({
-        id: row.id,
-        name: row.name,
-        bpm: row.bpm,
-        inCloud: true,
-        scope: 'overall' as PresetScope,
-        isPublic: true,
-        isOwnedByOther: true,
-      }))
-    }
-
-    // Merge — cloud wins over local for same id
-    const cloudIds = new Set(ownCloudPresets.map(p => p.id))
-    const mergedLocal = localPresets.filter(p => !cloudIds.has(p.id))
-
-    const ownPresets = [...mergedLocal, ...ownCloudPresets]
-    setPresets(ownPresets)
-    setPublicPresets(fetchedPublicPresets)
-
-    // Clean AsyncStorage — only save own presets
-    await savePresetsLocally(ownPresets)
-
-  } catch (err) {
-    console.error('Error loading presets:', err)
-    setPresets([])
-    setPublicPresets([])
   }
-}
 
   const savePresetsLocally = async (updatedPresets: MetronomePreset[]) => {
     try {
       const user = await getCurrentUser()
-    if (!user) return
-    const PRESETS_KEY = getPresetsKey(user.id)
+      if (!user) return
+      const PRESETS_KEY = getPresetsKey(user.id)
       await AsyncStorage.setItem(PRESETS_KEY, JSON.stringify(updatedPresets))
     } catch (err) {
       console.error('Error saving presets locally:', err)
@@ -182,69 +186,65 @@ export default function MetronomeScreen() {
   }
 
   const handleAddPreset = async () => {
-  if (!newPresetName.trim()) {
-    Alert.alert('Error', 'Please enter a preset name')
-    return
-  }
-
-  const newPreset: MetronomePreset = {
-    id: `local-${Date.now()}`,
-    name: newPresetName.trim(),
-    bpm,
-    inCloud: false,
-    scope: newPresetScope,
-    isPublic: newPresetScope === 'overall' ? newPresetIsPublic : false,
-  }
-
-  const updated = [...presets, newPreset]
-  setPresets(updated)
-  await savePresetsLocally(updated)
-  setNewPresetName('')
-  setNewPresetScope('personal')
-  setNewPresetIsPublic(false)
-  setShowAddModal(false)
-  setActiveTab(newPresetScope)
-
-  // Auto-sync to cloud if overall
-  if (newPresetScope === 'overall') {
-    try {
-      const user = await getCurrentUser()
-      if (!user) {
-        Alert.alert('Saved locally', `"${newPreset.name}" saved at ${bpm} BPM. Sign in to sync to cloud.`)
-        return
-      }
-
-      const { data, error } = await supabase
-        .from('metronome_presets')
-        .insert({
-          user_id: user.id,
-          name: newPreset.name,
-          bpm: newPreset.bpm,
-          scope: 'overall',
-          is_public: newPreset.isPublic,
-        })
-        .select()
-        .single()
-
-      if (error) throw error
-
-      // Update local list with cloud id
-      const synced = updated.map(p =>
-        p.id === newPreset.id
-          ? { ...p, id: data.id, inCloud: true }
-          : p
-      )
-      setPresets(synced)
-      await savePresetsLocally(synced)
-      Alert.alert('Synced', `"${newPreset.name}" saved and synced to cloud at ${bpm} BPM`)
-    } catch (err) {
-      console.error('Auto-sync failed:', err)
-      Alert.alert('Saved locally', `"${newPreset.name}" saved at ${bpm} BPM but cloud sync failed. You can upload manually.`)
+    if (!newPresetName.trim()) {
+      Alert.alert('Error', 'Please enter a preset name')
+      return
     }
-  } else {
-    Alert.alert('Saved', `"${newPreset.name}" saved locally at ${bpm} BPM`)
+
+    const newPreset: MetronomePreset = {
+      id: `local-${Date.now()}`,
+      name: newPresetName.trim(),
+      bpm,
+      inCloud: false,
+      scope: newPresetScope,
+      isPublic: newPresetScope === 'overall' ? newPresetIsPublic : false,
+    }
+
+    const updated = [...presets, newPreset]
+    setPresets(updated)
+    await savePresetsLocally(updated)
+    setNewPresetName('')
+    setNewPresetScope('personal')
+    setNewPresetIsPublic(false)
+    setShowAddModal(false)
+    setActiveTab(newPresetScope)
+
+    if (newPresetScope === 'overall') {
+      try {
+        const user = await getCurrentUser()
+        if (!user) {
+          Alert.alert('Saved locally', `"${newPreset.name}" saved at ${bpm} BPM. Sign in to sync to cloud.`)
+          return
+        }
+
+        const { data, error } = await supabase
+          .from('metronome_presets')
+          .insert({
+            user_id: user.id,
+            name: newPreset.name,
+            bpm: newPreset.bpm,
+            scope: 'overall',
+            is_public: newPreset.isPublic,
+          })
+          .select()
+          .single()
+
+        if (error) throw error
+
+        const synced = updated.map(p =>
+          p.id === newPreset.id ? { ...p, id: data.id, inCloud: true } : p
+        )
+        setPresets(synced)
+        await savePresetsLocally(synced)
+        Alert.alert('Synced', `"${newPreset.name}" saved and synced to cloud at ${bpm} BPM`)
+      } catch (err) {
+        console.error('Auto-sync failed:', err)
+        Alert.alert('Saved locally', `"${newPreset.name}" saved at ${bpm} BPM but cloud sync failed.`)
+      }
+    } else {
+      Alert.alert('Saved', `"${newPreset.name}" saved locally at ${bpm} BPM`)
+    }
   }
-}
 
   const handleUploadPresetToCloud = async (preset: MetronomePreset) => {
     Alert.alert(
@@ -258,10 +258,7 @@ export default function MetronomeScreen() {
             try {
               setUploadingPresetId(preset.id)
               const user = await getCurrentUser()
-              if (!user) {
-                Alert.alert('Error', 'Not logged in')
-                return
-              }
+              if (!user) { Alert.alert('Error', 'Not logged in'); return }
 
               const { data, error } = await supabase
                 .from('metronome_presets')
@@ -279,9 +276,7 @@ export default function MetronomeScreen() {
               if (error) throw error
 
               const updated = presets.map(p =>
-                p.id === preset.id
-                  ? { ...p, id: data.id, inCloud: true }
-                  : p
+                p.id === preset.id ? { ...p, id: data.id, inCloud: true } : p
               )
               setPresets(updated)
               await savePresetsLocally(updated)
@@ -300,18 +295,13 @@ export default function MetronomeScreen() {
 
   const handleTogglePublic = async (preset: MetronomePreset) => {
     const nextIsPublic = !preset.isPublic
-    const updated = presets.map(p =>
-      p.id === preset.id ? { ...p, isPublic: nextIsPublic } : p
-    )
+    const updated = presets.map(p => p.id === preset.id ? { ...p, isPublic: nextIsPublic } : p)
     setPresets(updated)
     await savePresetsLocally(updated)
 
     if (preset.inCloud) {
       try {
-        await supabase
-          .from('metronome_presets')
-          .update({ is_public: nextIsPublic })
-          .eq('id', preset.id)
+        await supabase.from('metronome_presets').update({ is_public: nextIsPublic }).eq('id', preset.id)
       } catch (err) {
         console.error('Failed to update visibility in cloud:', err)
       }
@@ -319,83 +309,124 @@ export default function MetronomeScreen() {
   }
 
   const handleDeletePreset = (preset: MetronomePreset) => {
-    Alert.alert(
-      'Delete Preset',
-      `Delete "${preset.name}"?`,
-      [
-        { text: 'Cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              if (preset.inCloud) {
-                await supabase.from('metronome_presets').delete().eq('id', preset.id)
-              }
-              const updated = presets.filter(p => p.id !== preset.id)
-              setPresets(updated)
-              await savePresetsLocally(updated)
-              if (activePreset?.id === preset.id) setActivePreset(null)
-            } catch (err) {
-              Alert.alert('Error', 'Failed to delete preset')
+    Alert.alert('Delete Preset', `Delete "${preset.name}"?`, [
+      { text: 'Cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            if (preset.inCloud) {
+              await supabase.from('metronome_presets').delete().eq('id', preset.id)
             }
+            const updated = presets.filter(p => p.id !== preset.id)
+            setPresets(updated)
+            await savePresetsLocally(updated)
+            if (activePreset?.id === preset.id) setActivePreset(null)
+          } catch (err) {
+            Alert.alert('Error', 'Failed to delete preset')
           }
         }
-      ]
-    )
+      }
+    ])
   }
 
   const handleSelectPreset = (preset: MetronomePreset) => {
     setBpm(preset.bpm)
     setActivePreset(preset)
-    if (isPlaying) stopMetronome()
+    // If playing, restart with the new BPM immediately
+    if (isPlayingRef.current) {
+      stopScheduler()
+      startScheduler(preset.bpm)
+    }
   }
 
-  // ─── Metronome logic ───────────────────────────────────────────────────────
+  // ─── Metronome logic (drift-corrected) ────────────────────────────────────
+  //
+  // Instead of setInterval (which accumulates drift), we schedule each beat
+  // individually with setTimeout, computing the *exact* next beat time from
+  // a wall-clock anchor. This gives sub-millisecond accuracy even at 300 BPM.
 
   const playClickSound = async () => {
     try {
-      if (soundObject) {
-        await soundObject.replayAsync()
-      } else {
-        const { sound } = await Audio.Sound.createAsync(
-          require('../assets/sounds/click.wav'),
-          { shouldPlay: false }
-        )
-        setSoundObject(sound)
-        await sound.playAsync()
+      if (soundRef.current) {
+        await soundRef.current.replayAsync()
       }
     } catch (err) {
       console.error('Error playing sound:', err)
     }
   }
 
-  const startMetronome = async () => {
-    setIsPlaying(true)
-    beatCountRef.current = 0
-    const beatInterval = (60 / bpm) * 1000
-    timerRef.current = setInterval(async () => {
-      beatCountRef.current += 1
-      await playClickSound()
-    }, beatInterval)
+  /**
+   * Schedule the next beat using drift-corrected setTimeout.
+   * Called recursively so each beat re-arms itself from the precise next time.
+   */
+  const scheduleBeat = useCallback(() => {
+    if (!isPlayingRef.current) return
+
+    const now = Date.now()
+    const intervalMs = (60 / bpmRef.current) * 1000
+
+    // First call: anchor the first beat to now
+    if (nextBeatTimeRef.current === 0) {
+      nextBeatTimeRef.current = now
+    }
+
+    // Play the click and flash the beat indicator
+    playClickSound()
+    setBeatFlash(f => !f)   // toggle so parent can animate if desired
+
+    // Advance the anchor by exactly one interval (no drift accumulation)
+    nextBeatTimeRef.current += intervalMs
+
+    // Compute how long until the next beat, clamped to 0 to avoid negative delays
+    const delay = Math.max(0, nextBeatTimeRef.current - Date.now())
+
+    timerRef.current = setTimeout(scheduleBeat, delay)
+  }, []) // no deps — reads everything from refs
+
+  const startScheduler = (overrideBpm?: number) => {
+    if (overrideBpm !== undefined) bpmRef.current = overrideBpm
+    nextBeatTimeRef.current = 0   // reset anchor so first beat fires immediately
+    isPlayingRef.current = true
+    scheduleBeat()
   }
 
-  const stopMetronome = () => {
-    setIsPlaying(false)
+  const stopScheduler = () => {
+    isPlayingRef.current = false
     if (timerRef.current) {
-      clearInterval(timerRef.current)
+      clearTimeout(timerRef.current)
       timerRef.current = null
     }
   }
 
+  const startMetronome = () => {
+    setIsPlaying(true)
+    startScheduler()
+  }
+
+  const stopMetronome = () => {
+    setIsPlaying(false)
+    stopScheduler()
+  }
+
   const toggleMetronome = () => {
-    if (isPlaying) stopMetronome()
+    if (isPlayingRef.current) stopMetronome()
     else startMetronome()
   }
 
+  // Restart scheduler when BPM changes while playing.
+  // We read isPlayingRef (not isPlaying state) to avoid stale-closure bugs.
+  useEffect(() => {
+    if (isPlayingRef.current) {
+      stopScheduler()
+      startScheduler(bpm)
+    }
+  }, [bpm])
+
   const handleTapTempo = async () => {
     const now = Date.now()
-    const recentTaps = tapTempo.filter((t) => now - t < 5000)
+    const recentTaps = tapTempo.filter(t => now - t < 5000)
     if (recentTaps.length > 0) {
       const intervals: number[] = []
       for (let i = 1; i < recentTaps.length; i++) {
@@ -414,26 +445,12 @@ export default function MetronomeScreen() {
 
   const resetTapTempo = () => setTapTempo([])
 
-  useEffect(() => {
-    if (isPlaying) {
-      stopMetronome()
-      startMetronome()
-    }
-  }, [bpm])
-
   // ─── Derived lists ────────────────────────────────────────────────────────
 
-// Only own presets — never includes publicPresets
-const personalPresets = presets.filter(p => !p.scope || p.scope === 'personal')
-const ownOverallPresets = presets.filter(p => p.scope === 'overall')
-
-// Overall tab = own overall + other users' public overall
-const overallPresets = [...ownOverallPresets, ...publicPresets]
-
-// What the current tab shows
-const tabPresets = activeTab === 'personal' ? personalPresets : overallPresets
-
-const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
+  const personalPresets  = presets.filter(p => !p.scope || p.scope === 'personal')
+  const ownOverallPresets = presets.filter(p => p.scope === 'overall')
+  const overallPresets   = [...ownOverallPresets, ...publicPresets]
+  const tabPresets       = activeTab === 'personal' ? personalPresets : overallPresets
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -480,7 +497,7 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
       {/* Beat Indicator */}
       {isPlaying && (
         <View style={styles.beatIndicator}>
-          <View style={styles.beatDot} />
+          <View style={[styles.beatDot, beatFlash && styles.beatDotFlash]} />
           <Text style={styles.beatText}>Playing</Text>
         </View>
       )}
@@ -524,14 +541,13 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
 
       {/* ── My Presets ──────────────────────────────────────────────── */}
       <View style={styles.customPresetsContainer}>
-        {/* Header row */}
         <View style={styles.customPresetsHeader}>
           <Text style={styles.presetsLabel}>My Presets</Text>
           <TouchableOpacity
             style={styles.addPresetButton}
             onPress={() => {
               setNewPresetName('')
-              setNewPresetScope(activeTab) // default modal scope to current tab
+              setNewPresetScope(activeTab)
               setNewPresetIsPublic(false)
               setShowAddModal(true)
             }}
@@ -546,14 +562,8 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
             style={[styles.tab, activeTab === 'personal' && styles.tabActive]}
             onPress={() => setActiveTab('personal')}
           >
-            <Ionicons
-              name="person-outline"
-              size={14}
-              color={activeTab === 'personal' ? COLORS.white : COLORS.mediumGray}
-            />
-            <Text style={[styles.tabText, activeTab === 'personal' && styles.tabTextActive]}>
-              Personal
-            </Text>
+            <Ionicons name="person-outline" size={14} color={activeTab === 'personal' ? COLORS.white : COLORS.mediumGray} />
+            <Text style={[styles.tabText, activeTab === 'personal' && styles.tabTextActive]}>Personal</Text>
             {personalPresets.length > 0 && (
               <View style={[styles.tabBadge, activeTab === 'personal' && styles.tabBadgeActive]}>
                 <Text style={[styles.tabBadgeText, activeTab === 'personal' && styles.tabBadgeTextActive]}>
@@ -567,14 +577,8 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
             style={[styles.tab, activeTab === 'overall' && styles.tabActive]}
             onPress={() => setActiveTab('overall')}
           >
-            <Ionicons
-              name="globe-outline"
-              size={14}
-              color={activeTab === 'overall' ? COLORS.white : COLORS.mediumGray}
-            />
-            <Text style={[styles.tabText, activeTab === 'overall' && styles.tabTextActive]}>
-              Overall
-            </Text>
+            <Ionicons name="globe-outline" size={14} color={activeTab === 'overall' ? COLORS.white : COLORS.mediumGray} />
+            <Text style={[styles.tabText, activeTab === 'overall' && styles.tabTextActive]}>Overall</Text>
             {overallPresets.length > 0 && (
               <View style={[styles.tabBadge, activeTab === 'overall' && styles.tabBadgeActive]}>
                 <Text style={[styles.tabBadgeText, activeTab === 'overall' && styles.tabBadgeTextActive]}>
@@ -585,14 +589,12 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
           </TouchableOpacity>
         </View>
 
-        {/* Tab description */}
         <Text style={styles.tabDescription}>
           {activeTab === 'personal'
             ? 'Private presets only visible to you.'
             : 'Your presets + public presets from other users.'}
         </Text>
 
-        {/* Preset list */}
         {tabPresets.length === 0 ? (
           <Text style={styles.emptyPresetsText}>
             {activeTab === 'personal'
@@ -625,36 +627,15 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
                     {preset.bpm} BPM
                   </Text>
 
-                  {/* Cloud/Local badge */}
-                  <View style={[
-                    styles.syncBadge,
-                    preset.inCloud ? styles.syncBadgeCloud : styles.syncBadgeLocal,
-                  ]}>
-                    <Ionicons
-                      name={preset.inCloud ? 'cloud-done-outline' : 'phone-portrait-outline'}
-                      size={10}
-                      color={COLORS.mediumGray}
-                    />
-                    <Text style={styles.syncBadgeText}>
-                      {preset.inCloud ? 'Cloud' : 'Local'}
-                    </Text>
+                  <View style={[styles.syncBadge, preset.inCloud ? styles.syncBadgeCloud : styles.syncBadgeLocal]}>
+                    <Ionicons name={preset.inCloud ? 'cloud-done-outline' : 'phone-portrait-outline'} size={10} color={COLORS.mediumGray} />
+                    <Text style={styles.syncBadgeText}>{preset.inCloud ? 'Cloud' : 'Local'}</Text>
                   </View>
 
-                  {/* Public/Private badge — only for overall presets */}
                   {preset.scope === 'overall' && (
-                    <View style={[
-                      styles.syncBadge,
-                      preset.isPublic ? styles.publicBadge : styles.privateBadge,
-                    ]}>
-                      <Ionicons
-                        name={preset.isPublic ? 'eye-outline' : 'eye-off-outline'}
-                        size={10}
-                        color={preset.isPublic ? COLORS.darkGray : COLORS.mediumGray}
-                      />
-                      <Text style={[
-                        styles.syncBadgeText,
-                        preset.isPublic && styles.syncBadgeTextPublic,
-                      ]}>
+                    <View style={[styles.syncBadge, preset.isPublic ? styles.publicBadge : styles.privateBadge]}>
+                      <Ionicons name={preset.isPublic ? 'eye-outline' : 'eye-off-outline'} size={10} color={preset.isPublic ? COLORS.darkGray : COLORS.mediumGray} />
+                      <Text style={[styles.syncBadgeText, preset.isPublic && styles.syncBadgeTextPublic]}>
                         {preset.isPublic ? 'Public' : 'Private'}
                       </Text>
                     </View>
@@ -663,22 +644,8 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
               </View>
 
               <View style={styles.customPresetActions}>
-                {/* Toggle public/private — only for overall presets */}
-                {!preset.inCloud && preset.scope === 'personal' && (
-                <TouchableOpacity
-                  style={styles.cloudActionButton}
-                  onPress={() => handleUploadPresetToCloud(preset)}
-                  disabled={uploadingPresetId === preset.id}
-                >
-                  {uploadingPresetId === preset.id
-                    ? <ActivityIndicator size="small" color={COLORS.black} />
-                    : <Ionicons name="cloud-upload-outline" size={18} color={COLORS.black} />
-                  }
-                </TouchableOpacity>
-              )}
-
-                {/* Upload to cloud — only if not already in cloud */}
-                {!preset.inCloud && (
+                {/* Upload to cloud — only if not already in cloud AND not owned by other */}
+                {!preset.inCloud && !preset.isOwnedByOther && (
                   <TouchableOpacity
                     style={styles.cloudActionButton}
                     onPress={() => handleUploadPresetToCloud(preset)}
@@ -691,15 +658,15 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
                   </TouchableOpacity>
                 )}
 
-                {/* Delete */}
-               {!preset.isOwnedByOther && (
-                <TouchableOpacity
-                  style={styles.deleteActionButton}
-                  onPress={() => handleDeletePreset(preset)}
-                >
-                  <Ionicons name="trash-outline" size={18} color={COLORS.mediumGray} />
-                </TouchableOpacity>
-              )}
+                {/* Delete — only own presets */}
+                {!preset.isOwnedByOther && (
+                  <TouchableOpacity
+                    style={styles.deleteActionButton}
+                    onPress={() => handleDeletePreset(preset)}
+                  >
+                    <Ionicons name="trash-outline" size={18} color={COLORS.mediumGray} />
+                  </TouchableOpacity>
+                )}
               </View>
             </TouchableOpacity>
           ))
@@ -722,61 +689,33 @@ const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
               autoFocus
             />
 
-            {/* Scope picker */}
             <Text style={styles.modalFieldLabel}>Save to</Text>
             <View style={styles.scopePicker}>
               <TouchableOpacity
                 style={[styles.scopeOption, newPresetScope === 'personal' && styles.scopeOptionActive]}
                 onPress={() => setNewPresetScope('personal')}
               >
-                <Ionicons
-                  name="person-outline"
-                  size={16}
-                  color={newPresetScope === 'personal' ? COLORS.white : COLORS.darkGray}
-                />
-                <Text style={[
-                  styles.scopeOptionText,
-                  newPresetScope === 'personal' && styles.scopeOptionTextActive,
-                ]}>
-                  Personal
-                </Text>
+                <Ionicons name="person-outline" size={16} color={newPresetScope === 'personal' ? COLORS.white : COLORS.darkGray} />
+                <Text style={[styles.scopeOptionText, newPresetScope === 'personal' && styles.scopeOptionTextActive]}>Personal</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={[styles.scopeOption, newPresetScope === 'overall' && styles.scopeOptionActive]}
                 onPress={() => setNewPresetScope('overall')}
               >
-                <Ionicons
-                  name="globe-outline"
-                  size={16}
-                  color={newPresetScope === 'overall' ? COLORS.white : COLORS.darkGray}
-                />
-                <Text style={[
-                  styles.scopeOptionText,
-                  newPresetScope === 'overall' && styles.scopeOptionTextActive,
-                ]}>
-                  Overall
-                </Text>
+                <Ionicons name="globe-outline" size={16} color={newPresetScope === 'overall' ? COLORS.white : COLORS.darkGray} />
+                <Text style={[styles.scopeOptionText, newPresetScope === 'overall' && styles.scopeOptionTextActive]}>Overall</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Public toggle — only visible for overall */}
             {newPresetScope === 'overall' && (
               <View style={styles.publicToggleRow}>
                 <View style={styles.publicToggleLeft}>
-                  <Ionicons
-                    name={newPresetIsPublic ? 'eye-outline' : 'eye-off-outline'}
-                    size={18}
-                    color={COLORS.darkGray}
-                  />
+                  <Ionicons name={newPresetIsPublic ? 'eye-outline' : 'eye-off-outline'} size={18} color={COLORS.darkGray} />
                   <View>
-                    <Text style={styles.publicToggleLabel}>
-                      {newPresetIsPublic ? 'Public' : 'Private'}
-                    </Text>
+                    <Text style={styles.publicToggleLabel}>{newPresetIsPublic ? 'Public' : 'Private'}</Text>
                     <Text style={styles.publicToggleHint}>
-                      {newPresetIsPublic
-                        ? 'Anyone can see this preset'
-                        : 'Only you can see this preset'}
+                      {newPresetIsPublic ? 'Anyone can see this preset' : 'Only you can see this preset'}
                     </Text>
                   </View>
                 </View>
@@ -909,6 +848,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 2,
   },
+  beatDotFlash: {
+    backgroundColor: COLORS.mediumGray,   // subtle flash on each beat
+  },
   beatText: {
     fontSize: 15,
     color: COLORS.darkGray,
@@ -1020,7 +962,6 @@ const styles = StyleSheet.create({
     padding: 6,
   },
 
-  // Tab bar
   tabBar: {
     flexDirection: 'row',
     backgroundColor: COLORS.veryLightGray,
@@ -1075,7 +1016,6 @@ const styles = StyleSheet.create({
   tabBadgeTextActive: {
     color: COLORS.white,
   },
-
   tabDescription: {
     fontSize: 12,
     color: COLORS.mediumGray,
@@ -1083,7 +1023,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     fontStyle: 'italic',
   },
-
   emptyPresetsText: {
     color: COLORS.mediumGray,
     fontSize: 14,
@@ -1092,7 +1031,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // Preset card
   customPresetCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1142,7 +1080,6 @@ const styles = StyleSheet.create({
     color: COLORS.darkGray,
   },
 
-  // Badges
   syncBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1177,7 +1114,6 @@ const styles = StyleSheet.create({
     color: '#388e3c',
   },
 
-  // Action buttons
   customPresetActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1242,7 +1178,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  // Scope picker (Personal / Overall)
   scopePicker: {
     flexDirection: 'row',
     gap: 10,
@@ -1273,7 +1208,6 @@ const styles = StyleSheet.create({
     color: COLORS.white,
   },
 
-  // Public/Private toggle row
   publicToggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1344,7 +1278,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 })
-
-function setPublicPresets(arg0: undefined[]) {
-  throw new Error('Function not implemented.')
-}

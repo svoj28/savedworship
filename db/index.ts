@@ -367,16 +367,16 @@ try {
     }
 
   // Add deleted_at column for offline delete queue
-    // const tablesForDeletedAt = [
-    //   'artists', 'chord_lists', 'songs', 'lineups', 'lineup_items',
-    //   'messages', 'file_droppers', 'important_announcements', 'version_droppers',
-    //   'contacts', 'playlists', 'playlist_items', 'user_profiles'
-    // ]
-    // for (const table of tablesForDeletedAt) {
-    //   try {
-    //     await dbInstance.execAsync(`ALTER TABLE ${table} ADD COLUMN deleted_at INTEGER`)
-    //   } catch (e) {}
-    // }
+    const tablesForDeletedAt = [
+      'artists', 'chord_lists', 'songs', 'lineups', 'lineup_items',
+      'messages', 'file_droppers', 'important_announcements', 'version_droppers',
+      'contacts', 'playlists', 'playlist_items', 'user_profiles'
+    ]
+    for (const table of tablesForDeletedAt) {
+      try {
+        await dbInstance.execAsync(`ALTER TABLE ${table} ADD COLUMN deleted_at INTEGER`)
+      } catch (e) {}
+    }
 
     console.log('Database initialized successfully')
     return dbInstance
@@ -394,68 +394,58 @@ export function getDatabase() {
   return dbInstance
 }
 
-// Simple query helpers
-export async function query(sql: string, params: any[] = []) {
-  try {
-    const db = await getOrInitDatabase() 
-    if (!db) {
-      throw new Error('Database is not initialized')
-    }
-    const result = await db.getAllAsync(sql, params)
-    return result || []
-  } catch (err) {
-    console.error('Query error:', sql, params, err)
-    throw err
-  }
+// ─── Single DB Queue (all reads and writes serialized) ────────────────────────
+let dbQueue: Promise<any> = Promise.resolve()
+
+export function queueDb<T>(fn: () => Promise<T>): Promise<T> {
+  const next = dbQueue.then(() => fn())
+  dbQueue = next.then(() => {}, () => {})
+  return next
 }
 
-export async function queryOne(sql: string, params: any[] = []) {
-  try {
-    const db = getDatabase()
-    if (!db) {
-      throw new Error('Database is not initialized')
-    }
-    const result = await db.getFirstAsync(sql, params)
-    return result || null
-  } catch (err) {
-    console.error('QueryOne error:', sql, params, err)
-    throw err
-  }
+// ─── RAW helpers (no queue wrapping) ─────────────────────────────────────────
+async function rawQuery(sql: string, params: any[] = []) {
+  const db = getDatabase()
+  const result = await db.getAllAsync(sql, params)
+  return result || []
 }
 
-export async function execute(sql: string, params: any[] = []) {
-  try {
-    const db = getDatabase()
-    if (!db) {
-      throw new Error('Database is not initialized')
-    }
-    return await db.runAsync(sql, params)
-  } catch (err) {
-    console.error('Execute error:', sql, params, err)
-    throw err
-  }
+async function rawExecute(sql: string, params: any[] = []) {
+  const db = getDatabase()
+  return await db.runAsync(sql, params)
 }
 
-export async function transaction(callback: (tx: SQLite.SQLiteDatabase) => Promise<void>) {
-  try {
+// ─── Public API (each call is queued) ────────────────────────────────────────
+export function query(sql: string, params: any[] = []) {
+  return queueDb(() => rawQuery(sql, params))
+}
+
+export function execute(sql: string, params: any[] = []) {
+  return queueDb(() => rawExecute(sql, params))
+}
+
+export function queryOne(sql: string, params: any[] = []) {
+  return queueDb(async () => {
     const db = getDatabase()
-    if (!db) {
-      throw new Error('Database is not initialized')
-    }
-    await db.execAsync('BEGIN TRANSACTION')
-    await callback(db)
-    await db.execAsync('COMMIT')
-  } catch (err) {
+    return (await db.getFirstAsync(sql, params)) ?? null
+  })
+}
+
+export function transaction(callback: (raw: {
+  query: typeof rawQuery,
+  execute: typeof rawExecute
+}) => Promise<void>) {
+  return queueDb(async () => {
+    const db = getDatabase()
     try {
-      const db = getDatabase()
-      if (db) {
-        await db.execAsync('ROLLBACK')
-      }
-    } catch (rollbackErr) {
-      console.error('Rollback error:', rollbackErr)
+      await db.execAsync('BEGIN TRANSACTION')
+      await callback({ query: rawQuery, execute: rawExecute })
+      await db.execAsync('COMMIT')
+    } catch (err) {
+      try { await db.execAsync('ROLLBACK') } catch {}
+      throw err
     }
-    throw err
-  }
+  })
 }
 
 export async function getOrInitDatabase() {
@@ -465,5 +455,6 @@ export async function getOrInitDatabase() {
   return dbInstance!
 }
 
-// Export model types for TypeScript
+
+
 export type { Artist, ChordList, Song, Lineup, LineupItem, Message }

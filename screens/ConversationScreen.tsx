@@ -18,6 +18,7 @@ import { createMessage, query as dbQuery, editMessage, deleteMessage, getUserPro
 import { Message, UserProfile } from '../db/models'
 import { useFocusEffect } from '@react-navigation/native'
 import UserProfileModal from './UserProfileModal'
+import { onDataRefresh } from '../lib/sync'
 
 export default function ConversationScreen() {
   const [userId, setUserId] = useState<string>('')
@@ -338,9 +339,11 @@ export default function ConversationScreen() {
     try {
       const results = await dbQuery(
         `SELECT sender_id, receiver_id, text, created_at FROM messages 
-        WHERE receiver_id != ? AND COALESCE(is_deleted, 0) = 0
-        ORDER BY created_at DESC`,
-        [OVERALL_CHAT_ID]
+          WHERE receiver_id != ?
+          AND (sender_id = ? OR receiver_id = ?)
+          AND COALESCE(is_deleted, 0) = 0
+          ORDER BY created_at DESC`,
+          [OVERALL_CHAT_ID, id, id]
       )
       const userMap = new Map<string, { lastContacted: number; lastMessage: string }>()
       results.forEach((msg: any) => {
@@ -376,8 +379,9 @@ export default function ConversationScreen() {
   const loadFriendsListForModal = async (id: string) => {
     try {
       const contacts = await getContactsByUserId(id)
+      const accepted = contacts.filter((c: any) => c.status === 'accepted')
       const list = await Promise.all(
-        contacts.map(async (contact: any) => {
+        accepted.map(async (contact: any) => {
           const profile = await getUserProfileByUserId(contact.contactUserId)
           return {
             id: contact.contactUserId,
@@ -409,6 +413,18 @@ export default function ConversationScreen() {
       (m.senderId === userId && m.receiverId === receiverId) ||
       (m.senderId === receiverId && m.receiverId === userId)
   )
+
+  useEffect(() => {
+  if (!userId) return
+  const unsub = onDataRefresh((table) => {
+    if (table === 'messages') {
+      loadOverallChat(userId)
+      loadMessages(userId)
+      loadContactedUsers(userId)
+    }
+  })
+  return () => unsub()
+}, [userId])
 
   const currentMessages = chatMode === 'overall' ? overallChatMessages : directConversationMessages
   const isEmpty = currentMessages.length === 0

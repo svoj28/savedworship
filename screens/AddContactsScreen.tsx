@@ -23,6 +23,8 @@ deleteContact,
 getUserProfileByShortId,
 updateContact,
   getUserProfileByUserId,
+  getContactsByRecipientId,
+  query,
 } from '../db/queries'
 import { Contact } from '../db/models'
 import { generateShortId } from '../lib/shortId'
@@ -31,6 +33,7 @@ notifyContactRequest,
 notifyContactAccepted,
 notifyContactRejected,
 } from '../lib/notifications'
+import { onDataRefresh } from '../lib/sync'
 
 type TabType = 'share' | 'add' | 'contacts'
 
@@ -88,75 +91,106 @@ const fadeAnim = useRef(new Animated.Value(0)).current
       Animated.timing(slideAnim, { toValue: 0, duration: 280, useNativeDriver: true }),
     ]).start()
   }, [activeTab])
+  
+  useEffect(() => {
+  const unsub = onDataRefresh((table) => {
+    if (table === 'contacts') {
+      loadUserAndContacts()
+    }
+  })
+  return () => unsub()
+}, [])
 
   const loadUserAndContacts = async () => {
-    try {
-      setLoading(true)
-      const currentUser = await getCurrentUser()
-      if (currentUser) {
-        setUser(currentUser)
-        const userContacts = await getContactsByUserId(currentUser.id)
-        setContacts(userContacts)
+  try {
+    setLoading(true)
+    const currentUser = await getCurrentUser()
+    if (currentUser) {
+      setUser(currentUser)
+      const allRows = await query('SELECT * FROM contacts', [])
+      console.log('=== ALL CONTACTS IN DB:', JSON.stringify(allRows))
 
-        // Fetch user profiles for all contacts
-        const profiles: Record<string, any> = {}
-        for (const contact of userContacts) {
-          try {
-            const profile = await getUserProfileByUserId(contact.contactUserId)
-            if (profile) {
-              profiles[contact.contactUserId] = profile
-            }
-          } catch (err) {
-            console.warn(`Failed to load profile for ${contact.contactUserId}:`, err)
-          }
+      const incoming = await getContactsByRecipientId(currentUser.id)
+      const outgoing = await getContactsByUserId(currentUser.id)
+
+      // ADD THESE to see what's coming back
+      console.log('=== CURRENT USER ID:', currentUser.id)
+      console.log('=== INCOMING (requests TO me):', JSON.stringify(incoming))
+      console.log('=== OUTGOING (requests FROM me):', JSON.stringify(outgoing))
+
+      const seen = new Set<string>()
+      const allContacts = [...incoming, ...outgoing].filter(c => {
+        if (seen.has(c.id)) return false
+        seen.add(c.id)
+        return true
+      })
+
+      setContacts(allContacts)
+
+      const profiles: Record<string, any> = {}
+      for (const contact of allContacts) {
+        const otherPersonId = contact.userId === currentUser.id
+          ? contact.contactUserId
+          : contact.userId
+        try {
+          const profile = await getUserProfileByUserId(otherPersonId)
+          if (profile) profiles[otherPersonId] = profile
+        } catch (err) {
+          console.warn(`Failed to load profile for ${otherPersonId}:`, err)
         }
-        setUserProfiles(profiles)
       }
-    } catch (err) {
-      console.error('Error loading user:', err)
-      Alert.alert('Error', 'Failed to load member data.')
-    } finally {
-      setLoading(false)
+      setUserProfiles(profiles)
     }
+  } catch (err) {
+    console.error('Error loading user:', err)
+    Alert.alert('Error', 'Failed to load member data.')
+  } finally {
+    setLoading(false)
   }
+}
 
   const handleAddContact = async (recipientId?: string) => {
-    let idToAdd = (recipientId ?? formData.recipientId).trim()
-    if (!idToAdd) {       Alert.alert('Required', 'Please enter a Recipient ID.');       return }
-    if (idToAdd === user?.id) {       Alert.alert('Notice', 'You cannot add yourself.');       return     }
+  let idToAdd = (recipientId ?? formData.recipientId).trim()
+  if (!idToAdd) { Alert.alert('Required', 'Please enter a Recipient ID.'); return }
+  if (idToAdd === user?.id) { Alert.alert('Notice', 'You cannot add yourself.'); return }
 
-        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-    if (!uuidRegex.test(idToAdd)) {
-            const profile = await getUserProfileByShortId(idToAdd)
-      if (!profile) {         Alert.alert('Not Found', 'No member found with that Recipient ID.');         return       }
-      idToAdd = profile.userId
-    }
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!uuidRegex.test(idToAdd)) {
+    const profile = await getUserProfileByShortId(idToAdd)
+    if (!profile) { Alert.alert('Not Found', 'No member found with that Recipient ID.'); return }
+    idToAdd = profile.userId
+  }
 
-    try {
-      setAddingContact(true)
-      const existing = contacts.find(c => c.contactUserId === idToAdd)
-      if (existing) {         Alert.alert('Notice', 'This member is already in your contacts.');         return       }
+  try {
+    setAddingContact(true)
+    const existing = contacts.find(c =>
+  (c.userId === user.id && c.contactUserId === idToAdd) ||
+  (c.userId === idToAdd && c.contactUserId === user.id)
+)
+    if (existing) { Alert.alert('Notice', 'This member is already in your contacts.'); return }
 
-      const newContact = await addContact({
-  userId: idToAdd,
-  contactUserId: user.id,
+    // YOU are userId (sender), THEY are contactUserId (recipient who sees the request)
+    const newContact = await addContact({
+  userId: user.id,
+  contactUserId: idToAdd,
   status: 'pending',
   createdAt: Date.now(),
   updatedAt: Date.now(),
   synced: false,
 })
+console.log('=== SAVED CONTACT:', JSON.stringify(newContact))
 
-setContacts([newContact, ...contacts])
-await notifyContactRequest(idToAdd, user?.displayName || 'A team member', user.id)
-setFormData({ recipientId: '' })
-Alert.alert('Request Sent', 'Your connection request has been delivered.')
-    } catch (err) {
-      console.error('Error adding contact:', err)
-      Alert.alert('Error', 'Failed to send contact request.')
-    } finally {
-      setAddingContact(false)
-    }
+    setContacts([newContact, ...contacts])
+    await notifyContactRequest(idToAdd, user?.displayName || 'A team member', user.id)
+    setFormData({ recipientId: '' })
+    Alert.alert('Request Sent', 'Your connection request has been delivered.')
+  } catch (err) {
+    console.error('Error adding contact:', err)
+    Alert.alert('Error', 'Failed to send contact request.')
+  } finally {
+    setAddingContact(false)
   }
+}
 
   const handleDeleteContact = async (contactId: string) => {
     Alert.alert('Remove Member', 'Are you sure you want to remove this contact?', [
@@ -179,8 +213,21 @@ Alert.alert('Request Sent', 'Your connection request has been delivered.')
 const handleAcceptContact = async (contact: Contact) => {
   try {
     await updateContact(contact.id, { status: 'accepted', updatedAt: Date.now() })
-    setContacts(contacts.map(c =>       c.id === contact.id ? { ...c, status: 'accepted' } : c    ))
-    await notifyContactAccepted(contact.contactUserId, user?.displayName || 'A team member')
+    setContacts(contacts.map(c =>
+      c.id === contact.id ? { ...c, status: 'accepted' } : c
+    ))
+
+    // Create reverse record so sender also sees them as connected
+    await addContact({
+      userId: user.id,
+      contactUserId: contact.userId, // contact.userId is the original sender
+      status: 'accepted',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      synced: false,
+    })
+
+    await notifyContactAccepted(contact.userId, user?.displayName || 'A team member')
   } catch {
     Alert.alert('Error', 'Failed to accept request.')
   }
@@ -195,8 +242,10 @@ const handleRejectContact = async (contact: Contact) => {
       onPress: async () => {
         try {
           await updateContact(contact.id, { status: 'blocked', updatedAt: Date.now() })
-          setContacts(contacts.map(c =>             c.id === contact.id ? { ...c, status: 'blocked' } : c          ))
-          await notifyContactRejected(contact.contactUserId, user?.displayName || 'A team member')
+          setContacts(contacts.map(c =>
+            c.id === contact.id ? { ...c, status: 'blocked' } : c
+          ))
+          await notifyContactRejected(contact.userId, user?.displayName || 'A team member')
         } catch {
           Alert.alert('Error', 'Failed to decline request.')
         }
@@ -436,77 +485,80 @@ activeOpacity={0.85}
           </View>
         )}
 
-        {/* ═══ CONTACTS TAB ═══ */}
-        {activeTab === 'contacts' && (
-          <View>
-            <Text style={styles.sectionTitle}>Team Members</Text>
-            <Text style={styles.sectionDesc}>
-              Your connected worship team members and pending requests.
-            </Text>
+{/* ═══ CONTACTS TAB ═══ */}
+{activeTab === 'contacts' && (
+  <View>
+    <Text style={styles.sectionTitle}>Team Members</Text>
+    <Text style={styles.sectionDesc}>
+      Your connected worship team members and pending requests.
+    </Text>
 
-            <Ornament style={styles.ornamentSpacing} />
+    <Ornament style={styles.ornamentSpacing} />
 
-            {contacts.length === 0 ? (
-              <View style={styles.emptyState}>
-<View style={styles.emptyIconRing}>
-                <Ionicons name="people-outline" size={32} color="#bbb" />
-</View>
-                <Text style={styles.emptyTitle}>No Members Yet</Text>
-                <Text style={styles.emptyDesc}>
-                  Connect with your worship team by sharing or scanning member codes.
-                </Text>
-              </View>
-            ) : (
-              <>
-                {pendingContacts.length > 0 && (
-<View style={styles.group}>
-                    <Text style={styles.groupLabel}>Awaiting Response</Text>
-                    {pendingContacts.map((c) => (
-                      <MemberCard
-                        key={c.id}
-                        contact={c}
-                        nickname={userProfiles[c.contactUserId]?.nickname}
-                        onDelete={handleDeleteContact}
-                        onAccept={handleAcceptContact}
-                        onReject={handleRejectContact}
-                      />
-                    ))}
-    </View>
-    )}
-                {acceptedContacts.length > 0 && (
-                  <View style={styles.group}>
-                    <Text style={styles.groupLabel}>Connected</Text>
-                    {acceptedContacts.map((c) => (
-                      <MemberCard
-                        key={c.id}
-                        contact={c}
-                        nickname={userProfiles[c.contactUserId]?.nickname}
-                        onDelete={handleDeleteContact}
-                        onAccept={handleAcceptContact}
-                        onReject={handleRejectContact}
-                      />
-                    ))}
-                  </View>
-                )}
-                {rejectedContacts.length > 0 && (
-                  <View style={styles.group}>
-      <Text style={styles.groupLabel}>Declined</Text>
-                    {rejectedContacts.map((c) => (
-                      <MemberCard
-                        key={c.id}
-                        contact={c}
-                        nickname={userProfiles[c.contactUserId]?.nickname}
-                        onDelete={handleDeleteContact}
-                        onAccept={handleAcceptContact}
-                        onReject={handleRejectContact}
-                      />
-                    ))}
-                  </View>
-                )}
-              </>
-            )}
+    {contacts.length === 0 ? (
+      <View style={styles.emptyState}>
+        <View style={styles.emptyIconRing}>
+          <Ionicons name="people-outline" size={32} color="#bbb" />
+        </View>
+        <Text style={styles.emptyTitle}>No Members Yet</Text>
+        <Text style={styles.emptyDesc}>
+          Connect with your worship team by sharing or scanning member codes.
+        </Text>
+      </View>
+    ) : (
+      <>
+        {pendingContacts.length > 0 && (
+          <View style={styles.group}>
+            <Text style={styles.groupLabel}>Awaiting Response</Text>
+            {pendingContacts.map((c) => (
+              <MemberCard
+                key={c.id}
+                contact={c}
+                isIncoming={c.userId !== user?.id}
+                nickname={userProfiles[c.userId === user?.id ? c.contactUserId : c.userId]?.nickname}
+                onDelete={handleDeleteContact}
+                onAccept={handleAcceptContact}
+                onReject={handleRejectContact}
+              />
+            ))}
           </View>
         )}
+        {acceptedContacts.length > 0 && (
+          <View style={styles.group}>
+            <Text style={styles.groupLabel}>Connected</Text>
+            {acceptedContacts.map((c) => (
+              <MemberCard
+                key={c.id}
+                contact={c}
+                isIncoming={c.userId !== user?.id}
+                nickname={userProfiles[c.userId === user?.id ? c.contactUserId : c.userId]?.nickname}
+                onDelete={handleDeleteContact}
+                onAccept={handleAcceptContact}
+                onReject={handleRejectContact}
+              />
+            ))}
+          </View>
+        )}
+        {rejectedContacts.length > 0 && (
+          <View style={styles.group}>
+            <Text style={styles.groupLabel}>Declined</Text>
+            {rejectedContacts.map((c) => (
+              <MemberCard
+                key={c.id}
+                contact={c}
+                isIncoming={c.userId !== user?.id}
+                nickname={userProfiles[c.userId === user?.id ? c.contactUserId : c.userId]?.nickname}
+                onDelete={handleDeleteContact}
+                onAccept={handleAcceptContact}
+                onReject={handleRejectContact}
+              />
+            ))}
+          </View>
+        )}
+      </>
+    )}
+  </View>
+)}
 
       </Animated.ScrollView>
     </View>
@@ -518,12 +570,14 @@ activeOpacity={0.85}
 function MemberCard({
   contact,
   nickname,
+  isIncoming = false,
   onDelete,
   onAccept,
   onReject,
 }: {
   contact: Contact
   nickname?: string
+  isIncoming: boolean
   onDelete: (id: string) => void
   onAccept: (c: Contact) => void
   onReject: (c: Contact) => void
@@ -548,15 +602,10 @@ function MemberCard({
         isRejected && cardStyles.cardMuted,
       ]}
     >
-      <View
-        style={[
-          cardStyles.avatar,
-          isRejected && cardStyles.avatarMuted,
-        ]}
-      >
+      <View style={[cardStyles.avatar, isRejected && cardStyles.avatarMuted]}>
         <Text style={[cardStyles.initials, isRejected && cardStyles.initialsMuted]}>
           {initials}
-      </Text>
+        </Text>
       </View>
 
       <View style={cardStyles.info}>
@@ -565,39 +614,42 @@ function MemberCard({
           numberOfLines={1}
         >
           {displayName}
-      </Text>
-      <Text style={cardStyles.shortId}>{generateShortId(contact.contactUserId)}</Text>
+        </Text>
+        <Text style={cardStyles.shortId}>
+          {contact.userId !== contact.contactUserId
+            ? generateShortId(isIncoming ? contact.userId : contact.contactUserId)
+            : ''}
+        </Text>
 
-        <View
-          style={[
-            cardStyles.pill,
-            isAccepted && cardStyles.pillAccepted,
-            isRejected && cardStyles.pillMuted,
-          ]}
-        >
-          <Text
-            style={[
-              cardStyles.pillText,
-              isAccepted && cardStyles.pillTextAccepted,
-              isRejected && cardStyles.pillTextMuted,
-      ]}
->
-        {isPending ? 'Pending' : isAccepted ? 'Connected' : 'Declined'}
-      </Text>
-    </View>
-  </View>
+        <View style={[
+          cardStyles.pill,
+          isAccepted && cardStyles.pillAccepted,
+          isRejected && cardStyles.pillMuted,
+        ]}>
+          <Text style={[
+            cardStyles.pillText,
+            isAccepted && cardStyles.pillTextAccepted,
+            isRejected && cardStyles.pillTextMuted,
+          ]}>
+            {isPending
+              ? (isIncoming ? 'Incoming' : 'Sent')
+              : isAccepted ? 'Connected' : 'Declined'}
+          </Text>
+        </View>
+      </View>
 
-<View style={cardStyles.actions}>
-        {isPending && (
+      <View style={cardStyles.actions}>
+        {/* Only the recipient sees accept/decline — not the sender */}
+        {isPending && isIncoming && (
           <>
-  <TouchableOpacity
-  style={cardStyles.acceptBtn}
-  onPress={() => onAccept(contact)}
-activeOpacity={0.8}
->
-  <Ionicons name="checkmark" size={15} color="#fff" />
-</TouchableOpacity>
-<TouchableOpacity
+            <TouchableOpacity
+              style={cardStyles.acceptBtn}
+              onPress={() => onAccept(contact)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="checkmark" size={15} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity
               style={cardStyles.declineBtn}
               onPress={() => onReject(contact)}
               activeOpacity={0.8}
@@ -613,8 +665,8 @@ activeOpacity={0.8}
         >
           <Ionicons name="trash-outline" size={15} color="#ccc" />
         </TouchableOpacity>
-          </View>
-            </View>
+      </View>
+    </View>
   )
 }
 

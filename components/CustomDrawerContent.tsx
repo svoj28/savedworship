@@ -63,7 +63,8 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
     if (!userId && !user) return
     try {
       const userContacts = await getContactsByUserId(userId || user!.id)
-      setContacts(userContacts)
+      const selfId = userId || user!.id
+      setContacts(userContacts.filter(c => c.contactUserId !== selfId))
     } catch (err) {
       console.error('Error loading contacts:', err)
     }

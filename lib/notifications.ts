@@ -193,9 +193,6 @@ export async function sendLocalNotification(
   type: NotificationType,
   data?: Record<string, any>
 ): Promise<void> {
-  const muteState = await getMuteState(userId)
-
-  // Save to in-app store regardless of mute
   const notification: AppNotification = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     type,
@@ -206,9 +203,28 @@ export async function sendLocalNotification(
     read: false,
     userId,
   }
+
+  // Save to Supabase so the recipient's device can pull it
+  try {
+    const { supabase } = await import('./supabase')
+    await supabase.from('notifications').insert({
+      id: notification.id,
+      user_id: userId,
+      type,
+      title,
+      body,
+      data: data ?? {},
+      created_at: notification.createdAt,
+      read: false,
+    })
+  } catch (err) {
+    console.warn('Failed to save notification to Supabase:', err)
+  }
+
+  // Also save locally on THIS device (for the current user's own notifications)
+  const muteState = await getMuteState(userId)
   await saveNotification(notification)
 
-  // Only fire OS notification if not muted
   if (!isMuted(muteState)) {
     await Notifications.scheduleNotificationAsync({
       content: {
@@ -217,11 +233,55 @@ export async function sendLocalNotification(
         data: { type, userId, ...data },
         sound: true,
       },
-      trigger: null, // fire immediately
+      trigger: null,
     })
   }
 }
+export async function loadNotificationsFromSupabase(userId: string): Promise<void> {
+  try {
+    const { supabase } = await import('./supabase')
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50)
 
+    if (error || !data) return
+
+    const notifications: AppNotification[] = data.map(row => ({
+      id: row.id,
+      type: row.type,
+      title: row.title,
+      body: row.body,
+      data: row.data,
+      createdAt: row.created_at,
+      read: row.read,
+      userId: row.user_id,
+    }))
+
+    // Save to local AsyncStorage
+    await AsyncStorage.setItem(NOTIFICATIONS_KEY(userId), JSON.stringify(notifications))
+
+    // Fire OS notification for any unread ones received while offline
+    const muteState = await getMuteState(userId)
+    if (!isMuted(muteState)) {
+      for (const n of notifications.filter(n => !n.read)) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: n.title,
+            body: n.body,
+            data: { type: n.type, userId, ...n.data },
+            sound: true,
+          },
+          trigger: null,
+        })
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load notifications from Supabase:', err)
+  }
+}
 // ─── Helpers to create typed notifications ────────────────────────────────────
 
 export async function notifyNewUpload(userId: string, songTitle: string) {

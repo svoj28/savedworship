@@ -23,7 +23,8 @@ import { initializeDatabase } from './db/index'
 import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
 
 // Sync
-import { stampUserIdOnUnsyncedRows, startPeriodicSync, removeOrphanedUnsyncedRows } from './lib/sync'
+import { stampUserIdOnUnsyncedRows, removeOrphanedUnsyncedRows, subscribeToChanges, fullSync } from './lib/sync'
+import { queueDb } from './db/index'
 import { pingSupabaseOncePerDay } from './lib/supabaseKeepAlive'
 import { startNetworkSync, stopNetworkSync } from './lib/networkSync'
 
@@ -48,6 +49,7 @@ import EditAccountScreen from './screens/EditAccountScreen'
 import { useRole } from '../SavedWorshipMusicTool/lib/useRole'
 import AudioToolsScreen from './screens/AudioToolsScreen'
 import { StatusBar as RNStatusBar } from 'react-native'
+import { loadNotificationsFromSupabase } from './lib/notifications'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
@@ -458,11 +460,13 @@ function AppContent() {
   const [drawerVisible, setDrawerVisible] = useState(false)
   const [dbReady, setDbReady] = useState(false)
   const periodicSyncCleanupRef = React.useRef<(() => void) | null>(null)
+  const realtimeCleanupRef = React.useRef<(() => void) | null>(null)  // ← add
 
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        await initializeDatabase()
+        await queueDb(() => initializeDatabase())
+        await new Promise(resolve => setTimeout(resolve, 100))
         setDbReady(true)
         const authUser = await getCurrentUser()
         setUser(authUser)
@@ -482,26 +486,52 @@ function AppContent() {
     if (!user || !dbReady) {
       periodicSyncCleanupRef.current?.()
       periodicSyncCleanupRef.current = null
+      realtimeCleanupRef.current?.()   // ← add
+      realtimeCleanupRef.current = null // ← add
       stopNetworkSync()
       return
     }
+
     const startSync = async () => {
-      try {
-        await removeOrphanedUnsyncedRows(user.id)
-        await stampUserIdOnUnsyncedRows(user.id)
-        const cleanup = await startPeriodicSync(user.id, 60000)
-          // Daily Supabase keep‑alive ping
-          await pingSupabaseOncePerDay(user.id)
-        periodicSyncCleanupRef.current = cleanup
-        startNetworkSync()
-      } catch (err) {
-        console.error('Sync start failed:', err)
-      }
-    }
+  try {
+    // 1. Clean up first
+    await removeOrphanedUnsyncedRows(user.id)
+    await stampUserIdOnUnsyncedRows(user.id)
+
+    // 2. Do initial full sync and WAIT for it to complete
+    await fullSync(user.id)  // import this directly
+
+    // 3. Only AFTER sync is done, set up background services
+    await pingSupabaseOncePerDay(user.id)
+    await loadNotificationsFromSupabase(user.id)
+    startNetworkSync()
+
+    // 4. Start periodic timer (no immediate sync, fullSync already done)
+    const syncInterval = setInterval(async () => {
+      await fullSync(user.id)
+    }, 60000)
+    periodicSyncCleanupRef.current = () => clearInterval(syncInterval)
+
+    // 5. Subscribe to realtime LAST, after everything is settled
+    realtimeCleanupRef.current?.()
+    realtimeCleanupRef.current = null
+    const unsubscribeRealtime = subscribeToChanges(user.id, async () => {
+      await loadNotificationsFromSupabase(user.id)
+    })
+    realtimeCleanupRef.current = unsubscribeRealtime
+
+  } catch (err) {
+    console.error('Sync start failed:', err)
+  }
+}
+
     startSync()
+
     return () => {
       periodicSyncCleanupRef.current?.()
       periodicSyncCleanupRef.current = null
+      realtimeCleanupRef.current?.()   // ← add
+      realtimeCleanupRef.current = null // ← add
       stopNetworkSync()
     }
   }, [user, dbReady])
@@ -524,20 +554,20 @@ function AppContent() {
     return <LoadingScreen colors={colors} />
   }
 
- return (
-  <NotificationProvider userId={user?.id ?? null}>
-    <View style={{ flex: 1, paddingTop: RNStatusBar.currentHeight ?? 0, backgroundColor: colors.header }}>
-      <NavigationContainer theme={navTheme}>
-        <StatusBar style={colors.statusBar} />
-        {user ? (
-          <AppTabs drawerVisible={drawerVisible} setDrawerVisible={setDrawerVisible} />
-        ) : (
-          <AuthStack />
-        )}
-      </NavigationContainer>
-    </View>
-  </NotificationProvider>
-)
+  return (
+    <NotificationProvider userId={user?.id ?? null}>
+      <View style={{ flex: 1, paddingTop: RNStatusBar.currentHeight ?? 0, backgroundColor: colors.header }}>
+        <NavigationContainer theme={navTheme}>
+          <StatusBar style={colors.statusBar} />
+          {user ? (
+            <AppTabs drawerVisible={drawerVisible} setDrawerVisible={setDrawerVisible} />
+          ) : (
+            <AuthStack />
+          )}
+        </NavigationContainer>
+      </View>
+    </NotificationProvider>
+  )
 }
 
 export default function App() {

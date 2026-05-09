@@ -660,5 +660,11 @@ function mapPlaylistItem(row: any): PlaylistItem {
   }
 }
 
+// db/queries.ts — add this alongside getContactsByUserId
+export async function getContactsByRecipientId(recipientId: string): Promise<Contact[]> {
+  const results = await query('SELECT * FROM contacts WHERE contact_user_id = ? ORDER BY created_at DESC', [recipientId])
+  return results.map(mapContact)
+}
+
 // ─── RE-EXPORTS ───────────────────────────────────────────────────────────────
 export { query, queryOne, execute, transaction }

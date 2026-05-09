@@ -25,6 +25,18 @@ interface SyncOptions {
   conflictResolution?: 'server-wins' | 'client-wins'
 }
 
+let isSyncRunning = false
+
+async function guardedSync(userId: string, since: number) {
+  if (isSyncRunning) return   // already syncing, skip
+  isSyncRunning = true
+  try {
+    await syncPullFromSupabase(userId, since)
+  } finally {
+    isSyncRunning = false
+  }
+}
+
 interface SyncStatus {
   isSyncing: boolean
   lastSyncTime: number
@@ -40,6 +52,16 @@ let syncStatus: SyncStatus = {
 }
 
 const syncListeners: Set<(status: SyncStatus) => void> = new Set()
+const refreshListeners: Set<(table: string) => void> = new Set()
+
+export function onDataRefresh(listener: (table: string) => void): () => void {
+  refreshListeners.add(listener)
+  return () => refreshListeners.delete(listener)
+}
+
+function notifyDataRefresh(table: string) {
+  refreshListeners.forEach(l => l(table))
+}
 
 interface SyncLog {
   table: string
@@ -65,9 +87,6 @@ function updateSyncStatus(partial: Partial<SyncStatus>) {
   notifySyncStatusChange()
 }
 
-/**
- * Strip local-only SQLite fields before sending to Supabase
- */
 function toSupabasePayload(record: any) {
   const { _synced, ...rest } = record
   return rest
@@ -95,12 +114,10 @@ export async function countPendingChanges(userId: string): Promise<number> {
 }
 
 export async function syncPushToSupabase(userId: string, options: SyncOptions = {}) {
-  
   const { maxRetries = 3 } = options
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) return
 
-  // Verify role exists before attempting sync
   const { data: profile } = await supabase
     .from('user_profiles')
     .select('role')
@@ -112,14 +129,23 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
     return
   }
 
-  const canWrite = ['superadmin', 'admin'].includes(profile.role)
-  
-  if (!session) {
-    console.warn('No Supabase session found, skipping push sync')
-    return
-  }
-
   try {
+    const unsyncedMessages: any[] = await query(
+      `SELECT * FROM messages WHERE _synced = 0 AND sender_id = ?`,
+      [userId]
+    )
+    for (const record of unsyncedMessages) {
+      const payload = toSupabasePayload(record)
+      const { error } = await supabase
+        .from('messages')
+        .upsert(convertToSnakeCase(payload), { onConflict: 'id' })
+      if (!error) {
+        await execute(`UPDATE messages SET _synced = 1 WHERE id = ?`, [record.id])
+      } else {
+        console.warn('Failed to push message:', error)
+      }
+    }
+
     for (const tableName of TABLES) {
       const unsyncedRecords: any[] = await query(
         `SELECT * FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
@@ -136,11 +162,6 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
           try {
             const data = toSupabasePayload(record)
             const timestamp = record.updated_at || Date.now()
-
-            const { data: { session } } = await supabase.auth.getSession()
-            console.log('Session UID:', session?.user?.id)
-            console.log('Record user_id:', record.user_id)
-
             const conflictColumn = tableName === 'user_profiles' ? 'user_id' : 'id'
 
             const { error } = await supabase.from(tableName).upsert(
@@ -193,12 +214,17 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
     for (const tableName of TABLES) {
       try {
 
-        // ─── MESSAGES: special handling ───────────────────────────────────
+        // ─── MESSAGES ─────────────────────────────────────────────────────
         if (tableName === 'messages') {
-          const { data: ownMessages } = await supabase
+          const { data: sentMessages } = await supabase
             .from('messages')
             .select('*')
-            .eq('user_id', userId)
+            .eq('sender_id', userId)
+
+          const { data: receivedMessages } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('receiver_id', userId)
 
           const { data: overallMessages } = await supabase
             .from('messages')
@@ -206,7 +232,8 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
             .eq('receiver_id', 'overall-chat')
 
           const combined = [
-            ...(ownMessages || []),
+            ...(sentMessages || []),
+            ...(receivedMessages || []),
             ...(overallMessages || []),
           ]
 
@@ -218,92 +245,146 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
           })
 
           if (data.length > 0) {
-            await transaction(async () => {
-              for (const serverRecord of data) {
-                try {
-                  const localRecord: any = await query(
-                    `SELECT * FROM messages WHERE id = ?`,
-                    [serverRecord.id]
-                  )
-                  const snakeCaseRecord = convertToSnakeCase(serverRecord)
+            for (const serverRecord of data) {
+              try {
+                const localRecord: any = await query(
+                  `SELECT * FROM messages WHERE id = ?`,
+                  [serverRecord.id]
+                )
+                const snakeCaseRecord = convertToSnakeCase(serverRecord)
 
-                  if (localRecord && localRecord.length > 0) {
-                    const localTime = localRecord[0].updated_at || 0
-                    const serverTime = serverRecord.updated_at || 0
-                    if (conflictResolution === 'server-wins' || serverTime >= localTime) {
-                      const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
-                      await execute(
-                        `UPDATE messages SET ${updates}, _synced = 1 WHERE id = ?`,
-                        [...Object.values(snakeCaseRecord), serverRecord.id]
-                      )
-                    }
-                  } else {
-                    const columns = Object.keys(snakeCaseRecord).join(', ')
-                    const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+                if (localRecord && localRecord.length > 0) {
+                  const localTime = localRecord[0].updated_at || 0
+                  const serverTime = serverRecord.updated_at || 0
+                  if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+                    const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
                     await execute(
-                      `INSERT INTO messages (${columns}, _synced) VALUES (${placeholders}, 1)`,
-                      Object.values(snakeCaseRecord)
+                      `UPDATE messages SET ${updates}, _synced = 1 WHERE id = ?`,
+                      [...Object.values(snakeCaseRecord), serverRecord.id]
                     )
                   }
-                } catch (err) {
-                  console.error(`Error upserting messages/${serverRecord.id}:`, err)
+                } else {
+                  const columns = Object.keys(snakeCaseRecord).join(', ')
+                  const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+                  await execute(
+                    `INSERT INTO messages (${columns}, _synced) VALUES (${placeholders}, 1)`,
+                    Object.values(snakeCaseRecord)
+                  )
                 }
+              } catch (err) {
+                console.error(`Error upserting messages/${serverRecord.id}:`, err)
               }
-            })
+            }
           }
           continue
         }
 
-        // ─── USER_PROFILES: pull all profiles ────────────────────────────
-        if (tableName === 'user_profiles') {
-  const { data, error } = await supabase
-    .from('user_profiles')
-    .select('*')
+        // ─── CONTACTS ─────────────────────────────────────────────────────
+        if (tableName === 'contacts') {
+          const { data: sentContacts } = await supabase
+            .from('contacts')
+            .select('*')
+            .eq('user_id', userId)
 
-  if (error) {
-    console.error(`Failed to fetch user_profiles:`, error)
-    continue
-  }
+          const { data: receivedContacts } = await supabase
+            .from('contacts')
+            .select('*')
+            .eq('contact_user_id', userId)
 
-  if (!data || data.length === 0) continue
+          const combined = [
+            ...(sentContacts || []),
+            ...(receivedContacts || []),
+          ]
 
-  await transaction(async () => {
-    for (const serverRecord of data) {
-      try {
-        // Check by user_id instead of id since that's the unique key
-        const localRecord: any = await query(
-          `SELECT * FROM user_profiles WHERE user_id = ?`,
-          [serverRecord.user_id]
-        )
-        const snakeCaseRecord = convertToSnakeCase(serverRecord)
+          const seen = new Set()
+          const data = combined.filter(row => {
+            if (seen.has(row.id)) return false
+            seen.add(row.id)
+            return true
+          })
 
-        if (localRecord && localRecord.length > 0) {
-          const localTime = localRecord[0].updated_at || 0
-          const serverTime = serverRecord.updated_at || 0
-          if (conflictResolution === 'server-wins' || serverTime >= localTime) {
-            const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
-            await execute(
-              `UPDATE user_profiles SET ${updates}, _synced = 1 WHERE user_id = ?`,
-              [...Object.values(snakeCaseRecord), serverRecord.user_id]
-            )
+          if (data.length > 0) {
+            for (const serverRecord of data) {
+              try {
+                const localRecord: any = await query(
+                  `SELECT * FROM contacts WHERE id = ?`,
+                  [serverRecord.id]
+                )
+                const snakeCaseRecord = convertToSnakeCase(serverRecord)
+
+                if (localRecord && localRecord.length > 0) {
+                  const localTime = localRecord[0].updated_at || 0
+                  const serverTime = serverRecord.updated_at || 0
+                  if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+                    const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
+                    await execute(
+                      `UPDATE contacts SET ${updates}, _synced = 1 WHERE id = ?`,
+                      [...Object.values(snakeCaseRecord), serverRecord.id]
+                    )
+                  }
+                } else {
+                  const columns = Object.keys(snakeCaseRecord).join(', ')
+                  const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+                  await execute(
+                    `INSERT INTO contacts (${columns}, _synced) VALUES (${placeholders}, 1)`,
+                    Object.values(snakeCaseRecord)
+                  )
+                }
+              } catch (err) {
+                console.error(`Error upserting contacts/${serverRecord.id}:`, err)
+              }
+            }
           }
-        } else {
-          const columns = Object.keys(snakeCaseRecord).join(', ')
-          const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
-          await execute(
-            `INSERT OR REPLACE INTO user_profiles (${columns}, _synced) VALUES (${placeholders}, 1)`,
-            Object.values(snakeCaseRecord)
-          )
+          continue
         }
-      } catch (err) {
-        console.error(`Error upserting user_profiles/${serverRecord.id}:`, err)
-      }
-    }
-  })
-  continue
-}
 
-        // ─── ALL OTHER TABLES: normal handling ────────────────────────────
+        // ─── USER_PROFILES ────────────────────────────────────────────────
+        if (tableName === 'user_profiles') {
+          const { data, error } = await supabase
+            .from('user_profiles')
+            .select('*')
+
+          if (error) {
+            console.error(`Failed to fetch user_profiles:`, error)
+            continue
+          }
+
+          if (!data || data.length === 0) continue
+
+          for (const serverRecord of data) {
+            try {
+              const localRecord: any = await query(
+                `SELECT * FROM user_profiles WHERE user_id = ?`,
+                [serverRecord.user_id]
+              )
+              const snakeCaseRecord = convertToSnakeCase(serverRecord)
+
+              if (localRecord && localRecord.length > 0) {
+                const localTime = localRecord[0].updated_at || 0
+                const serverTime = serverRecord.updated_at || 0
+                if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+                  const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
+                  await execute(
+                    `UPDATE user_profiles SET ${updates}, _synced = 1 WHERE user_id = ?`,
+                    [...Object.values(snakeCaseRecord), serverRecord.user_id]
+                  )
+                }
+              } else {
+                const columns = Object.keys(snakeCaseRecord).join(', ')
+                const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+                await execute(
+                  `INSERT OR REPLACE INTO user_profiles (${columns}, _synced) VALUES (${placeholders}, 1)`,
+                  Object.values(snakeCaseRecord)
+                )
+              }
+            } catch (err) {
+              console.error(`Error upserting user_profiles/${serverRecord.id}:`, err)
+            }
+          }
+          continue
+        }
+
+        // ─── ALL OTHER TABLES ─────────────────────────────────────────────
         let supabaseQuery = supabase
           .from(tableName)
           .select('*')
@@ -323,38 +404,36 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
 
         if (!data || data.length === 0) continue
 
-        await transaction(async () => {
-          for (const serverRecord of data) {
-            try {
-              const localRecord: any = await query(
-                `SELECT * FROM ${tableName} WHERE id = ?`,
-                [serverRecord.id]
-              )
-              const snakeCaseRecord = convertToSnakeCase(serverRecord)
+        for (const serverRecord of data) {
+          try {
+            const localRecord: any = await query(
+              `SELECT * FROM ${tableName} WHERE id = ?`,
+              [serverRecord.id]
+            )
+            const snakeCaseRecord = convertToSnakeCase(serverRecord)
 
-              if (localRecord && localRecord.length > 0) {
-                const localTime = localRecord[0].updated_at || 0
-                const serverTime = serverRecord.updated_at || 0
-                if (conflictResolution === 'server-wins' || serverTime >= localTime) {
-                  const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
-                  await execute(
-                    `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
-                    [...Object.values(snakeCaseRecord), serverRecord.id]
-                  )
-                }
-              } else {
-                const columns = Object.keys(snakeCaseRecord).join(', ')
-                const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+            if (localRecord && localRecord.length > 0) {
+              const localTime = localRecord[0].updated_at || 0
+              const serverTime = serverRecord.updated_at || 0
+              if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+                const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
                 await execute(
-                  `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
-                  Object.values(snakeCaseRecord)
+                  `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
+                  [...Object.values(snakeCaseRecord), serverRecord.id]
                 )
               }
-            } catch (err) {
-              console.error(`Error upserting ${tableName}/${serverRecord.id}:`, err)
+            } else {
+              const columns = Object.keys(snakeCaseRecord).join(', ')
+              const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+              await execute(
+                `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
+                Object.values(snakeCaseRecord)
+              )
             }
+          } catch (err) {
+            console.error(`Error upserting ${tableName}/${serverRecord.id}:`, err)
           }
-        })
+        }
 
       } catch (err) {
         console.error(`Error pulling ${tableName}:`, err)
@@ -367,16 +446,15 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
 }
 
 export async function fullSync(userId: string, options: SyncOptions = {}): Promise<boolean> {
-  if (syncStatus.isSyncing) {
+  if (isSyncRunning) {
     console.warn('Sync already in progress')
     return false
   }
-
-  // Guard: ensure Supabase has an active session before pushing
+  isSyncRunning = true
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) {
     console.warn('No Supabase session found, skipping push sync')
-    return
+    return false
   }
 
   try {
@@ -407,10 +485,7 @@ export async function fullSync(userId: string, options: SyncOptions = {}): Promi
   } catch (err) {
     const errorMsg = String(err)
     console.error('Error in fullSync:', err)
-    updateSyncStatus({
-      isSyncing: false,
-      syncError: errorMsg
-    })
+    updateSyncStatus({ isSyncing: false, syncError: errorMsg })
     return false
   }
 }
@@ -436,36 +511,33 @@ export async function syncTable(tableName: string, userId: string, options: Sync
     }
 
     const { data, error } = await supabaseQuery
-
     if (error) throw error
 
     if (data && data.length > 0) {
-      await transaction(async () => {
-        for (const serverRecord of data) {
-          const snakeCaseRecord = convertToSnakeCase(serverRecord)
-          const localRecord: any = await query(
-            `SELECT id FROM ${tableName} WHERE id = ?`,
-            [serverRecord.id]
-          )
+      for (const serverRecord of data) {
+        const snakeCaseRecord = convertToSnakeCase(serverRecord)
+        const localRecord: any = await query(
+          `SELECT id FROM ${tableName} WHERE id = ?`,
+          [serverRecord.id]
+        )
 
-          if (localRecord && localRecord.length > 0) {
-            const updates = Object.keys(snakeCaseRecord).map(key => `${key} = ?`).join(', ')
-            const values = Object.values(snakeCaseRecord)
-            await execute(
-              `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
-              [...values, serverRecord.id]
-            )
-          } else {
-            const columns = Object.keys(snakeCaseRecord).join(', ')
-            const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
-            const values = Object.values(snakeCaseRecord)
-            await execute(
-              `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
-              values
-            )
-          }
+        if (localRecord && localRecord.length > 0) {
+          const updates = Object.keys(snakeCaseRecord).map(key => `${key} = ?`).join(', ')
+          const values = Object.values(snakeCaseRecord)
+          await execute(
+            `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
+            [...values, serverRecord.id]
+          )
+        } else {
+          const columns = Object.keys(snakeCaseRecord).join(', ')
+          const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+          const values = Object.values(snakeCaseRecord)
+          await execute(
+            `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
+            values
+          )
         }
-      })
+      }
     }
 
     const unsyncedRecords: any[] = await query(
@@ -476,7 +548,6 @@ export async function syncTable(tableName: string, userId: string, options: Sync
     for (const record of unsyncedRecords) {
       const data = toSupabasePayload(record)
       const timestamp = record.updated_at || Date.now()
-
       const conflictColumn = tableName === 'user_profiles' ? 'user_id' : 'id'
 
       const { error } = await supabase.from(tableName).upsert(
@@ -503,12 +574,16 @@ export async function syncTable(tableName: string, userId: string, options: Sync
   }
 }
 
+// ─── Sync Queue ───────────────────────────────────────────────────────────────
+
+
 export function subscribeToChanges(userId: string, onUpdate: () => void) {
   const channels: any[] = []
+  const stamp = Date.now()
 
   for (const tableName of TABLES) {
     const channel = supabase
-      .channel(`${tableName}-changes`)
+      .channel(`${tableName}-changes-${stamp}`)
       .on(
         'postgres_changes',
         {
@@ -517,15 +592,85 @@ export function subscribeToChanges(userId: string, onUpdate: () => void) {
           table: tableName,
           filter: `user_id=eq.${userId}`,
         },
-        async () => {
-          await syncPullFromSupabase(userId, Date.now() - 60000)
-          onUpdate()
-        }
+      async () => {
+        notifyDataRefresh(tableName)
+        await guardedSync(userId, Date.now() - 60000)
+        notifyDataRefresh(tableName)
+        onUpdate()
+      }
       )
       .subscribe()
-
     channels.push(channel)
   }
+
+  // Incoming contact requests
+  const incomingContactsChannel = supabase
+    .channel(`contacts-incoming-changes-${stamp}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'contacts',
+        filter: `contact_user_id=eq.${userId}`,
+      },
+      async () => {
+        notifyDataRefresh('contacts')
+        
+         await guardedSync(userId, Date.now() - 60000)
+          notifyDataRefresh('contacts')
+          onUpdate()
+
+      }
+    )
+    .subscribe()
+  channels.push(incomingContactsChannel)
+
+  // Incoming direct messages
+  const incomingMessagesChannel = supabase
+    .channel(`messages-incoming-${stamp}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${userId}`,
+      },
+      async () => {
+        notifyDataRefresh('messages')
+       
+          await guardedSync(userId, Date.now() - 60000)
+          notifyDataRefresh('messages')
+          onUpdate()
+  
+      }
+    )
+    .subscribe()
+  channels.push(incomingMessagesChannel)
+
+  // Overall chat messages
+  const overallChatChannel = supabase
+    .channel(`messages-overall-${stamp}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.overall-chat`,
+      },
+      async () => {
+        notifyDataRefresh('messages')
+     
+          await guardedSync(userId, Date.now() - 60000)
+          notifyDataRefresh('messages')
+          onUpdate()
+   
+      }
+    )
+    .subscribe()
+  channels.push(overallChatChannel)
 
   return () => {
     channels.forEach((ch) => supabase.removeChannel(ch))
@@ -604,6 +749,7 @@ export async function setLastSyncTime(time: number) {
     console.error('Error setting lastSyncTime:', err)
   }
 }
+
 export async function stampUserIdOnUnsyncedRows(userId: string) {
   for (const tableName of TABLES) {
     try {
@@ -616,10 +762,10 @@ export async function stampUserIdOnUnsyncedRows(userId: string) {
     }
   }
 }
+
 export async function removeOrphanedUnsyncedRows(userId: string) {
   for (const tableName of TABLES) {
     try {
-      // Delete unsynced rows that don't belong to the current user
       await execute(
         `DELETE FROM ${tableName} WHERE _synced = 0 AND user_id != ? AND user_id != ''`,
         [userId]
@@ -628,8 +774,7 @@ export async function removeOrphanedUnsyncedRows(userId: string) {
       console.error(`Failed to clean orphaned rows in ${tableName}:`, err)
     }
   }
-  
-  // Special case for messages — check sender_id too
+
   try {
     await execute(
       `DELETE FROM messages WHERE _synced = 0 AND sender_id != ? AND sender_id != ''`,

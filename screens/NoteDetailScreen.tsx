@@ -29,22 +29,24 @@ export default function NoteDetailScreen({ route, navigation }: Props) {
   const [hasChanges, setHasChanges] = useState(false)
 const [savedAt, setSavedAt] = useState<Date | null>(null)
   const contentRef = useRef<TextInput>(null)
+  const hasLoadedOnceRef = useRef(false)
 
   useEffect(() => {
     navigation.setOptions({       headerLeft: () => null     })
-    loadNote()
+    void loadNote({ silent: hasLoadedOnceRef.current })
   }, [navigation])
 
   useEffect(() => {
     const unsub = onTableChange('chord_lists', () => {
-      loadNote()
+      void loadNote({ silent: true })
     })
 
     return () => unsub()
   }, [noteId])
 
-  const loadNote = async () => {
+  const loadNote = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
+      if (!silent) setLoading(true)
       const row = await getChordListById(noteId)
       if (row) {
         setTitle(row.title)
@@ -55,6 +57,7 @@ if ((row as any).updatedAt) setSavedAt(new Date((row as any).updatedAt))
       console.error('Error loading note:', err)
       Alert.alert('Error', 'Failed to load note')
     } finally {
+      hasLoadedOnceRef.current = true
       setLoading(false)
     }
   }

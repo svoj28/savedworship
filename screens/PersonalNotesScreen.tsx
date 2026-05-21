@@ -40,16 +40,17 @@ const [searchFocused, setSearchFocused] = useState(false)
   const [selectedArtist, setSelectedArtist] = useState<string | null>(null)
   const [artists, setArtists] = useState<Artist[]>([])
   const [uploading, setUploading] = useState<string | null>(null) // track by id
+  const hasLoadedOnceRef = React.useRef(false)
 
     useFocusEffect(
     React.useCallback(() => {
-      loadPersonalNotes()
+      void loadPersonalNotes({ silent: hasLoadedOnceRef.current })
     }, [])
   )
 
   useEffect(() => {
-    const unsubArtists = onTableChange('artists', () => loadPersonalNotes())
-    const unsubChordLists = onTableChange('chord_lists', () => loadPersonalNotes())
+    const unsubArtists = onTableChange('artists', () => void loadPersonalNotes({ silent: true }))
+    const unsubChordLists = onTableChange('chord_lists', () => void loadPersonalNotes({ silent: true }))
 
     return () => {
       unsubArtists()
@@ -85,9 +86,9 @@ const handleUploadToCloud = async (noteId: string) => {
   )
 }
 
-  const loadPersonalNotes = async () => {
+  const loadPersonalNotes = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const user = await getCurrentUser()
       if (!user) {
         Alert.alert('Error', 'Not authenticated')
@@ -130,7 +131,8 @@ const handleUploadToCloud = async (noteId: string) => {
       console.error('Error loading personal notes:', err)
       Alert.alert('Error', 'Failed to load personal notes')
     } finally {
-      setLoading(false)
+      hasLoadedOnceRef.current = true
+      if (!silent) setLoading(false)
     }
   }
 
@@ -171,7 +173,7 @@ chordLists.filter      (list =>
       setNewListTitle('')
       setSelectedArtist(null)
       setShowCreateModal(false)
-      loadPersonalNotes()
+      void loadPersonalNotes({ silent: true })
     } catch (err) {
       console.error('Error creating chord list:', err)
       Alert.alert('Error', 'Failed to create chord list')
@@ -188,7 +190,7 @@ style: 'destructive',
           try {
                         await execute('DELETE FROM songs WHERE chord_list_id = ?', [listId])
                         await execute('DELETE FROM chord_lists WHERE id = ?', [listId])
-            loadPersonalNotes()
+            void loadPersonalNotes({ silent: true })
           } catch (err) {
             Alert.alert('Error', 'Failed to delete note')
           }

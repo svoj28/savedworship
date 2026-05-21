@@ -18,22 +18,47 @@ import { getAllKeys, getTransposeDistance, transposeText } from '../lib/transpos
 
 const SCREEN_WIDTH = Dimensions.get('window').width
 
-// ─── Section parsing (mirrors ChordListScreen) ────────────────────────────────
+/**
+ * Chords-only: keep only lines that have [chord] tokens,
+ * extract just the chord names (no lyric text, no brackets).
+ */
+const SECTION_HEADER_LINE_PATTERN = /^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)(?:\s*[0-9]+)?$/i
 
-type SongSection = { id: string; label: string; content: string }
+function isSectionHeaderLine(line: string): boolean {
+  return SECTION_HEADER_LINE_PATTERN.test(line.trim())
+}
 
-const SECTION_HEADER_PATTERN =
-  /^(?:\[(.+?)\]|(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)(?:\s*([0-9]+))?)\s*:??\s*$/i
+type SongSection = {
+  id: string
+  label: string
+  content: string
+}
 
 function normalizeSectionLabel(rawLabel: string, fallbackIndex: number) {
-  const cleaned = rawLabel.replace(/\[|\]/g, '').trim()
-  const match = cleaned.match(
-    /^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)\s*([0-9]+)?$/i
-  )
+  const cleaned = rawLabel.trim()
+  const match = cleaned.match(/^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)\s*([0-9]+)?$/i)
   if (!match) return cleaned || `Section ${fallbackIndex + 1}`
   const base = match[1].replace(/[-\s]/g, ' ')
   const number = match[2] ? ` ${match[2]}` : ''
   return `${base.charAt(0).toUpperCase()}${base.slice(1).toLowerCase()}${number}`
+}
+
+function getChordRoot(chord: string): string {
+  const match = chord.match(/^([A-G]#?|[A-G]b?)/)
+  return match ? match[1] : chord
+}
+
+function getEffectiveSongKey(song: any): string {
+  const explicitKey = typeof song?.key === 'string' ? song.key.trim() : ''
+  if (explicitKey) return explicitKey
+
+  const content = typeof song?.content === 'string' ? song.content : ''
+  const chordMatch = content.match(/\[([^\]]+)\]/)
+  if (chordMatch) {
+    return getChordRoot(chordMatch[1])
+  }
+
+  return 'C'
 }
 
 function parseSongSections(content: string): SongSection[] {
@@ -57,12 +82,8 @@ function parseSongSections(content: string): SongSection[] {
 
   for (const line of lines) {
     const trimmed = line.trim()
-    const match = trimmed.match(SECTION_HEADER_PATTERN)
-    if (match) {
-      const label = normalizeSectionLabel(
-        match[1] || `${match[2] || 'Section'} ${match[3] || ''}`.trim(),
-        sections.length
-      )
+    if (isSectionHeaderLine(trimmed)) {
+      const label = normalizeSectionLabel(trimmed, sections.length)
       if (currentLines.length > 0 || sections.length === 0) flush(currentLabel)
       currentLabel = label
       foundAnyHeader = true
@@ -70,8 +91,8 @@ function parseSongSections(content: string): SongSection[] {
     }
     currentLines.push(line)
   }
-  flush(currentLabel)
 
+  flush(currentLabel)
   if (!foundAnyHeader) {
     return [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
   }
@@ -80,23 +101,49 @@ function parseSongSections(content: string): SongSection[] {
     : [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
 }
 
-/**
- * Chords-only: keep only lines that have [chord] tokens,
- * extract just the chord names (no lyric text, no brackets).
- */
-function extractChordsOnly(content: string): string {
+function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both') {
   const lines = content.split(/\r?\n/)
-  const out: string[] = []
-  for (const line of lines) {
-    const matches = [...line.matchAll(/\[([^\]]+)\]/g)]
-    if (matches.length > 0) out.push(matches.map(m => m[1]).join('  '))
-  }
-  return out.join('\n')
-}
+  const rendered: React.ReactNode[] = []
 
-/** Both mode: strip [] but keep chord text inline with lyrics. */
-function renderBoth(content: string): string {
-  return content.replace(/\[([^\]]+)\]/g, '$1 ')
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index]
+    const trimmed = rawLine.trim()
+
+    if (!trimmed) {
+      rendered.push(<View key={`blank-${index}`} style={{ height: 12 }} />)
+      continue
+    }
+
+    if (isSectionHeaderLine(trimmed)) {
+      rendered.push(
+        <Text key={`section-${index}`} style={s.sectionLine}>
+          {trimmed}
+        </Text>
+      )
+      continue
+    }
+
+    let lineToRender = rawLine
+    if (mode === 'lyrics') {
+      lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '').trim()
+    } else if (mode === 'chords') {
+      const matches = [...rawLine.matchAll(/\[([^\]]+)\]/g)]
+      if (matches.length === 0) continue
+      lineToRender = matches.map(match => match[1]).join('  ')
+    } else if (mode === 'both') {
+      lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '$1').trim()
+    }
+
+    if (lineToRender.trim()) {
+      rendered.push(
+        <Text key={`line-${index}`} style={s.contentLine}>
+          {lineToRender}
+        </Text>
+      )
+    }
+  }
+
+  return rendered
 }
 
 const SCROLL_SPEEDS = [
@@ -133,35 +180,53 @@ function SongPage({
   onAutoScrollStopped,
 }: SongPageProps) {
   const contentScrollRef    = useRef<ScrollView | null>(null)
-  const sectionNavScrollRef = useRef<ScrollView | null>(null)
-  const sectionOffsetsRef     = useRef<Record<string, number>>({})
-  const sectionPillOffsetsRef = useRef<Record<string, number>>({})
   const scrollYRef          = useRef(0)
   const contentHeightRef    = useRef(0)
   const scrollViewHeightRef = useRef(0)
   const autoScrollRef       = useRef<ReturnType<typeof setInterval> | null>(null)
-  const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
 
   // Build display content
   const displayContent = useMemo(() => {
     if (!song?.content) return ''
-    const originalKey = song.key || 'C'
+    const originalKey = getEffectiveSongKey(song)
     const semitones = getTransposeDistance(originalKey, transposeKey)
     let content = semitones !== 0 ? transposeText(song.content, semitones) : song.content
-
-    if (viewMode === 'lyrics') return content.replace(/\[([^\]]+)\]/g, '').trim()
-    if (viewMode === 'chords') return extractChordsOnly(content)
     return content
-  }, [song, transposeKey, viewMode])
+  }, [song, transposeKey])
 
   const parsedSections = useMemo(() => parseSongSections(displayContent), [displayContent])
-  const hasSections = parsedSections.length > 1
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
+  const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null)
+
+  const visibleSections = useMemo(() => {
+    if (!focusedSectionId) return parsedSections
+    return parsedSections.filter(section => section.id === focusedSectionId)
+  }, [focusedSectionId, parsedSections])
+
+  useEffect(() => {
+    setActiveSectionId(parsedSections[0]?.id ?? null)
+    setFocusedSectionId(null)
+  }, [parsedSections])
+
+  const scrollToSection = (sectionId: string) => {
+    setActiveSectionId(sectionId)
+    setFocusedSectionId(sectionId)
+    const section = parsedSections.find(item => item.id === sectionId)
+    if (!section) return
+
+    scrollYRef.current = 0
+    contentScrollRef.current?.scrollTo({ y: 0, animated: true })
+  }
+
+  const showAllSections = () => {
+    setFocusedSectionId(null)
+    setActiveSectionId(parsedSections[0]?.id ?? null)
+    scrollYRef.current = 0
+    contentScrollRef.current?.scrollTo({ y: 0, animated: true })
+  }
 
   // Reset scroll when content changes
   useEffect(() => {
-    sectionOffsetsRef.current = {}
-    sectionPillOffsetsRef.current = {}
-    setActiveSectionId(parsedSections[0]?.id ?? null)
     contentScrollRef.current?.scrollTo({ y: 0, animated: false })
     scrollYRef.current = 0
   }, [displayContent])
@@ -190,86 +255,14 @@ function SongPage({
     return () => { if (autoScrollRef.current) { clearInterval(autoScrollRef.current); autoScrollRef.current = null } }
   }, [isActive, isAutoScrolling, scrollSpeedIndex])
 
-  const scrollToSection = (sectionId: string) => {
-    setActiveSectionId(sectionId)
-    const offset = sectionOffsetsRef.current[sectionId]
-    if (typeof offset === 'number') {
-      const y = Math.max(0, offset - 12)
-      scrollYRef.current = y
-      contentScrollRef.current?.scrollTo({ y, animated: true })
-    }
-    const pillX = sectionPillOffsetsRef.current[sectionId]
-    if (typeof pillX === 'number') {
-      sectionNavScrollRef.current?.scrollTo({ x: Math.max(0, pillX - 60), animated: true })
-    }
-  }
-
   const handleContentScroll = useCallback((e: any) => {
     scrollYRef.current = e.nativeEvent.contentOffset.y
-    const scrollY = e.nativeEvent.contentOffset.y
-    let activeId = parsedSections[0]?.id ?? null
-    for (const section of parsedSections) {
-      const top = sectionOffsetsRef.current[section.id]
-      if (typeof top === 'number' && scrollY >= top - 40) activeId = section.id
-    }
-    if (activeId !== activeSectionId) {
-      setActiveSectionId(activeId)
-      if (activeId) {
-        const pillX = sectionPillOffsetsRef.current[activeId]
-        if (typeof pillX === 'number') {
-          sectionNavScrollRef.current?.scrollTo({ x: Math.max(0, pillX - 60), animated: true })
-        }
-      }
-    }
     // If user scrolls manually during auto-scroll, stop it
     if (isAutoScrolling) onAutoScrollStopped()
-  }, [parsedSections, activeSectionId, isAutoScrolling])
-
-  const renderSectionContent = (content: string) => {
-    if (viewMode === 'both') return renderBoth(content)
-    return content
-  }
+  }, [isAutoScrolling, onAutoScrollStopped])
 
   return (
     <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
-      {/* Section Navigator */}
-      {hasSections && (
-        <View style={s.sectionNavBar}>
-          <ScrollView
-            ref={sectionNavScrollRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={s.sectionNavContent}
-          >
-            {parsedSections.map((section, idx) => {
-              const isActivePill = section.id === activeSectionId
-              return (
-                <TouchableOpacity
-                  key={section.id}
-                  style={[s.sectionPill, isActivePill && s.sectionPillActive]}
-                  onPress={() => scrollToSection(section.id)}
-                  activeOpacity={0.7}
-                  onLayout={e => { sectionPillOffsetsRef.current[section.id] = e.nativeEvent.layout.x }}
-                >
-                  <View style={[s.sectionPillIdx, isActivePill && s.sectionPillIdxActive]}>
-                    <Text style={[s.sectionPillIdxText, isActivePill && s.sectionPillIdxTextActive]}>
-                      {idx + 1}
-                    </Text>
-                  </View>
-                  <Text
-                    style={[s.sectionPillText, isActivePill && s.sectionPillTextActive]}
-                    numberOfLines={1}
-                  >
-                    {section.label}
-                  </Text>
-                </TouchableOpacity>
-              )
-            })}
-          </ScrollView>
-        </View>
-      )}
-
-      {/* Song content */}
       <ScrollView
         ref={contentScrollRef}
         style={s.contentScroll}
@@ -289,22 +282,56 @@ function SongPage({
           </View>
         </View>
 
-        <View style={s.sectionList}>
-          {parsedSections.map(section => (
-            <View
-              key={section.id}
-              style={[s.sectionBlock, activeSectionId === section.id && s.sectionBlockActive]}
-              onLayout={event => { sectionOffsetsRef.current[section.id] = event.nativeEvent.layout.y }}
-            >
+        {parsedSections.length > 1 && (
+          <View style={s.sectionNavBar}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.sectionNavContent}>
+              <TouchableOpacity
+                style={[s.sectionPill, !focusedSectionId && s.sectionPillActive]}
+                onPress={showAllSections}
+                activeOpacity={0.7}
+              >
+                <View style={[s.sectionPillIdx, !focusedSectionId && s.sectionPillIdxActive]}>
+                  <Text style={[s.sectionPillIdxText, !focusedSectionId && s.sectionPillIdxTextActive]}>A</Text>
+                </View>
+                <Text style={[s.sectionPillText, !focusedSectionId && s.sectionPillTextActive]} numberOfLines={1}>
+                  All
+                </Text>
+              </TouchableOpacity>
+              {parsedSections.map((section, idx) => {
+                const isActive = section.id === activeSectionId
+                return (
+                  <TouchableOpacity
+                    key={section.id}
+                    style={[s.sectionPill, isActive && s.sectionPillActive]}
+                    onPress={() => scrollToSection(section.id)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[s.sectionPillIdx, isActive && s.sectionPillIdxActive]}>
+                      <Text style={[s.sectionPillIdxText, isActive && s.sectionPillIdxTextActive]}>{idx + 1}</Text>
+                    </View>
+                    <Text style={[s.sectionPillText, isActive && s.sectionPillTextActive]} numberOfLines={1}>
+                      {section.label}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        <View style={s.songBody}>
+          {visibleSections.map(section => (
+            <View key={section.id} style={s.sectionBlock}>
               <View style={s.sectionBadge}>
                 <Text style={s.sectionBadgeText}>{section.label}</Text>
               </View>
-              <Text style={[s.content, { fontSize, lineHeight: fontSize * 1.85 }]}>
-                {renderSectionContent(section.content)}
-              </Text>
+              <View style={s.sectionContentBlock}>
+                {renderSongLines(section.content, viewMode)}
+              </View>
             </View>
           ))}
         </View>
+
         <View style={{ height: 60 }} />
       </ScrollView>
     </View>
@@ -337,7 +364,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
 
   useEffect(() => {
     if (visible && songs.length > 0) {
-      setTransposeKeys(songs.map(s => s.key || 'C'))
+      setTransposeKeys(songs.map(getEffectiveSongKey))
       setCurrentIndex(startIndex)
       setViewMode('both')
       setIsAutoScrolling(false)
@@ -391,7 +418,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   }, [])
 
   const currentSong  = songs[currentIndex]
-  const originalKey  = currentSong?.key || 'C'
+  const originalKey  = getEffectiveSongKey(currentSong)
   const targetKey    = transposeKeys[currentIndex] || originalKey
   const isTransposed = originalKey !== targetKey
 
@@ -459,7 +486,6 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
               </TouchableOpacity>
             ))}
           </View>
-
           {/* Transpose chip */}
           <TouchableOpacity
             style={s.transposeChip}
@@ -675,7 +701,15 @@ const s = StyleSheet.create({
   speedPillText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
   speedPillTextActive: { color: '#0a0a0a' },
 
-  // Section navigator
+  // Song header inside content
+  songHeaderBlock: { marginBottom: 18, gap: 8 },
+  songHeaderTitle: { fontWeight: '800', color: '#ffffff', letterSpacing: -0.5, lineHeight: 28 },
+  keyBadgeInline: {
+    alignSelf: 'flex-start', backgroundColor: '#ffffff',
+    borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4,
+  },
+  keyBadgeInlineText: { fontSize: 11, fontWeight: '700', color: '#0a0a0a', letterSpacing: 0.5 },
+
   sectionNavBar: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(255,255,255,0.1)',
@@ -700,23 +734,24 @@ const s = StyleSheet.create({
   sectionPillText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.5)', maxWidth: 80 },
   sectionPillTextActive: { color: '#0a0a0a' },
 
-  // Song header inside content
-  songHeaderBlock: { marginBottom: 18, gap: 8 },
-  songHeaderTitle: { fontWeight: '800', color: '#ffffff', letterSpacing: -0.5, lineHeight: 28 },
-  keyBadgeInline: {
-    alignSelf: 'flex-start', backgroundColor: '#ffffff',
-    borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4,
+  // Content
+  contentScroll: { flex: 1 },
+  contentPad: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 48 },
+  songBody: { paddingTop: 4 },
+  content: {
+    color: '#f5f5f5',
+    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
+    fontWeight: '400', letterSpacing: 0.2,
   },
-  keyBadgeInlineText: { fontSize: 11, fontWeight: '700', color: '#0a0a0a', letterSpacing: 0.5 },
-
-  // Sections
-  sectionList: { gap: 16 },
+  contentLine: { fontSize: 15, lineHeight: 26, color: '#f5f5f5', fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace', letterSpacing: 0.2 },
+  sectionLine: { fontSize: 15, lineHeight: 26, color: '#ffffff', fontWeight: '800', fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace', letterSpacing: 0.2 },
   sectionBlock: {
-    gap: 8, paddingBottom: 14,
+    gap: 8,
+    paddingBottom: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: 'rgba(255,255,255,0.08)',
+    marginBottom: 14,
   },
-  sectionBlockActive: { borderBottomColor: 'rgba(255,255,255,0.4)' },
   sectionBadge: {
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(255,255,255,0.1)',
@@ -724,15 +759,7 @@ const s = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
   },
   sectionBadgeText: { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.6)', letterSpacing: 0.5 },
-
-  // Content
-  contentScroll: { flex: 1 },
-  contentPad: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 48 },
-  content: {
-    color: '#f5f5f5',
-    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
-    fontWeight: '400', letterSpacing: 0.2,
-  },
+  sectionContentBlock: { gap: 0 },
 
   // Bottom bar
   bottomBar: {

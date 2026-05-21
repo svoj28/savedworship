@@ -84,20 +84,21 @@ export default function EditAccountScreen() {
   const [showCurrent, setShowCurrent] = useState(false)
   const [showNew, setShowNew] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
+  const hasLoadedOnceRef = React.useRef(false)
 
   useEffect(() => {
-    loadUserProfile()
+    void loadUserProfile()
   }, [])
 
   useEffect(() => {
     const unsubLocal = onTableChange('user_profiles', () => {
-      loadUserProfile()
+      void loadUserProfile({ silent: true })
     })
 
     const userProfilesChannel = supabase
       .channel('edit-account-user-profiles')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'user_profiles' }, () => {
-        loadUserProfile()
+        void loadUserProfile({ silent: true })
       })
       .subscribe()
 
@@ -107,9 +108,9 @@ export default function EditAccountScreen() {
     }
   }, [])
 
-  const loadUserProfile = async () => {
+  const loadUserProfile = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const currentUser = await getCurrentUser()
       if (currentUser) {
         setUser(currentUser)
@@ -140,7 +141,8 @@ export default function EditAccountScreen() {
       console.error('Error loading profile:', err)
       Alert.alert('Error', 'Failed to load profile')
     } finally {
-      setLoading(false)
+      hasLoadedOnceRef.current = true
+      if (!silent) setLoading(false)
     }
   }
 

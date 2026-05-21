@@ -1,5 +1,5 @@
 // screens/ChordListsHomeScreen.tsx
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   View,
   ScrollView,
@@ -85,25 +85,30 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
   // artistItems holds songs (or chord lists) per artist, used for both browsing and Add Song modal
   const [artistItems, setArtistItems] = useState<{ [key: string]: ArtistBrowseItem[] }>({})
   const { canManageChords } = useRole()
+  const hasLoadedOnceRef = useRef(false)
 
   useFocusEffect(
     React.useCallback(() => {
-      loadData()
+      void loadData({ silent: hasLoadedOnceRef.current })
     }, [])
   )
 
   useEffect(() => {
-    const u1 = onTableChange('artists', () => loadData())
-    const u2 = onTableChange('chord_lists', () => loadData())
-    const u3 = onTableChange('songs', () => loadData())
-    const u4 = onTableChange('playlists', () => loadData())
-    const u5 = onTableChange('playlist_items', () => loadData())
+    const refreshLibrary = () => {
+      void loadData({ silent: true })
+    }
+
+    const u1 = onTableChange('artists', refreshLibrary)
+    const u2 = onTableChange('chord_lists', refreshLibrary)
+    const u3 = onTableChange('songs', refreshLibrary)
+    const u4 = onTableChange('playlists', refreshLibrary)
+    const u5 = onTableChange('playlist_items', refreshLibrary)
     return () => { u1(); u2(); u3(); u4(); u5() }
   }, [])
 
-  const loadData = async () => {
+  const loadData = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const user = await getCurrentUser()
       if (user) {
         setUserId(user.id)
@@ -113,7 +118,8 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
       console.error('Error loading data:', err)
       Alert.alert('Error', 'Failed to load data')
     } finally {
-      setLoading(false)
+      hasLoadedOnceRef.current = true
+      if (!silent) setLoading(false)
     }
   }
 

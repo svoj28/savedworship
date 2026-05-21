@@ -304,7 +304,7 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (v: boolean) => vo
         ),
         headerRight: () => (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
-            <ThemeToggle />
+            {/* <ThemeToggle /> */}
             <NotificationBell />
           </View>
         ),

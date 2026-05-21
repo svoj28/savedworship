@@ -78,11 +78,12 @@ const [inputFocused, setInputFocused] = useState(false)
     const [scannerVisible, setScannerVisible] = useState(false)
   const [hasPermission, setHasPermission] = useState<boolean | null>(null)
   const [scanned, setScanned] = useState(false)
+  const hasLoadedOnceRef = useRef(false)
 
 const fadeAnim = useRef(new Animated.Value(0)).current
   const slideAnim = useRef(new Animated.Value(8)).current
 
-  useEffect(() => { loadUserAndContacts() }, [])
+  useEffect(() => { void loadUserAndContacts() }, [])
 
   useEffect(() => {
     fadeAnim.setValue(0)
@@ -96,12 +97,12 @@ const fadeAnim = useRef(new Animated.Value(0)).current
   useEffect(() => {
     const unsubRefresh = onDataRefresh((table) => {
       if (table === 'contacts') {
-        loadUserAndContacts()
+        void loadUserAndContacts({ silent: true })
       }
     })
 
-    const unsubContacts = onTableChange('contacts', () => loadUserAndContacts())
-    const unsubProfiles = onTableChange('user_profiles', () => loadUserAndContacts())
+    const unsubContacts = onTableChange('contacts', () => void loadUserAndContacts({ silent: true }))
+    const unsubProfiles = onTableChange('user_profiles', () => void loadUserAndContacts({ silent: true }))
 
     return () => {
       unsubRefresh()
@@ -110,9 +111,9 @@ const fadeAnim = useRef(new Animated.Value(0)).current
     }
   }, [])
 
-  const loadUserAndContacts = async () => {
+  const loadUserAndContacts = async ({ silent = false }: { silent?: boolean } = {}) => {
   try {
-    setLoading(true)
+    if (!silent) setLoading(true)
     const currentUser = await getCurrentUser()
     if (currentUser) {
       setUser(currentUser)
@@ -164,7 +165,8 @@ const fadeAnim = useRef(new Animated.Value(0)).current
     console.error('Error loading user:', err)
     Alert.alert('Error', 'Failed to load member data.')
   } finally {
-    setLoading(false)
+    hasLoadedOnceRef.current = true
+    if (!silent) setLoading(false)
   }
 }
 
@@ -201,7 +203,7 @@ console.log('=== SAVED CONTACT:', JSON.stringify(newContact))
 
     await notifyContactRequest(idToAdd, user?.displayName || 'A team member', user.id)
     setFormData({ recipientId: '' })
-    await loadUserAndContacts()
+    await loadUserAndContacts({ silent: true })
     Alert.alert('Request Sent', 'Your connection request has been delivered.')
   } catch (err) {
     console.error('Error adding contact:', err)
@@ -235,7 +237,7 @@ console.log('=== SAVED CONTACT:', JSON.stringify(newContact))
                 synced: false,
               })
             }
-            await loadUserAndContacts()
+            await loadUserAndContacts({ silent: true })
                       } catch {
             Alert.alert('Error', 'Failed to remove contact.')
           }
@@ -261,7 +263,7 @@ const handleAcceptContact = async (contact: Contact) => {
       })
     }
 
-    await loadUserAndContacts()
+    await loadUserAndContacts({ silent: true })
 
     await notifyContactAccepted(contact.userId, user?.displayName || 'A team member')
   } catch {
@@ -291,7 +293,7 @@ const handleRejectContact = async (contact: Contact) => {
               synced: false,
             })
           }
-          await loadUserAndContacts()
+          await loadUserAndContacts({ silent: true })
           await notifyContactRejected(contact.userId, user?.displayName || 'A team member')
         } catch {
           Alert.alert('Error', 'Failed to decline request.')

@@ -150,10 +150,12 @@ export async function getSongById(id: string): Promise<Song | null> {
 }
 
 export async function getSongsByChordListId(chordListId: string): Promise<Song[]> {
-  const { data } = await supabase.from('songs').select('*').eq('chord_list_id', chordListId).order('title')
+  const { data, error } = await supabase.from('songs').select('*').eq('chord_list_id', chordListId).order('title')
+  console.log('[getSongsByChordListId] supabase data:', data?.length, 'error:', error)
   if (data && data.length > 0) return data.map(mapSong)
 
   const results = await query('SELECT * FROM songs WHERE chord_list_id = ? ORDER BY title', [chordListId])
+  console.log('[getSongsByChordListId] sqlite results:', results?.length)
   return results.map(mapSong)
 }
 

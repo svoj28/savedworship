@@ -20,6 +20,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { Song, ChordList, Playlist, PlaylistItem } from '../db/models'
 import { transposeText, getAllKeys, getTransposeDistance } from '../lib/transpose'
 import { execute, query } from '../db/index'
+import { subscribeToChanges } from '../lib/sync'  
 import {
   getPlaylistsByUserId,
   getPlaylistItems,
@@ -42,26 +43,6 @@ type ViewMode  = 'lyrics' | 'chords' | 'both'
 type BrowseMode = 'single' | 'artist' | 'playlist'
 type SongTab   = 'sheet' | 'video'
 
-type SongSection = {
-  id: string
-  label: string
-  content: string
-}
-
-const SECTION_HEADER_PATTERN =
-  /^(?:\[(.+?)\]|(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)(?:\s*([0-9]+))?)\s*:??\s*$/i
-
-function normalizeSectionLabel(rawLabel: string, fallbackIndex: number) {
-  const cleaned = rawLabel.replace(/\[|\]/g, '').trim()
-  const match = cleaned.match(
-    /^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)\s*([0-9]+)?$/i
-  )
-  if (!match) return cleaned || `Section ${fallbackIndex + 1}`
-  const base   = match[1].replace(/[-\s]/g, ' ')
-  const number = match[2] ? ` ${match[2]}` : ''
-  return `${base.charAt(0).toUpperCase()}${base.slice(1).toLowerCase()}${number}`
-}
-
 function extractYouTubeId(url: string): string | null {
   if (!url) return null
   const patterns = [
@@ -75,12 +56,65 @@ function extractYouTubeId(url: string): string | null {
   return null
 }
 
-/**
- * For 'both' mode: render [Chord] inline, stripping the brackets,
- * and keep the full line including any lyric text.
- */
-function renderChordContent(content: string): string {
-  return content.replace(/\[([^\]]+)\]/g, '$1 ')
+const SECTION_HEADER_LINE_PATTERN = /^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)(?:\s*[0-9]+)?$/i
+
+function isSectionHeaderLine(line: string): boolean {
+  return SECTION_HEADER_LINE_PATTERN.test(line.trim())
+}
+
+type SongSection = {
+  id: string
+  label: string
+  content: string
+}
+
+function normalizeSectionLabel(rawLabel: string, fallbackIndex: number) {
+  const cleaned = rawLabel.trim()
+  const match = cleaned.match(/^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)\s*([0-9]+)?$/i)
+  if (!match) return cleaned || `Section ${fallbackIndex + 1}`
+  const base = match[1].replace(/[-\s]/g, ' ')
+  const number = match[2] ? ` ${match[2]}` : ''
+  return `${base.charAt(0).toUpperCase()}${base.slice(1).toLowerCase()}${number}`
+}
+
+function parseSongSections(content: string): SongSection[] {
+  const lines = content.split(/\r?\n/)
+  const sections: SongSection[] = []
+  let currentLabel = 'Full Song'
+  let currentLines: string[] = []
+  let foundAnyHeader = false
+
+  const flush = (label: string) => {
+    const body = currentLines.join('\n').trim()
+    if (body) {
+      sections.push({
+        id: `${sections.length}-${label.toLowerCase().replace(/\s+/g, '-')}`,
+        label,
+        content: body,
+      })
+    }
+    currentLines = []
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (isSectionHeaderLine(trimmed)) {
+      const label = normalizeSectionLabel(trimmed, sections.length)
+      if (currentLines.length > 0 || sections.length === 0) flush(currentLabel)
+      currentLabel = label
+      foundAnyHeader = true
+      continue
+    }
+    currentLines.push(line)
+  }
+
+  flush(currentLabel)
+  if (!foundAnyHeader) {
+    return [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
+  }
+  return sections.length > 0
+    ? sections
+    : [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
 }
 
 /**
@@ -106,48 +140,49 @@ function extractChordsOnlyFromContent(content: string): string {
   return chordLines.join('\n')
 }
 
-function parseSongSections(content: string): SongSection[] {
+function renderSongLines(content: string, mode: ViewMode) {
   const lines = content.split(/\r?\n/)
-  const sections: SongSection[] = []
-  let currentLabel = 'Full Song'
-  let currentLines: string[] = []
-  let foundAnyHeader = false
+  const rendered: React.ReactNode[] = []
 
-  const flush = (label: string) => {
-    const body = currentLines.join('\n').trim()
-    if (body) {
-      sections.push({
-        id: `${sections.length}-${label.toLowerCase().replace(/\s+/g, '-')}`,
-        label,
-        content: body,
-      })
-    }
-    currentLines = []
-  }
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index]
+    const trimmed = rawLine.trim()
 
-  for (const line of lines) {
-    const trimmed = line.trim()
-    const match = trimmed.match(SECTION_HEADER_PATTERN)
-    if (match) {
-      const label = normalizeSectionLabel(
-        match[1] || `${match[2] || 'Section'} ${match[3] || ''}`.trim(),
-        sections.length
-      )
-      if (currentLines.length > 0 || sections.length === 0) flush(currentLabel)
-      currentLabel = label
-      foundAnyHeader = true
+    if (!trimmed) {
+      rendered.push(<View key={`blank-${index}`} style={{ height: 12 }} />)
       continue
     }
-    currentLines.push(line)
-  }
-  flush(currentLabel)
 
-  if (!foundAnyHeader) {
-    return [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
+    if (isSectionHeaderLine(trimmed)) {
+      rendered.push(
+        <Text key={`section-${index}`} style={styles.sectionLine}>
+          {trimmed}
+        </Text>
+      )
+      continue
+    }
+
+    let lineToRender = rawLine
+    if (mode === 'lyrics') {
+      lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '').trim()
+    } else if (mode === 'chords') {
+      const matches = [...rawLine.matchAll(/\[([^\]]+)\]/g)]
+      if (matches.length === 0) continue
+      lineToRender = matches.map(match => match[1]).join('  ')
+    } else if (mode === 'both') {
+      lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '$1').trim()
+    }
+
+    if (lineToRender.trim()) {
+      rendered.push(
+        <Text key={`line-${index}`} style={styles.contentLine}>
+          {lineToRender}
+        </Text>
+      )
+    }
   }
-  return sections.length > 0
-    ? sections
-    : [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
+
+  return rendered
 }
 
 interface BrowseItem {
@@ -183,13 +218,10 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const [artistId, setArtistId]                 = useState<string | null>(null)
   const [showTransposePicker, setShowTransposePicker] = useState(false)
   const [activeSongTab, setActiveSongTab]       = useState<SongTab>('sheet')
-  const [activeSectionId, setActiveSectionId]   = useState<string | null>(null)
   const [showOptionsModal, setShowOptionsModal] = useState(false)
+  const hasLoadedOnceRef = useRef(false)
 
   const contentScrollRef      = useRef<ScrollView | null>(null)
-  const sectionNavScrollRef   = useRef<ScrollView | null>(null)
-  const sectionOffsetsRef     = useRef<Record<string, number>>({})
-  const sectionPillOffsetsRef = useRef<Record<string, number>>({})
 
   const [isAutoScrolling, setIsAutoScrolling]   = useState(false)
   const [scrollSpeedIndex, setScrollSpeedIndex] = useState(0)
@@ -204,22 +236,44 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const currentItemIndexRef = useRef(0)
   browseItemsRef.current      = browseItems
   currentItemIndexRef.current = currentItemIndex
+  const selectedSongIdRef = useRef<string | null>(null)
+
+  useEffect(() => { selectedSongIdRef.current = selectedSongId }, [selectedSongId])
+
+  useEffect(() => {
+  // Local invalidation listener — fires after sync writes to SQLite
+  const u1 = onTableChange('chord_lists',    () => void loadChordList({ silent: true }))
+  const u2 = onTableChange('songs',          () => void loadChordList({ silent: true }))
+  const u3 = onTableChange('playlists',      () => void loadChordList({ silent: true }))
+  const u4 = onTableChange('playlist_items', () => void loadChordList({ silent: true }))
+
+  // Realtime subscription — triggers sync which then fires invalidateTable above
+  let unsub: (() => void) | null = null
+  getCurrentUser().then(user => {
+    if (user) unsub = subscribeToChanges(user.id, () => {})
+  })
+
+  return () => {
+    u1(); u2(); u3(); u4()
+    unsub?.()
+  }
+}, [chordListId])
 
   useEffect(() => {
     navigation.setOptions({ headerLeft: () => null })
   }, [navigation])
 
   useFocusEffect(
-    React.useCallback(() => { loadChordList() }, [chordListId])
+    React.useCallback(() => { void loadChordList({ silent: hasLoadedOnceRef.current }) }, [chordListId])
   )
 
-  useEffect(() => {
-    const u1 = onTableChange('chord_lists',    () => loadChordList())
-    const u2 = onTableChange('songs',          () => loadChordList())
-    const u3 = onTableChange('playlists',      () => loadChordList())
-    const u4 = onTableChange('playlist_items', () => loadChordList())
-    return () => { u1(); u2(); u3(); u4() }
-  }, [chordListId])
+  // useEffect(() => {
+  //   const u1 = onTableChange('chord_lists',    () => loadChordList())
+  //   const u2 = onTableChange('songs',          () => loadChordList())
+  //   const u3 = onTableChange('playlists',      () => loadChordList())
+  //   const u4 = onTableChange('playlist_items', () => loadChordList())
+  //   return () => { u1(); u2(); u3(); u4() }
+  // }, [chordListId])
 
   useEffect(() => { stopAutoScroll() }, [selectedSongId, viewMode, transposeToKey])
 
@@ -269,47 +323,50 @@ export default function ChordListScreen({ route, navigation }: Props) {
   useEffect(() => { return () => { if (autoScrollRef.current) clearInterval(autoScrollRef.current) } }, [])
 
   // ── Load data ──────────────────────────────────────────────────────────
-  const loadChordList = async () => {
-    try {
-      setLoading(true)
-      const user = await getCurrentUser()
-      if (user) setPlaylists(await getPlaylistsByUserId(user.id))
+const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
+  try {
+    if (!silent) setLoading(true)
+    const user = await getCurrentUser()
+    if (user) setPlaylists(await getPlaylistsByUserId(user.id))
 
-      const clRecord = await getChordListById(chordListId)
-      if (clRecord) { setChordList(clRecord); setArtistId(clRecord.artistId) }
+    const clRecord = await getChordListById(chordListId)
+    if (clRecord) { setChordList(clRecord); setArtistId(clRecord.artistId) }
 
-      const songRows = await getSongsByChordListId(chordListId)
-      const mapped: Song[] = (songRows || []).map(row => ({
-        id: row.id,
-        chordListId: row.chordListId,
-        title: row.title,
-        content: row.content,
-        key: row.key,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-        synced: row.synced,
-        userId: row.userId ?? '',
-        youtubeUrl: row.youtubeUrl,
-      }))
-      setSongs(mapped)
+    const songRows = await getSongsByChordListId(chordListId)
+    const mapped: Song[] = (songRows || []).map(row => ({
+      id: row.id,
+      chordListId: row.chordListId,
+      title: row.title,
+      content: row.content,
+      key: row.key,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      synced: row.synced,
+      userId: row.userId ?? '',
+      youtubeUrl: row.youtubeUrl,
+    }))
 
-      const initialItems: BrowseItem[] = mapped.map(song => ({
-        id: song.id, title: song.title, type: 'song',
-        songId: song.id, chordListId: song.chordListId,
-      }))
-      setBrowseItems(initialItems)
-      if (mapped.length > 0) {
-        setSelectedSongId(mapped[0].id)
-        setCurrentItemIndex(0)
-        setTransposeToKey(mapped[0].key || 'C')
-      }
-    } catch (err) {
-      console.error('Error loading chord list:', err)
-      Alert.alert('Error', 'Failed to load chord list')
-    } finally {
-      setLoading(false)
+    setSongs(mapped)
+    setBrowseItems(mapped.map(song => ({
+      id: song.id, title: song.title, type: 'song',
+      songId: song.id, chordListId: song.chordListId,
+    })))
+
+    const currentId = selectedSongIdRef.current
+    const stillValid = currentId && mapped.find(s => s.id === currentId)
+    if (!stillValid && mapped.length > 0) {
+      setSelectedSongId(mapped[0].id)
+      setTransposeToKey(mapped[0].key || 'C')
+      setCurrentItemIndex(0)
     }
+  } catch (err) {
+    console.error('Error loading chord list:', err)
+    Alert.alert('Error', 'Failed to load chord list')
+  } finally {
+    hasLoadedOnceRef.current = true
+    if (!silent) setLoading(false)
   }
+}
 
   const loadArtistSongs = async () => {
     if (!artistId) return
@@ -556,85 +613,45 @@ export default function ChordListScreen({ route, navigation }: Props) {
     let content = selectedSong.content || ''
     const semitones = getTransposeDistance(selectedSong.key || 'C', transposeToKey)
     if (semitones !== 0) content = transposeText(content, semitones)
-
-    if (viewMode === 'lyrics') {
-      // Remove all [chord] tokens entirely; keep lyric lines
-      return content.replace(/\[([^\]]+)\]/g, '').trim()
-    }
-
-    if (viewMode === 'chords') {
-      // FIXED: only lines with [chord] brackets are kept;
-      // each kept line shows only the chord names (no lyric text, no brackets)
-      return extractChordsOnlyFromContent(content)
-    }
-
-    // 'both': keep everything, strip [] but leave chord text inline
     return content
-  }, [selectedSong, transposeToKey, viewMode])
-
-  /**
-   * For 'chords' mode we display the content directly (already stripped).
-   * For 'both' mode we strip [] inline while rendering.
-   * For 'lyrics' mode content is already clean.
-   */
-  const renderSectionContent = (content: string): string => {
-    if (viewMode === 'both') return renderChordContent(content)
-    // 'lyrics' and 'chords' content is already clean from displayContent/parseSongSections
-    return content
-  }
+  }, [selectedSong, transposeToKey])
 
   const parsedSections = useMemo(() => parseSongSections(displayContent), [displayContent])
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
+  const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null)
+
+  const visibleSections = useMemo(() => {
+    if (!focusedSectionId) return parsedSections
+    return parsedSections.filter(section => section.id === focusedSectionId)
+  }, [focusedSectionId, parsedSections])
 
   useEffect(() => {
-    sectionOffsetsRef.current = {}
-    sectionPillOffsetsRef.current = {}
     setActiveSectionId(parsedSections[0]?.id ?? null)
-    contentScrollRef.current?.scrollTo({ y: 0, animated: false })
-    scrollYRef.current = 0
-  }, [selectedSongId, viewMode, transposeToKey, parsedSections])
+    setFocusedSectionId(null)
+  }, [parsedSections])
 
   const scrollToSection = (sectionId: string) => {
     setActiveSectionId(sectionId)
-    const offset = sectionOffsetsRef.current[sectionId]
-    if (typeof offset === 'number') {
-      const y = Math.max(0, offset - 12)
-      scrollYRef.current = y
-      contentScrollRef.current?.scrollTo({ y, animated: true })
-    }
-    const pillX = sectionPillOffsetsRef.current[sectionId]
-    if (typeof pillX === 'number') {
-      sectionNavScrollRef.current?.scrollTo({ x: Math.max(0, pillX - 60), animated: true })
-    }
+    setFocusedSectionId(sectionId)
+    scrollYRef.current = 0
+    contentScrollRef.current?.scrollTo({ y: 0, animated: true })
   }
 
-  // Update activeSectionId as user scrolls manually
+  const showAllSections = () => {
+    setFocusedSectionId(null)
+    setActiveSectionId(parsedSections[0]?.id ?? null)
+    scrollYRef.current = 0
+    contentScrollRef.current?.scrollTo({ y: 0, animated: true })
+  }
+
+  useEffect(() => {
+    contentScrollRef.current?.scrollTo({ y: 0, animated: false })
+    scrollYRef.current = 0
+  }, [selectedSongId, viewMode, transposeToKey, displayContent])
+
   const handleContentScroll = useCallback((e: any) => {
     scrollYRef.current = e.nativeEvent.contentOffset.y
-    const scrollY = e.nativeEvent.contentOffset.y
-
-    // Find which section is currently at the top of the viewport
-    const offsets = sectionOffsetsRef.current
-    const sections = parsedSections
-    let activeId = sections[0]?.id ?? null
-
-    for (const section of sections) {
-      const sectionTop = offsets[section.id]
-      if (typeof sectionTop === 'number' && scrollY >= sectionTop - 40) {
-        activeId = section.id
-      }
-    }
-
-    if (activeId !== activeSectionId) {
-      setActiveSectionId(activeId)
-      // Scroll the section pill into view
-      if (activeId) {
-        const pillX = sectionPillOffsetsRef.current[activeId]
-        if (typeof pillX === 'number') {
-          sectionNavScrollRef.current?.scrollTo({ x: Math.max(0, pillX - 60), animated: true })
-        }
-      }
-    }
-  }, [parsedSections, activeSectionId])
+  }, [])
 
   if (loading) {
     return (
@@ -647,7 +664,6 @@ export default function ChordListScreen({ route, navigation }: Props) {
 
   const isFirst     = currentItemIndex === 0
   const isLast      = currentItemIndex >= browseItems.length - 1
-  const hasSections = parsedSections.length > 1
   const youtubeUrl  = selectedSong?.youtubeUrl?.trim() || ''
   const youtubeId   = extractYouTubeId(youtubeUrl)
   const hasVideo    = Boolean(youtubeId)
@@ -805,15 +821,21 @@ export default function ChordListScreen({ route, navigation }: Props) {
             </TouchableOpacity>
           </View>
 
-          {/* Section Navigator — shown whenever there are multiple sections */}
-          {hasSections && selectedSong && (
+          {parsedSections.length > 1 && selectedSong && (
             <View style={styles.sectionNavBar}>
-              <ScrollView
-                ref={sectionNavScrollRef}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.sectionNavScrollContent}
-              >
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sectionNavScrollContent}>
+                <TouchableOpacity
+                  style={[styles.sectionNavPill, !focusedSectionId && styles.sectionNavPillActive]}
+                  onPress={showAllSections}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.sectionNavIndex, !focusedSectionId && styles.sectionNavIndexActive]}>
+                    <Text style={[styles.sectionNavIndexText, !focusedSectionId && styles.sectionNavIndexTextActive]}>A</Text>
+                  </View>
+                  <Text style={[styles.sectionNavPillText, !focusedSectionId && styles.sectionNavPillTextActive]} numberOfLines={1}>
+                    All
+                  </Text>
+                </TouchableOpacity>
                 {parsedSections.map((section, idx) => {
                   const isActive = section.id === activeSectionId
                   return (
@@ -822,19 +844,11 @@ export default function ChordListScreen({ route, navigation }: Props) {
                       style={[styles.sectionNavPill, isActive && styles.sectionNavPillActive]}
                       onPress={() => scrollToSection(section.id)}
                       activeOpacity={0.7}
-                      onLayout={e => {
-                        sectionPillOffsetsRef.current[section.id] = e.nativeEvent.layout.x
-                      }}
                     >
                       <View style={[styles.sectionNavIndex, isActive && styles.sectionNavIndexActive]}>
-                        <Text style={[styles.sectionNavIndexText, isActive && styles.sectionNavIndexTextActive]}>
-                          {idx + 1}
-                        </Text>
+                        <Text style={[styles.sectionNavIndexText, isActive && styles.sectionNavIndexTextActive]}>{idx + 1}</Text>
                       </View>
-                      <Text
-                        style={[styles.sectionNavPillText, isActive && styles.sectionNavPillTextActive]}
-                        numberOfLines={1}
-                      >
+                      <Text style={[styles.sectionNavPillText, isActive && styles.sectionNavPillTextActive]} numberOfLines={1}>
                         {section.label}
                       </Text>
                     </TouchableOpacity>
@@ -887,24 +901,15 @@ export default function ChordListScreen({ route, navigation }: Props) {
               )}
 
               {selectedSong ? (
-                <View style={styles.sectionList}>
-                  {parsedSections.map(section => (
-                    <View
-                      key={section.id}
-                      style={[
-                        styles.sectionBlock,
-                        activeSectionId === section.id && styles.sectionBlockActive,
-                      ]}
-                      onLayout={event => {
-                        sectionOffsetsRef.current[section.id] = event.nativeEvent.layout.y
-                      }}
-                    >
+                <View style={styles.songContentBlock}>
+                  {visibleSections.map(section => (
+                    <View key={section.id} style={styles.sectionBlock}>
                       <View style={styles.sectionBadge}>
                         <Text style={styles.sectionBadgeText}>{section.label}</Text>
                       </View>
-                      <Text style={styles.content}>
-                        {renderSectionContent(section.content)}
-                      </Text>
+                      <View style={styles.sectionContentBlock}>
+                        {renderSongLines(section.content, viewMode)}
+                      </View>
                     </View>
                   ))}
                 </View>
@@ -1166,17 +1171,6 @@ const styles = StyleSheet.create({
   scrollingBadge: { position: 'absolute', bottom: 14, left: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0A0A0A', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
   scrollingBadgeText: { fontSize: 11, fontWeight: '700', color: '#FAFAFA' },
 
-  sectionNavBar: { backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB', paddingVertical: 10 },
-  sectionNavScrollContent: { paddingHorizontal: 14, gap: 7, flexDirection: 'row', alignItems: 'center' },
-  sectionNavPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F2F2F2', borderWidth: 1, borderColor: '#EBEBEB', gap: 6 },
-  sectionNavPillActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
-  sectionNavIndex: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#E0E0E0', alignItems: 'center', justifyContent: 'center' },
-  sectionNavIndexActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  sectionNavIndexText: { fontSize: 9, fontWeight: '800', color: '#888' },
-  sectionNavIndexTextActive: { color: '#FAFAFA' },
-  sectionNavPillText: { fontSize: 12, fontWeight: '700', color: '#555', maxWidth: 90 },
-  sectionNavPillTextActive: { color: '#FAFAFA' },
-
   songPickerWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
   songPicker: { flex: 1, color: '#0A0A0A' },
 
@@ -1187,11 +1181,23 @@ const styles = StyleSheet.create({
   keyBadge: { alignSelf: 'flex-start', backgroundColor: '#0A0A0A', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 4 },
   keyBadgeText: { fontSize: 11, fontWeight: '700', color: '#FAFAFA', letterSpacing: 0.5 },
   content: { fontSize: 15, lineHeight: 26, color: '#2A2A2A', fontFamily: 'Courier New', letterSpacing: 0.1 },
-  sectionList: { gap: 14 },
+  songContentBlock: { paddingVertical: 4 },
+  contentLine: { fontSize: 15, lineHeight: 26, color: '#2A2A2A', fontFamily: 'Courier New', letterSpacing: 0.1 },
+  sectionLine: { fontSize: 15, lineHeight: 26, color: '#0A0A0A', fontWeight: '800', fontFamily: 'Courier New', letterSpacing: 0.1 },
+  sectionNavBar: { backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB', paddingVertical: 10 },
+  sectionNavScrollContent: { paddingHorizontal: 14, gap: 7, flexDirection: 'row', alignItems: 'center' },
+  sectionNavPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F2F2F2', borderWidth: 1, borderColor: '#EBEBEB', gap: 6 },
+  sectionNavPillActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
+  sectionNavIndex: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#E0E0E0', alignItems: 'center', justifyContent: 'center' },
+  sectionNavIndexActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  sectionNavIndexText: { fontSize: 9, fontWeight: '800', color: '#888' },
+  sectionNavIndexTextActive: { color: '#FAFAFA' },
+  sectionNavPillText: { fontSize: 12, fontWeight: '700', color: '#555', maxWidth: 90 },
+  sectionNavPillTextActive: { color: '#FAFAFA' },
   sectionBlock: { gap: 10, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#ECECEC' },
-  sectionBlockActive: { borderBottomColor: '#0A0A0A' },
   sectionBadge: { alignSelf: 'flex-start', backgroundColor: '#F2F2F2', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#E8E8E8' },
   sectionBadgeText: { fontSize: 11, fontWeight: '800', color: '#0A0A0A', letterSpacing: 0.4 },
+  sectionContentBlock: { gap: 0 },
   emptySongState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 42, gap: 8 },
   emptySongTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A' },
   emptySongSubtitle: { fontSize: 12, color: '#A8A8A8', textAlign: 'center', lineHeight: 18 },

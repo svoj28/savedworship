@@ -111,8 +111,80 @@ export default function ManagementScreen({ route }: any) {
   const [pickingFile, setPickingFile] = useState(false)
   const [selectedItem, setSelectedItem] = useState<any | null>(null)
 
-  const refreshData = useCallback(async () => {
-    setLoading(true)
+  const normalizeManagementRow = (tableName: string, row: any) => {
+    if (tableName === 'lineups') {
+      return {
+        id: row.id,
+        title: row.title,
+        description: row.description || '',
+        userId: row.user_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        synced: Boolean(row._synced),
+      }
+    }
+    if (tableName === 'file_droppers') {
+      return {
+        id: row.id,
+        title: row.title,
+        description: row.description || '',
+        fileUrl: row.file_url || '',
+        userId: row.user_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        synced: Boolean(row._synced),
+      }
+    }
+    if (tableName === 'important_announcements') {
+      return {
+        id: row.id,
+        title: row.title,
+        content: row.content || '',
+        userId: row.user_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        synced: Boolean(row._synced),
+      }
+    }
+    return {
+      id: row.id,
+      title: row.title,
+      description: row.description || '',
+      youtubeUrl: row.youtube_url || '',
+      userId: row.user_id,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      synced: Boolean(row._synced),
+    }
+  }
+
+  const sortByNewest = (left: any, right: any) => (right.createdAt || 0) - (left.createdAt || 0)
+
+  const applyRealtimeManagementChange = (tableName: string, payload: any) => {
+    const eventType = payload?.eventType
+    const row = payload?.new ?? payload?.old
+    if (!row) return
+
+    const normalized = normalizeManagementRow(tableName, row)
+
+    const applyUpsert = (setter: React.Dispatch<React.SetStateAction<any[]>>) => {
+      setter(prev => {
+        const withoutCurrent = prev.filter(item => item.id !== normalized.id)
+        if (eventType === 'DELETE') return withoutCurrent
+        return [...withoutCurrent, normalized].sort(sortByNewest)
+      })
+    }
+
+    if (tableName === 'lineups') applyUpsert(setLineups)
+    if (tableName === 'file_droppers') applyUpsert(setFiles)
+    if (tableName === 'important_announcements') applyUpsert(setAnnouncements)
+    if (tableName === 'version_droppers') applyUpsert(setVersions)
+
+    setSelectedItem(prev => (prev?.id === normalized.id ? (eventType === 'DELETE' ? null : normalized) : prev))
+  }
+
+  const refreshData = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) setLoading(true)
     try {
       const [lineupData, fileData, announcementData, versionData] = await Promise.all([
         getAllLineups(),
@@ -127,7 +199,7 @@ export default function ManagementScreen({ route }: any) {
     } catch (err) {
       console.error('Error loading data:', err)
     } finally {
-      setLoading(false)
+      if (!options.silent) setLoading(false)
     }
   }, [])
 
@@ -139,7 +211,7 @@ export default function ManagementScreen({ route }: any) {
       }
     }
     loadUser()
-    refreshData()
+    void refreshData()
   }, [])
 
   useEffect(() => {
@@ -154,7 +226,7 @@ export default function ManagementScreen({ route }: any) {
     if (lastManagementNotificationIdRef.current === latestManagementNotification.id) return
 
     lastManagementNotificationIdRef.current = latestManagementNotification.id
-    refreshData()
+    void refreshData({ silent: true })
   }, [notifications, refreshData])
 
   useEffect(() => {
@@ -165,29 +237,37 @@ export default function ManagementScreen({ route }: any) {
   }, [route?.params?.initialSection])
 
   useEffect(() => {
-    const unsubLineups = onTableChange('lineups', refreshData)
-    const unsubFiles = onTableChange('file_droppers', refreshData)
-    const unsubAnnouncements = onTableChange('important_announcements', refreshData)
-    const unsubVersions = onTableChange('version_droppers', refreshData)
+    const unsubLineups = onTableChange('lineups', () => void refreshData({ silent: true }))
+    const unsubFiles = onTableChange('file_droppers', () => void refreshData({ silent: true }))
+    const unsubAnnouncements = onTableChange('important_announcements', () => void refreshData({ silent: true }))
+    const unsubVersions = onTableChange('version_droppers', () => void refreshData({ silent: true }))
 
     const lineupsChannel = supabase
       .channel('management-lineups')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lineups' }, refreshData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lineups' }, payload => {
+        applyRealtimeManagementChange('lineups', payload)
+      })
       .subscribe()
 
     const filesChannel = supabase
       .channel('management-files')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'file_droppers' }, refreshData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'file_droppers' }, payload => {
+        applyRealtimeManagementChange('file_droppers', payload)
+      })
       .subscribe()
 
     const announcementsChannel = supabase
       .channel('management-announcements')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'important_announcements' }, refreshData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'important_announcements' }, payload => {
+        applyRealtimeManagementChange('important_announcements', payload)
+      })
       .subscribe()
 
     const versionsChannel = supabase
       .channel('management-versions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'version_droppers' }, refreshData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'version_droppers' }, payload => {
+        applyRealtimeManagementChange('version_droppers', payload)
+      })
       .subscribe()
 
     return () => {
@@ -725,8 +805,8 @@ const getCount = (key?: string): number => {
         <View style={styles.busyOverlay} pointerEvents="auto">
           <View style={styles.busyCard}>
             <ActivityIndicator size="large" color="#0A0A0A" />
-            <Text style={styles.busyTitle}>{saving ? 'Saving changes…' : 'Deleting item…'}</Text>
-            <Text style={styles.busySubtitle}>Please wait until the operation finishes.</Text>
+            {/* <Text style={styles.busyTitle}>{saving ? 'Saving changes…' : 'Deleting item…'}</Text>
+            <Text style={styles.busySubtitle}>Please wait until the operation finishes.</Text> */}
           </View>
         </View>
       )}

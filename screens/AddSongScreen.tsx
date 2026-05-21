@@ -16,6 +16,7 @@ import { execute, query } from '../db/index'
 import { getCurrentUser } from '../lib/auth'
 import uuid from 'react-native-uuid'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { createSong } from '../db/queries'
 
 interface Props {
   route: any
@@ -27,7 +28,16 @@ const COMMON_CHORDS    = ['C', 'G', 'D', 'A', 'E', 'B', 'F', 'Bb', 'Dm', 'Am', '
 const ALL_KEYS         = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B',
                           'Db', 'Eb', 'Gb', 'Ab', 'Bb',
                           'Cm', 'Dm', 'Em', 'Fm', 'Gm', 'Am', 'Bm']
-const SONG_SECTIONS    = ['Intro', 'Verse 1', 'Verse 2', 'Verse 3', 'Pre-Chorus', 'Chorus 1', 'Chorus 2', 'Bridge', 'Outro']
+const SONG_SECTIONS = [
+  'Intro',
+  'Verse 1', 'Verse 2', 'Verse 3',
+  'Pre-Chorus',
+  'Chorus', 'Chorus 2',
+  'Bridge',
+  'Hook',
+  'Outro',
+  'Coda',
+]
 
 export default function AddSongScreen({ route, navigation }: Props) {
   const { chordListId } = route.params || {}
@@ -65,82 +75,88 @@ export default function AddSongScreen({ route, navigation }: Props) {
 
   // Insert a section header at cursor position
   const handleInsertSection = (section: string) => {
-    const { start } = cursorPosRef.current
-    const before = content.slice(0, start)
-    const after = content.slice(start)
-    // Find where the current line starts
-    const lineStart = before.lastIndexOf('\n') + 1
-    const beforeLine = content.slice(0, lineStart)
-    const afterCursor = content.slice(lineStart)
+  const { start } = cursorPosRef.current
+  const before = content.slice(0, start)
+  const after = content.slice(start)
 
-    const header = `[${section}]`
-    // If there's content before this line, add spacing
-    const prefix = beforeLine.length > 0 ? (beforeLine.endsWith('\n\n') ? '' : beforeLine.endsWith('\n') ? '\n' : '\n\n') : ''
-    const newContent = beforeLine + prefix + header + '\n' + afterCursor
-    setContent(newContent)
-    const newPos = beforeLine.length + prefix.length + header.length + 1
-    cursorPosRef.current = { start: newPos, end: newPos }
-    contentRef.current?.focus()
-  }
+  const header = section
+  // Add blank line before header if there's content before it
+  const prefix = before.length > 0 && !before.endsWith('\n\n')
+    ? before.endsWith('\n') ? '\n' : '\n\n'
+    : ''
+
+  const newContent = before + prefix + header + '\n' + after
+  setContent(newContent)
+
+  const newPos = before.length + prefix.length + header.length + 1
+  cursorPosRef.current = { start: newPos, end: newPos }
+  contentRef.current?.focus()
+}
 
   const handleAddSong = async () => {
-    if (!title.trim() || !originalKey.trim()) {
-      Alert.alert('Error', 'Please fill in Title and Key')
-      return
-    }
-    if (!chordListId && !artist.trim()) {
-      Alert.alert('Error', 'Please enter an Artist name')
-      return
-    }
-    if (!content.trim()) {
-      Alert.alert('Error', 'Please add chords or lyrics')
-      return
-    }
+  if (!title.trim() || !originalKey.trim()) {
+    Alert.alert('Error', 'Please fill in Title and Key')
+    return
+  }
+  if (!chordListId && !artist.trim()) {
+    Alert.alert('Error', 'Please enter an Artist name')
+    return
+  }
+  if (!content.trim()) {
+    Alert.alert('Error', 'Please add chords or lyrics')
+    return
+  }
 
-    const cleanedYoutubeUrl = youtubeUrl.trim()
-    setLoading(true)
-    try {
-      const songId = uuid.v4() as string
-      const now = Date.now()
-      let finalChordListId = chordListId
+  const cleanedYoutubeUrl = youtubeUrl.trim()
+  setLoading(true)
+  try {
+    const now = Date.now()
+    let finalChordListId = chordListId
 
-      if (!chordListId) {
-        const user = await getCurrentUser()
-        if (!user) { Alert.alert('Error', 'User not found'); setLoading(false); return }
+    const user = await getCurrentUser()
+    if (!user) { Alert.alert('Error', 'User not found'); setLoading(false); return }
 
-        const artistRows: any[] = await query('SELECT id FROM artists WHERE name = ?', [artist.trim()])
-        let artistId: string
+    if (!chordListId) {
+      const artistRows: any[] = await query('SELECT id FROM artists WHERE name = ?', [artist.trim()])
+      let artistId: string
 
-        if (artistRows && artistRows.length > 0) {
-          artistId = artistRows[0].id
-        } else {
-          artistId = uuid.v4() as string
-          await execute(
-            'INSERT INTO artists (id, name, user_id, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?)',
-            [artistId, artist.trim(), user.id, now, now, 0]
-          )
-        }
-
-        finalChordListId = uuid.v4() as string
+      if (artistRows && artistRows.length > 0) {
+        artistId = artistRows[0].id
+      } else {
+        artistId = uuid.v4() as string
         await execute(
-          'INSERT INTO chord_lists (id, title, artist_id, user_id, is_private, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [finalChordListId, title, artistId, user.id, 0, now, now, 0]
+          'INSERT INTO artists (id, name, user_id, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?)',
+          [artistId, artist.trim(), user.id, now, now, 0]
         )
       }
 
+      finalChordListId = uuid.v4() as string
       await execute(
-        'INSERT INTO songs (id, chord_list_id, title, content, key, youtube_url, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [songId, finalChordListId, title, content.trim(), originalKey, cleanedYoutubeUrl, now, now, 0]
+        'INSERT INTO chord_lists (id, title, artist_id, user_id, is_private, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [finalChordListId, title, artistId, user.id, 0, now, now, 0]
       )
-
-      navigation.goBack()
-    } catch (err) {
-      console.error('Error adding song:', err)
-      Alert.alert('Error', 'Failed to add song')
-    } finally {
-      setLoading(false)
     }
+
+    await createSong({
+      chordListId: finalChordListId,
+      title,
+      content: content.trim(),
+      key: originalKey,
+      youtubeUrl: cleanedYoutubeUrl,
+      userId: user.id,
+      createdAt: now,
+      updatedAt: now,
+      synced: false,
+    })
+
+    navigation.goBack()
+  } catch (err) {
+    console.error('Error adding song:', err)
+    Alert.alert('Error', 'Failed to add song')
+  } finally {
+    setLoading(false)
   }
+}
 
   const chordSet = useNashville ? NASHVILLE_CHORDS : COMMON_CHORDS
 
@@ -300,14 +316,14 @@ export default function AddSongScreen({ route, navigation }: Props) {
           {/* Format hint */}
           <View style={styles.formatHintRow}>
             <Ionicons name="information-circle-outline" size={12} color="#C0C0C0" />
-            <Text style={styles.formatHintText}>Chords: [G]Amazing [D]grace · Sections: [Verse 1]</Text>
+            <Text style={styles.formatHintText}>Chords: [G]Amazing [D]grace · Sections: Verse 1</Text>
           </View>
 
           {/* The main text input */}
           <TextInput
             ref={contentRef}
             style={styles.editorInput}
-            placeholder={'[Verse 1]\n[G]Amazing [D]grace, how [Em]sweet the [C]sound…\n\n[Chorus]\n[G]That saved a [D]wretch like [C]me…'}
+            placeholder={'Verse 1\n[G]Amazing [D]grace, how [Em]sweet the [C]sound…\n\nChorus\n[G]That saved a [D]wretch like [C]me…'}
             placeholderTextColor="#D0D0D0"
             value={content}
             onChangeText={setContent}

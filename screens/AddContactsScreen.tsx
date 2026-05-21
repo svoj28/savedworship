@@ -24,6 +24,7 @@ getUserProfileByShortId,
 updateContact,
   getUserProfileByUserId,
   getContactsByRecipientId,
+  getContactByUserIdAndContactUserId,
   query,
 } from '../db/queries'
 import { Contact } from '../db/models'
@@ -33,7 +34,7 @@ notifyContactRequest,
 notifyContactAccepted,
 notifyContactRejected,
 } from '../lib/notifications'
-import { onDataRefresh } from '../lib/sync'
+import { onDataRefresh, onTableChange } from '../lib/sync'
 
 type TabType = 'share' | 'add' | 'contacts'
 
@@ -93,13 +94,21 @@ const fadeAnim = useRef(new Animated.Value(0)).current
   }, [activeTab])
   
   useEffect(() => {
-  const unsub = onDataRefresh((table) => {
-    if (table === 'contacts') {
-      loadUserAndContacts()
+    const unsubRefresh = onDataRefresh((table) => {
+      if (table === 'contacts') {
+        loadUserAndContacts()
+      }
+    })
+
+    const unsubContacts = onTableChange('contacts', () => loadUserAndContacts())
+    const unsubProfiles = onTableChange('user_profiles', () => loadUserAndContacts())
+
+    return () => {
+      unsubRefresh()
+      unsubContacts()
+      unsubProfiles()
     }
-  })
-  return () => unsub()
-}, [])
+  }, [])
 
   const loadUserAndContacts = async () => {
   try {
@@ -118,11 +127,21 @@ const fadeAnim = useRef(new Animated.Value(0)).current
       console.log('=== INCOMING (requests TO me):', JSON.stringify(incoming))
       console.log('=== OUTGOING (requests FROM me):', JSON.stringify(outgoing))
 
-      const seen = new Set<string>()
-      const allContacts = [...incoming, ...outgoing].filter(c => {
-        if (seen.has(c.id)) return false
-        seen.add(c.id)
-        return true
+      const pairKey = (a: string, b: string) => [a, b].sort().join('::')
+      const groups = new Map<string, Contact[]>()
+      for (const contact of [...incoming, ...outgoing]) {
+        const key = pairKey(contact.userId, contact.contactUserId)
+        const list = groups.get(key) || []
+        list.push(contact)
+        groups.set(key, list)
+      }
+
+      const allContacts = Array.from(groups.values()).map(group => {
+        const blocked = group.find(c => c.status === 'blocked')
+        if (blocked) return blocked
+        const accepted = group.find(c => c.status === 'accepted')
+        if (accepted) return accepted
+        return group.find(c => c.status === 'pending') || group[0]
       })
 
       setContacts(allContacts)
@@ -180,9 +199,9 @@ const fadeAnim = useRef(new Animated.Value(0)).current
 })
 console.log('=== SAVED CONTACT:', JSON.stringify(newContact))
 
-    setContacts([newContact, ...contacts])
     await notifyContactRequest(idToAdd, user?.displayName || 'A team member', user.id)
     setFormData({ recipientId: '' })
+    await loadUserAndContacts()
     Alert.alert('Request Sent', 'Your connection request has been delivered.')
   } catch (err) {
     console.error('Error adding contact:', err)
@@ -200,8 +219,23 @@ console.log('=== SAVED CONTACT:', JSON.stringify(newContact))
         style: 'destructive',
         onPress: async () => {
           try {
-            await deleteContact(contactId)
-            setContacts(contacts.filter(c => c.id !== contactId))
+            const current = contacts.find(c => c.id === contactId)
+            if (!current) return
+            const otherUserId = current.userId === user.id ? current.contactUserId : current.userId
+            const ownRow = await getContactByUserIdAndContactUserId(user.id, otherUserId)
+            if (ownRow) {
+              await updateContact(ownRow.id, { status: 'blocked', updatedAt: Date.now() })
+            } else {
+              await addContact({
+                userId: user.id,
+                contactUserId: otherUserId,
+                status: 'blocked',
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                synced: false,
+              })
+            }
+            await loadUserAndContacts()
                       } catch {
             Alert.alert('Error', 'Failed to remove contact.')
           }
@@ -212,20 +246,22 @@ console.log('=== SAVED CONTACT:', JSON.stringify(newContact))
 
 const handleAcceptContact = async (contact: Contact) => {
   try {
-    await updateContact(contact.id, { status: 'accepted', updatedAt: Date.now() })
-    setContacts(contacts.map(c =>
-      c.id === contact.id ? { ...c, status: 'accepted' } : c
-    ))
+    const otherUserId = contact.userId === user.id ? contact.contactUserId : contact.userId
+    const ownRow = await getContactByUserIdAndContactUserId(user.id, otherUserId)
+    if (ownRow) {
+      await updateContact(ownRow.id, { status: 'accepted', updatedAt: Date.now() })
+    } else {
+      await addContact({
+        userId: user.id,
+        contactUserId: otherUserId,
+        status: 'accepted',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        synced: false,
+      })
+    }
 
-    // Create reverse record so sender also sees them as connected
-    await addContact({
-      userId: user.id,
-      contactUserId: contact.userId, // contact.userId is the original sender
-      status: 'accepted',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      synced: false,
-    })
+    await loadUserAndContacts()
 
     await notifyContactAccepted(contact.userId, user?.displayName || 'A team member')
   } catch {
@@ -241,10 +277,21 @@ const handleRejectContact = async (contact: Contact) => {
       style: 'destructive',
       onPress: async () => {
         try {
-          await updateContact(contact.id, { status: 'blocked', updatedAt: Date.now() })
-          setContacts(contacts.map(c =>
-            c.id === contact.id ? { ...c, status: 'blocked' } : c
-          ))
+          const otherUserId = contact.userId === user.id ? contact.contactUserId : contact.userId
+          const ownRow = await getContactByUserIdAndContactUserId(user.id, otherUserId)
+          if (ownRow) {
+            await updateContact(ownRow.id, { status: 'blocked', updatedAt: Date.now() })
+          } else {
+            await addContact({
+              userId: user.id,
+              contactUserId: otherUserId,
+              status: 'blocked',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              synced: false,
+            })
+          }
+          await loadUserAndContacts()
           await notifyContactRejected(contact.userId, user?.displayName || 'A team member')
         } catch {
           Alert.alert('Error', 'Failed to decline request.')

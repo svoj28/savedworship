@@ -1,4 +1,4 @@
-import React, { useEffect, useState, createContext, useContext } from 'react'
+import React, { useEffect, useState, useRef, createContext, useContext } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
@@ -44,18 +44,21 @@ import ManualTransposeScreen from './screens/ManualTransposeScreen'
 import PersonalNotesScreen from './screens/PersonalNotesScreen'
 import ManagementScreen from './screens/ManagementScreen'
 import ConversationScreen from './screens/ConversationScreen'
-import AddContactsScreen from './screens/AddContactsScreen'
 import EditAccountScreen from './screens/EditAccountScreen'
 import { useRole } from '../SavedWorshipMusicTool/lib/useRole'
 import AudioToolsScreen from './screens/AudioToolsScreen'
 import { StatusBar as RNStatusBar } from 'react-native'
 import { loadNotificationsFromSupabase } from './lib/notifications'
+import * as Notifications from 'expo-notifications'
+import { navigationRef, navigateFromNotification } from './lib/notificationNavigation'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
+import SongEditorScreen from './screens/SongEditorScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
+
 
 // ─── Theme Context ────────────────────────────────────────────────────────────
 type ThemeMode = 'dark' | 'light'
@@ -207,14 +210,21 @@ function ChordListsStack() {
       <Stack.Screen
         name="ChordList"
         component={ChordListScreen}
-        options={{ title: 'Song', headerLeft: () => null, headerShown: true }}
+        options={{ title: 'Song', headerLeft: () => null, headerShown: false }}
       />
-      {canManageChords && (
-        <Stack.Screen
-          name="AddSong"
-          component={AddSongScreen}
-          options={{ title: 'Add Song', headerLeft: () => null, headerShown: true }}
-        />
+ {canManageChords && (
+        <>
+          <Stack.Screen
+            name="AddSong"
+            component={AddSongScreen}
+            options={{ title: 'Add Song', headerLeft: () => null, headerShown: false }}
+          />
+          <Stack.Screen
+            name="SongEditor"
+            component={SongEditorScreen}
+            options={{ title: 'Song', headerLeft: () => null, headerShown: false }}
+          />
+        </>
       )}
     </Stack.Navigator>
   )
@@ -360,11 +370,6 @@ function AppTabs({
           options={{ title: 'Audio Tools', headerLeft: () => null, ...makeHeaderOptions(colors) }}
         />
         <Stack.Screen
-          name="AddContacts"
-          component={AddContactsScreen}
-          options={{ title: 'Contacts', headerLeft: () => null, ...makeHeaderOptions(colors) }}
-        />
-        <Stack.Screen
           name="EditAccount"
           component={EditAccountScreen}
           options={{ title: 'Edit Profile', headerLeft: () => null, ...makeHeaderOptions(colors) }}
@@ -459,14 +464,15 @@ function AppContent() {
   const [dbError, setDbError] = useState<string | null>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
   const [dbReady, setDbReady] = useState(false)
-  const periodicSyncCleanupRef = React.useRef<(() => void) | null>(null)
-  const realtimeCleanupRef = React.useRef<(() => void) | null>(null)  // ← add
+  const periodicSyncCleanupRef = useRef<(() => void) | null>(null)
+  const realtimeCleanupRef = useRef<(() => void) | null>(null)
+  const syncStartedRef = useRef(false)
+  const pendingNotificationRef = useRef<any | null>(null)
 
-  useEffect(() => {
+useEffect(() => {
     const initializeApp = async () => {
       try {
-        await queueDb(() => initializeDatabase())
-        await new Promise(resolve => setTimeout(resolve, 100))
+        await initializeDatabase()
         setDbReady(true)
         const authUser = await getCurrentUser()
         setUser(authUser)
@@ -474,7 +480,7 @@ function AppContent() {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error'
         setDbError(errorMsg)
       } finally {
-        setLoading(false)
+        setLoading(false)  // ← this is what dismisses the loading screen
       }
     }
     initializeApp()
@@ -482,59 +488,100 @@ function AppContent() {
     return () => unsubscribe()
   }, [])
 
-  useEffect(() => {
-    if (!user || !dbReady) {
-      periodicSyncCleanupRef.current?.()
-      periodicSyncCleanupRef.current = null
-      realtimeCleanupRef.current?.()   // ← add
-      realtimeCleanupRef.current = null // ← add
-      stopNetworkSync()
-      return
-    }
+useEffect(() => {
+  if (!user || !dbReady) {
+    periodicSyncCleanupRef.current?.()
+    periodicSyncCleanupRef.current = null
+    realtimeCleanupRef.current?.()
+    realtimeCleanupRef.current = null
+    stopNetworkSync()
+    syncStartedRef.current = false  
+    return
+  }
 
-    const startSync = async () => {
+  // ← Prevent re-running if already started for this user
+  if (syncStartedRef.current) return
+  syncStartedRef.current = true
+
+const startSync = async () => {
   try {
-    // 1. Clean up first
     await removeOrphanedUnsyncedRows(user.id)
     await stampUserIdOnUnsyncedRows(user.id)
 
-    // 2. Do initial full sync and WAIT for it to complete
-    await fullSync(user.id)  // import this directly
+    // Don't await — let it run in background, don't block app startup
+    fullSync(user.id).catch(err => console.error('Initial sync failed:', err))
 
-    // 3. Only AFTER sync is done, set up background services
     await pingSupabaseOncePerDay(user.id)
     await loadNotificationsFromSupabase(user.id)
     startNetworkSync()
 
-    // 4. Start periodic timer (no immediate sync, fullSync already done)
     const syncInterval = setInterval(async () => {
       await fullSync(user.id)
-    }, 60000)
+    }, 10000)
     periodicSyncCleanupRef.current = () => clearInterval(syncInterval)
 
-    // 5. Subscribe to realtime LAST, after everything is settled
     realtimeCleanupRef.current?.()
     realtimeCleanupRef.current = null
     const unsubscribeRealtime = subscribeToChanges(user.id, async () => {
       await loadNotificationsFromSupabase(user.id)
     })
     realtimeCleanupRef.current = unsubscribeRealtime
-
   } catch (err) {
     console.error('Sync start failed:', err)
+    syncStartedRef.current = false
   }
 }
 
-    startSync()
+  startSync()
 
-    return () => {
-      periodicSyncCleanupRef.current?.()
-      periodicSyncCleanupRef.current = null
-      realtimeCleanupRef.current?.()   // ← add
-      realtimeCleanupRef.current = null // ← add
-      stopNetworkSync()
+  return () => {
+    periodicSyncCleanupRef.current?.()
+    periodicSyncCleanupRef.current = null
+    realtimeCleanupRef.current?.()
+    realtimeCleanupRef.current = null
+    stopNetworkSync()
+  }
+}, [user, dbReady])
+
+  useEffect(() => {
+    const toNotification = (response: Notifications.NotificationResponse) => {
+      const content = response.notification.request.content
+      const data = (content.data || {}) as Record<string, any>
+
+      if (!data.type) return null
+
+      return {
+        id: String(data.id || response.notification.request.identifier || Date.now()),
+        type: data.type,
+        title: String(content.title || 'Notification'),
+        body: String(content.body || ''),
+        data,
+        createdAt: Date.now(),
+        read: false,
+        userId: String(data.userId || user?.id || ''),
+      }
     }
-  }, [user, dbReady])
+
+    const tryNavigate = (response: Notifications.NotificationResponse) => {
+      const notification = toNotification(response)
+      if (!notification) return
+
+      if (!navigationRef.isReady()) {
+        pendingNotificationRef.current = notification
+        return
+      }
+
+      navigateFromNotification(notification)
+    }
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(tryNavigate)
+
+    Notifications.getLastNotificationResponseAsync().then(response => {
+      if (response) tryNavigate(response)
+    })
+
+    return () => subscription.remove()
+  }, [user?.id])
 
   const navTheme = mode === 'dark'
     ? {
@@ -557,7 +604,16 @@ function AppContent() {
   return (
     <NotificationProvider userId={user?.id ?? null}>
       <View style={{ flex: 1, paddingTop: RNStatusBar.currentHeight ?? 0, backgroundColor: colors.header }}>
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer
+          ref={navigationRef}
+          theme={navTheme}
+          onReady={() => {
+            if (pendingNotificationRef.current) {
+              navigateFromNotification(pendingNotificationRef.current)
+              pendingNotificationRef.current = null
+            }
+          }}
+        >
           <StatusBar style={colors.statusBar} />
           {user ? (
             <AppTabs drawerVisible={drawerVisible} setDrawerVisible={setDrawerVisible} />

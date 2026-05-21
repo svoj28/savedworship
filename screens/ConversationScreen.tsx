@@ -12,13 +12,16 @@ import {
   Image,
   FlatList,
 } from 'react-native'
+import { CameraView, Camera, BarcodeScanningResult } from 'expo-camera'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { getCurrentUser } from '../lib/auth'
-import { createMessage, query as dbQuery, editMessage, deleteMessage, getUserProfileByUserId, getContactsByUserId } from '../db/queries'
+import { createMessage, query as dbQuery, editMessage, deleteMessage, getUserProfileByUserId } from '../db/queries'
 import { Message, UserProfile } from '../db/models'
 import { useFocusEffect } from '@react-navigation/native'
 import UserProfileModal from './UserProfileModal'
-import { onDataRefresh } from '../lib/sync'
+import { onTableChange } from '../lib/sync'
+import { execute } from '../db/index'
+import { supabase } from '../lib/supabase'
 
 export default function ConversationScreen() {
   const [userId, setUserId] = useState<string>('')
@@ -37,41 +40,69 @@ export default function ConversationScreen() {
   const [contactedUsers, setContactedUsers] = useState<any[]>([])
   const [showNewConversationModal, setShowNewConversationModal] = useState(false)
   const [newRecipientId, setNewRecipientId] = useState('')
-  const [friendsList, setFriendsList] = useState<any[]>([])
-    const [activeUserIds, setActiveUserIds] = useState<Set<string>>(new Set())
+  const [activeUserIds, setActiveUserIds] = useState<Set<string>>(new Set())
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
-  const [selectedConvId, setSelectedConvId] = useState<string | null>(null)
   const [profileModalUserId, setProfileModalUserId] = useState<string | null>(null)
+  const [scannerVisible, setScannerVisible] = useState(false)
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null)
+  const [scanned, setScanned] = useState(false)
 
   const OVERALL_CHAT_ID = 'overall-chat'
+  const userIdRef = React.useRef('')
+  const userProfilesRef = React.useRef<Map<string, UserProfile>>(new Map())
 
-  useEffect(() => {
-    const loadUser = async () => {
-      const user = await getCurrentUser()
-      if (user) {
-        setUserId(user.id)
-        const profile = await getUserProfileByUserId(user.id)
-        setUserProfile(profile)
-        await loadMessages(user.id)
-        await loadOverallChat(user.id)
-        await loadUsers()
-        await loadContactedUsers(user.id)
-        await loadFriendsListForModal(user.id)
-      }
+ useEffect(() => {
+  const loadUser = async () => {
+    const user = await getCurrentUser()
+    if (user) {
+      setUserId(user.id)
+      userIdRef.current = user.id
+      const profile = await getUserProfileByUserId(user.id)
+      setUserProfile(profile)
+      // Load everything once on mount
+      await Promise.all([
+        loadMessages(user.id),
+        loadOverallChat(user.id),
+        loadUsers(),
+        loadContactedUsers(user.id),
+      ])
     }
-    loadUser()
-  }, [])
+  }
+  loadUser()
+}, [])
 
   const loadMessages = async (id: string) => {
     try {
-      const sentMessages = await dbQuery(
-        `SELECT * FROM messages WHERE sender_id = ? AND receiver_id != ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
-        [id, OVERALL_CHAT_ID]
-      )
-      const receivedMessages = await dbQuery(
-        `SELECT * FROM messages WHERE receiver_id = ? AND receiver_id != ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
-        [id, OVERALL_CHAT_ID]
-      )
+      const [{ data: sentMessages }, { data: receivedMessages }] = await Promise.all([
+        supabase
+          .from('messages')
+          .select('*')
+          .eq('sender_id', id)
+          .neq('receiver_id', OVERALL_CHAT_ID)
+          .eq('is_deleted', 0)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', id)
+          .neq('receiver_id', OVERALL_CHAT_ID)
+          .eq('is_deleted', 0)
+          .order('created_at', { ascending: true }),
+      ])
+
+      let rows = [...(sentMessages || []), ...(receivedMessages || [])]
+
+      if (rows.length === 0) {
+        const localSent = await dbQuery(
+          `SELECT * FROM messages WHERE sender_id = ? AND receiver_id != ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
+          [id, OVERALL_CHAT_ID]
+        )
+        const localReceived = await dbQuery(
+          `SELECT * FROM messages WHERE receiver_id = ? AND receiver_id != ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
+          [id, OVERALL_CHAT_ID]
+        )
+        rows = [...localSent, ...localReceived]
+      }
 
       const mapMessage = (row: any): Message => ({
         id: row.id,
@@ -85,12 +116,9 @@ export default function ConversationScreen() {
         synced: Boolean(row._synced),
       })
 
-      const allMessages = [
-        ...sentMessages.map(mapMessage),
-        ...receivedMessages.map(mapMessage),
-      ].sort((a, b) => a.createdAt - b.createdAt)
+      const allMessages = rows.map(mapMessage).sort((a, b) => a.createdAt - b.createdAt)
 
-      setMessages(allMessages)
+      setMessages([...allMessages])
       await loadUsers()
       setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
 
@@ -102,7 +130,10 @@ export default function ConversationScreen() {
           if (profile) profilesMap.set(senderId, profile)
         }
       }
+
+      
       setUserProfiles(profilesMap)
+      userProfilesRef.current = profilesMap
       setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
     } catch (err) {
       console.error('Error loading messages:', err)
@@ -111,10 +142,21 @@ export default function ConversationScreen() {
 
   const loadOverallChat = async (id: string) => {
     try {
-      const results = await dbQuery(
-        `SELECT * FROM messages WHERE receiver_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
-        [OVERALL_CHAT_ID]
-      )
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('receiver_id', OVERALL_CHAT_ID)
+        .eq('is_deleted', 0)
+        .order('created_at', { ascending: true })
+
+      let results = data || []
+      if (results.length === 0) {
+        results = await dbQuery(
+          `SELECT * FROM messages WHERE receiver_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
+          [OVERALL_CHAT_ID]
+        )
+      }
+      console.log('[loadOverallChat] fetched', results.length, 'messages')
 
       const mapMessage = (row: any): Message => ({
         id: row.id,
@@ -129,11 +171,11 @@ export default function ConversationScreen() {
       })
 
       const mapped = results.map(mapMessage)
-      setOverallChatMessages(mapped)
+      setOverallChatMessages([...mapped])
       await loadUsers()
       
       const senderIds = new Set(mapped.map(m => m.senderId))
-      const profilesMap = new Map<string, UserProfile>(userProfiles)
+      const profilesMap = new Map<string, UserProfile>(userProfilesRef.current)
       for (const senderId of senderIds) {
         if (!profilesMap.has(senderId)) {
           const profile = await getProfileWithFallback(senderId)
@@ -179,10 +221,72 @@ export default function ConversationScreen() {
     }
   }
 
-  const handleStartConversation = (targetUserId: string) => {
+  const handleStartConversation = async (targetUserId: string) => {
+    setChatMode('direct')
     setReceiverId(targetUserId)
     setShowNewConversationModal(false)
+    setScannerVisible(false)
+    setScanned(false)
     setNewRecipientId('')
+
+    try {
+      const profile = await getProfileWithFallback(targetUserId)
+      if (profile) {
+        setUserProfiles(prev => {
+          const updated = new Map(prev)
+          updated.set(targetUserId, profile)
+          return updated
+        })
+      }
+      if (userId) {
+        await loadContactedUsers(userId)
+      }
+    } catch (err) {
+      console.warn('Failed to resolve recipient profile:', err)
+    }
+  }
+
+  const resolveRecipientIdFromQr = (data: string) => {
+    try {
+      const parsed = JSON.parse(data)
+      if (parsed?.type === 'savedworship:recipient' && typeof parsed.userId === 'string') {
+        return parsed.userId.trim()
+      }
+    } catch (err) {
+      // Not JSON, fall through to raw value handling.
+    }
+
+    return data.trim()
+  }
+
+  const handleScanQRCode = async () => {
+    const { status } = await Camera.requestCameraPermissionsAsync()
+    if (status === 'granted') {
+      setHasPermission(true)
+      setScanned(false)
+      setScannerVisible(true)
+    } else {
+      Alert.alert('Permission Required', 'Please enable camera access to scan QR codes.', [{ text: 'OK' }])
+    }
+  }
+
+  const handleBarCodeScanned = ({ data }: BarcodeScanningResult) => {
+    if (scanned) return
+    setScanned(true)
+    setScannerVisible(false)
+    const recipientId = resolveRecipientIdFromQr(data)
+    if (!recipientId) {
+      Alert.alert('Invalid QR Code', 'This QR code does not contain a recipient ID.')
+      setScanned(false)
+      return
+    }
+
+    handleStartConversation(recipientId)
+  }
+
+  const closeScanner = () => {
+    setScannerVisible(false)
+    setScanned(false)
   }
 
   const handleEditMessage = async () => {
@@ -243,13 +347,27 @@ export default function ConversationScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-                            await dbQuery(
-                `UPDATE messages SET is_deleted = 1 WHERE 
-                (sender_id = ? AND receiver_id = ?) OR 
-                (sender_id = ? AND receiver_id = ?)`,
-                [userId, otherUserId, otherUserId, userId]
-              )
-                            if (receiverId === otherUserId) setReceiverId('')
+              await Promise.all([
+                execute(
+                  `DELETE FROM messages WHERE 
+                  (sender_id = ? AND receiver_id = ?) OR 
+                  (sender_id = ? AND receiver_id = ?)` ,
+                  [userId, otherUserId, otherUserId, userId]
+                ),
+                supabase
+                  .from('messages')
+                  .delete()
+                  .eq('sender_id', userId)
+                  .eq('receiver_id', otherUserId),
+                supabase
+                  .from('messages')
+                  .delete()
+                  .eq('sender_id', otherUserId)
+                  .eq('receiver_id', userId),
+              ])
+
+              if (receiverId === otherUserId) setReceiverId('')
+              setSelectedConversationId(null)
               await loadMessages(userId)
               await loadContactedUsers(userId)
             } catch (err) {
@@ -313,7 +431,8 @@ export default function ConversationScreen() {
 
   const loadUsers = async () => {
     try {
-      const allProfiles: any[] = await dbQuery(`SELECT * FROM user_profiles`)
+      const { data } = await supabase.from('user_profiles').select('*')
+      const allProfiles: any[] = data && data.length > 0 ? data : await dbQuery(`SELECT * FROM user_profiles`)
       const profilesMap = new Map<string, UserProfile>()
       for (const row of allProfiles) {
         profilesMap.set(row.user_id, {
@@ -337,14 +456,33 @@ export default function ConversationScreen() {
 
   const loadContactedUsers = async (id: string) => {
     try {
-      const results = await dbQuery(
-        `SELECT sender_id, receiver_id, text, created_at FROM messages 
-          WHERE receiver_id != ?
-          AND (sender_id = ? OR receiver_id = ?)
-          AND COALESCE(is_deleted, 0) = 0
-          ORDER BY created_at DESC`,
-          [OVERALL_CHAT_ID, id, id]
-      )
+      const [sent, received] = await Promise.all([
+        supabase
+          .from('messages')
+          .select('sender_id, receiver_id, text, created_at')
+          .eq('sender_id', id)
+          .neq('receiver_id', OVERALL_CHAT_ID)
+          .eq('is_deleted', 0)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('messages')
+          .select('sender_id, receiver_id, text, created_at')
+          .eq('receiver_id', id)
+          .neq('receiver_id', OVERALL_CHAT_ID)
+          .eq('is_deleted', 0)
+          .order('created_at', { ascending: false }),
+      ])
+      let results: any[] = [...(sent.data || []), ...(received.data || [])]
+      if (results.length === 0) {
+        results = await dbQuery(
+          `SELECT sender_id, receiver_id, text, created_at FROM messages 
+            WHERE receiver_id != ?
+            AND (sender_id = ? OR receiver_id = ?)
+            AND COALESCE(is_deleted, 0) = 0
+            ORDER BY created_at DESC`,
+            [OVERALL_CHAT_ID, id, id]
+        )
+      }
       const userMap = new Map<string, { lastContacted: number; lastMessage: string }>()
       results.forEach((msg: any) => {
         const otherUserId = msg.sender_id === id ? msg.receiver_id : msg.sender_id
@@ -376,37 +514,17 @@ export default function ConversationScreen() {
     }
   }
 
-  const loadFriendsListForModal = async (id: string) => {
-    try {
-      const contacts = await getContactsByUserId(id)
-      const accepted = contacts.filter((c: any) => c.status === 'accepted')
-      const list = await Promise.all(
-        accepted.map(async (contact: any) => {
-          const profile = await getUserProfileByUserId(contact.contactUserId)
-          return {
-            id: contact.contactUserId,
-            nickname: profile?.nickname || 'Member',
-            avatar: profile?.avatarUrl,
-          }
-        })
-      )
-      setFriendsList(list)
-    } catch (err) {
-      console.error('Error loading friends list:', err)
-    }
-  }
-
-  useFocusEffect(
-    React.useCallback(() => {
-      if (userId) {
-        loadOverallChat(userId)
-        loadMessages(userId)
-        loadUsers()
-        loadContactedUsers(userId)
-        loadFriendsListForModal(userId)
-      }
-    }, [userId])
-  )
+  // useFocusEffect(
+  //   React.useCallback(() => {
+  //     if (userId) {
+  //       loadOverallChat(userId)
+  //       loadMessages(userId)
+  //       loadUsers()
+  //       loadContactedUsers(userId)
+  //       loadFriendsListForModal(userId)
+  //     }
+  //   }, [userId])
+  // )
 
     const directConversationMessages = messages.filter(
     m =>
@@ -416,14 +534,102 @@ export default function ConversationScreen() {
 
   useEffect(() => {
   if (!userId) return
-  const unsub = onDataRefresh((table) => {
-    if (table === 'messages') {
-      loadOverallChat(userId)
-      loadMessages(userId)
-      loadContactedUsers(userId)
-    }
+
+  const unsubMessages = onTableChange('messages', () => {
+    console.log('[table listener] userId is:', userIdRef.current)
+    const id = userIdRef.current  // ← use ref, not state
+    if (!id) return
+    loadOverallChat(id)
+    loadMessages(id)
+    loadContactedUsers(id)
   })
-  return () => unsub()
+
+  const unsubProfiles = onTableChange('user_profiles', () => {
+    loadUsers()
+  })
+
+  const unsubContacts = onTableChange('contacts', () => {
+    const id = userIdRef.current
+    if (!id) return
+    loadContactedUsers(id)
+  })
+
+  const messageChannel = supabase
+    .channel(`conversation-messages-${userIdRef.current}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'messages',
+      filter: `sender_id=eq.${userIdRef.current}`,
+    }, () => {
+      const id = userIdRef.current
+      if (!id) return
+      loadOverallChat(id)
+      loadMessages(id)
+      loadContactedUsers(id)
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'messages',
+      filter: `receiver_id=eq.${userIdRef.current}`,
+    }, () => {
+      const id = userIdRef.current
+      if (!id) return
+      loadOverallChat(id)
+      loadMessages(id)
+      loadContactedUsers(id)
+    })
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'messages',
+      filter: `receiver_id=eq.overall-chat`,
+    }, () => {
+      const id = userIdRef.current
+      if (!id) return
+      loadOverallChat(id)
+      loadMessages(id)
+      loadContactedUsers(id)
+    })
+    .subscribe()
+
+  const profileChannel = supabase
+    .channel(`conversation-profiles-${userIdRef.current}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'user_profiles',
+    }, () => {
+      const id = userIdRef.current
+      if (!id) return
+      loadUsers()
+      loadContactedUsers(id)
+    })
+    .subscribe()
+
+  const contactsChannel = supabase
+    .channel(`conversation-contacts-${userIdRef.current}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'contacts',
+      filter: `user_id=eq.${userIdRef.current}`,
+    }, () => {
+      const id = userIdRef.current
+      if (!id) return
+      loadContactedUsers(id)
+    })
+    .subscribe()
+
+  return () => {
+    unsubMessages()
+    unsubProfiles()
+    unsubContacts()
+    supabase.removeChannel(messageChannel)
+    supabase.removeChannel(profileChannel)
+    supabase.removeChannel(contactsChannel)
+  }
 }, [userId])
 
   const currentMessages = chatMode === 'overall' ? overallChatMessages : directConversationMessages
@@ -496,72 +702,19 @@ minute: '2-digit',
     )
   }
 
-    const sortedFriends = [...friendsList].sort((a, b) => {
-    const aActive = activeUserIds.has(a.id) ? 0 : 1
-    const bActive = activeUserIds.has(b.id) ? 0 : 1
-    return aActive - bActive
-  })
-
     const renderDirectMessagesPanel = () => (
     <ScrollView style={styles.dmPanel} showsVerticalScrollIndicator={false}>
-      {/* Members Section */}
-      <View style={styles.sectionBlock}>
-<View style={styles.sectionHeaderRow}>
-          <View style={styles.sectionAccentLine} />
-        <Text style={styles.sectionHeader}>MEMBERS</Text>
-</View>
-        {sortedFriends.length === 0 ? (
-          <View style={styles.emptySection}>
-            <Text style={styles.emptySectionText}>No members added yet</Text>
-          </View>
-        ) : (
-          <ScrollView
-horizontal
-showsHorizontalScrollIndicator={false}
-style={styles.friendsRow}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 4 }}
->
-            {sortedFriends.map(friend => {
-              const isActive = activeUserIds.has(friend.id)
-              return (
-                <TouchableOpacity
-                  key={friend.id}
-                  style={styles.friendBubble}
-                  onPress={() => handleStartConversation(friend.id)}
-                  onLongPress={() => setProfileModalUserId(friend.id)}
-activeOpacity={0.7}
-                >
-                  <View style={styles.friendAvatarWrapper}>
-                    {friend.avatar ? (
-                      <Image source={{ uri: friend.avatar }} style={styles.friendBubbleAvatar} />
-                    ) : (
-                      <View style={styles.friendBubbleAvatarPlaceholder}>
-                        <Ionicons name="person" size={22} color="#555" />
-                      </View>
-                    )}
-                    {isActive && <View style={styles.activeDot} />}
-                  </View>
-                  <Text style={styles.friendBubbleName} numberOfLines={1}>
-                    {friend.nickname}
-                  </Text>
-                </TouchableOpacity>
-              )
-            })}
-          </ScrollView>
-        )}
-      </View>
-
       {/* Conversations Section */}
-<View style={[styles.sectionBlock, { marginTop: 4 }]}>
-      <View style={styles.sectionHeaderRow}>
-<View style={styles.sectionAccentLine} />
-        <Text style={styles.sectionHeader}>CONVERSATIONS</Text>
-</View>
+      <View style={[styles.sectionBlock, { marginTop: 24 }]}>
+        <View style={styles.sectionHeaderRow}>
+          <View style={styles.sectionAccentLine} />
+          <Text style={styles.sectionHeader}>CONVERSATIONS</Text>
+        </View>
         {contactedUsers.length === 0 ? (
           <View style={styles.emptySection}>
             <Ionicons name="chatbubble-ellipses-outline" size={36} color="#BDBDBD" />
             <Text style={styles.emptySectionText}>No conversations yet</Text>
-            <Text style={styles.emptySectionSub}>Select a member above to begin</Text>
+            <Text style={styles.emptySectionSub}>Start a conversation using recipient ID or QR code</Text>
           </View>
         ) : (
 <View style={{ paddingHorizontal: 16 }}>
@@ -909,42 +1062,12 @@ activeOpacity={0.85}
             </View>
 
             <ScrollView style={styles.newConversationBody} showsVerticalScrollIndicator={false}>
-              {friendsList.length > 0 && (
-                <>
-<View style={styles.sectionHeaderRow}>
-                    <View style={styles.sectionAccentLine} />
-                  <Text style={styles.sectionHeader}>MEMBERS</Text>
-</View>
-                  <View style={styles.friendsGrid}>
-                    {friendsList.map(friend => (
-                      <TouchableOpacity
-                        key={friend.id}
-                        style={styles.friendCard}
-                        onPress={() => handleStartConversation(friend.id)}
-activeOpacity={0.7}
-                      >
-                        {friend.avatar ? (
-                          <Image source={{ uri: friend.avatar }} style={styles.friendAvatar} />
-                        ) : (
-                          <View style={styles.friendAvatarPlaceholder}>
-                            <Ionicons name="person" size={22} color="#555" />
-                          </View>
-                        )}
-                        <Text style={styles.friendName} numberOfLines={2}>
-                          {friend.nickname}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </>
-              )}
-
-<View style={[styles.sectionHeaderRow, { marginTop: 24 }]}>
+              <View style={[styles.sectionHeaderRow, { marginTop: 16 }]}>
                 <View style={styles.sectionAccentLine} />
                 <Text style={styles.sectionHeader}>BY ID</Text>
               </View>
               <View style={styles.recipientInputSection}>
-                                <TextInput
+                <TextInput
                   style={styles.recipientIdInput}
                   placeholder="Enter recipient ID"
                   value={newRecipientId}
@@ -957,22 +1080,62 @@ activeOpacity={0.7}
                     if (newRecipientId.trim()) handleStartConversation(newRecipientId)
                   }}
                   disabled={!newRecipientId.trim()}
-activeOpacity={0.8}
+                  activeOpacity={0.8}
                 >
                   <Text style={styles.startButtonText}>Start Conversation</Text>
                 </TouchableOpacity>
               </View>
 
-<View style={[styles.sectionHeaderRow, { marginTop: 24 }]}>
-              <View style={styles.sectionAccentLine} />
+              <View style={[styles.sectionHeaderRow, { marginTop: 24 }]}>
+                <View style={styles.sectionAccentLine} />
                 <Text style={styles.sectionHeader}>SCAN</Text>
-</View>
-                <TouchableOpacity style={styles.qrButton} activeOpacity={0.75}>
-                  <Ionicons name="qr-code-outline" size={36} color="#111" />
-                  <Text style={styles.qrButtonText}>Scan QR Code</Text>
-                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={styles.qrButton} onPress={handleScanQRCode} activeOpacity={0.75}>
+                <Ionicons name="qr-code-outline" size={36} color="#111" />
+                <Text style={styles.qrButtonText}>Scan QR Code</Text>
+              </TouchableOpacity>
               <View style={{ height: 40 }} />
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* QR Code Scanner Modal */}
+      <Modal visible={scannerVisible} animationType="fade" onRequestClose={closeScanner}>
+        <View style={styles.scannerContainer}>
+          <View style={styles.scannerHeader}>
+            <TouchableOpacity onPress={closeScanner} style={styles.closeButton}>
+              <Ionicons name="close" size={20} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.scannerTitle}>Scan Recipient Code</Text>
+            <View style={{ width: 44 }} />
+          </View>
+
+          {hasPermission && (
+            <CameraView
+              style={styles.camera}
+              facing="back"
+              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+              onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+            />
+          )}
+
+          <View style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame}>
+              <View style={[styles.corner, styles.cornerTL]} />
+              <View style={[styles.corner, styles.cornerTR]} />
+              <View style={[styles.corner, styles.cornerBL]} />
+              <View style={[styles.corner, styles.cornerBR]} />
+            </View>
+          </View>
+
+          <View style={styles.scannerFooter}>
+            <Text style={styles.scannerHint}>Align the code within the frame</Text>
+            {scanned && (
+              <TouchableOpacity style={styles.rescanButton} onPress={() => setScanned(false)}>
+                <Text style={styles.rescanText}>Scan Again</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>
@@ -1533,4 +1696,102 @@ color: '#333',
 marginTop: 8,
     letterSpacing: 0.3,
 },
+
+  // ── QR Scanner ────────────────────────────────────────────────────────────
+  scannerContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  scannerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    backgroundColor: '#000',
+  },
+  scannerTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  closeButton: {
+    padding: 8,
+  },
+  camera: {
+    flex: 1,
+  },
+  scannerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  scannerFrame: {
+    width: 260,
+    height: 260,
+    borderWidth: 2,
+    borderColor: '#FFF',
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+  },
+  corner: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderColor: '#FFF',
+    borderWidth: 3,
+  },
+  cornerTL: {
+    top: -2,
+    left: -2,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+  },
+  cornerTR: {
+    top: -2,
+    right: -2,
+    borderLeftWidth: 0,
+    borderBottomWidth: 0,
+  },
+  cornerBL: {
+    bottom: -2,
+    left: -2,
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+  },
+  cornerBR: {
+    bottom: -2,
+    right: -2,
+    borderLeftWidth: 0,
+    borderTopWidth: 0,
+  },
+  scannerFooter: {
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  scannerHint: {
+    fontSize: 13,
+    color: '#CCC',
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  rescanButton: {
+    marginTop: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    backgroundColor: '#FFF',
+    borderRadius: 6,
+  },
+  rescanText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#000',
+  },
 })

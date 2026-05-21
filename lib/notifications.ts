@@ -4,7 +4,7 @@ import { Platform } from 'react-native'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type NotificationType = 'new_upload' | 'contact_request' | 'contact_accepted' | 'contact_rejected'
+export type NotificationType = 'new_upload' | 'contact_request' | 'contact_accepted' | 'contact_rejected' | 'management_broadcast'
 
 export interface AppNotification {
   id: string
@@ -22,6 +22,32 @@ export type MuteOption = 'unmuted' | '1h' | '8h' | '24h' | 'always'
 export interface MuteState {
   option: MuteOption
   until: number | null // timestamp, null = always or unmuted
+}
+
+function normalizeNotificationData(value: unknown): Record<string, any> {
+  if (!value) return {}
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' ? parsed : { value }
+    } catch {
+      return { value }
+    }
+  }
+  return typeof value === 'object' ? (value as Record<string, any>) : { value }
+}
+
+export function notificationFromRow(row: any): AppNotification {
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    data: normalizeNotificationData(row.data),
+    createdAt: row.created_at,
+    read: row.read,
+    userId: row.user_id,
+  }
 }
 
 // ─── Storage Keys ─────────────────────────────────────────────────────────────
@@ -149,18 +175,49 @@ export async function saveNotification(notification: AppNotification): Promise<v
 }
 
 export async function markAllRead(userId: string): Promise<void> {
+  try {
+    const { supabase } = await import('./supabase')
+    await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('user_id', userId)
+  } catch (err) {
+    console.warn('Failed to mark notifications as read in Supabase:', err)
+  }
+
   const notifications = await getNotifications(userId)
   const updated = notifications.map(n => ({ ...n, read: true }))
   await AsyncStorage.setItem(NOTIFICATIONS_KEY(userId), JSON.stringify(updated))
 }
 
 export async function markOneRead(userId: string, notifId: string): Promise<void> {
+  try {
+    const { supabase } = await import('./supabase')
+    await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('id', notifId)
+      .eq('user_id', userId)
+  } catch (err) {
+    console.warn('Failed to mark notification as read in Supabase:', err)
+  }
+
   const notifications = await getNotifications(userId)
   const updated = notifications.map(n => n.id === notifId ? { ...n, read: true } : n)
   await AsyncStorage.setItem(NOTIFICATIONS_KEY(userId), JSON.stringify(updated))
 }
 
 export async function clearAllNotifications(userId: string): Promise<void> {
+  try {
+    const { supabase } = await import('./supabase')
+    await supabase
+      .from('notifications')
+      .delete()
+      .eq('user_id', userId)
+  } catch (err) {
+    console.warn('Failed to clear notifications in Supabase:', err)
+  }
+
   await AsyncStorage.removeItem(NOTIFICATIONS_KEY(userId))
 }
 
@@ -204,29 +261,23 @@ export async function sendLocalNotification(
     userId,
   }
 
-  // Save to Supabase so the recipient's device can pull it
+  const muteState = await getMuteState(userId)
+
+  let shouldSchedule = false
   try {
-    const { supabase } = await import('./supabase')
-    await supabase.from('notifications').insert({
-      id: notification.id,
-      user_id: userId,
-      type,
-      title,
-      body,
-      data: data ?? {},
-      created_at: notification.createdAt,
-      read: false,
-    })
-  } catch (err) {
-    console.warn('Failed to save notification to Supabase:', err)
+    const { getCurrentUser } = await import('./auth')
+    const currentUser = await getCurrentUser()
+    shouldSchedule = Boolean(currentUser && currentUser.id === userId)
+  } catch {
+    shouldSchedule = false
   }
 
-  // Also save locally on THIS device (for the current user's own notifications)
-  const muteState = await getMuteState(userId)
-  await saveNotification(notification)
+  if (shouldSchedule) {
+    await saveNotification(notification)
+  }
 
-  if (!isMuted(muteState)) {
-    await Notifications.scheduleNotificationAsync({
+  if (shouldSchedule && !isMuted(muteState)) {
+    void Notifications.scheduleNotificationAsync({
       content: {
         title,
         body,
@@ -236,10 +287,29 @@ export async function sendLocalNotification(
       trigger: null,
     })
   }
+
+  void (async () => {
+    try {
+      const { supabase } = await import('./supabase')
+      await supabase.from('notifications').insert({
+        id: notification.id,
+        user_id: userId,
+        type,
+        title,
+        body,
+        data: normalizeNotificationData(data),
+        created_at: notification.createdAt,
+        read: false,
+      })
+    } catch (err) {
+      console.warn('Failed to save notification to Supabase:', err)
+    }
+  })()
 }
 export async function loadNotificationsFromSupabase(userId: string): Promise<void> {
   try {
     const { supabase } = await import('./supabase')
+    const lastChecked = await getLastChecked(userId)
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
@@ -249,16 +319,7 @@ export async function loadNotificationsFromSupabase(userId: string): Promise<voi
 
     if (error || !data) return
 
-    const notifications: AppNotification[] = data.map(row => ({
-      id: row.id,
-      type: row.type,
-      title: row.title,
-      body: row.body,
-      data: row.data,
-      createdAt: row.created_at,
-      read: row.read,
-      userId: row.user_id,
-    }))
+    const notifications: AppNotification[] = data.map(notificationFromRow)
 
     // Save to local AsyncStorage
     await AsyncStorage.setItem(NOTIFICATIONS_KEY(userId), JSON.stringify(notifications))
@@ -266,7 +327,7 @@ export async function loadNotificationsFromSupabase(userId: string): Promise<voi
     // Fire OS notification for any unread ones received while offline
     const muteState = await getMuteState(userId)
     if (!isMuted(muteState)) {
-      for (const n of notifications.filter(n => !n.read)) {
+      for (const n of notifications.filter(n => !n.read && n.createdAt > lastChecked)) {
         await Notifications.scheduleNotificationAsync({
           content: {
             title: n.title,
@@ -278,10 +339,65 @@ export async function loadNotificationsFromSupabase(userId: string): Promise<voi
         })
       }
     }
+
+    await setLastChecked(userId)
   } catch (err) {
     console.warn('Failed to load notifications from Supabase:', err)
   }
 }
+
+async function getAllUserIds(): Promise<string[]> {
+  try {
+    const { supabase } = await import('./supabase')
+    const { data } = await supabase.from('user_profiles').select('user_id')
+    const userIds = (data || [])
+      .map((row: any) => row.user_id)
+      .filter(Boolean)
+
+    if (userIds.length > 0) {
+      return Array.from(new Set(userIds))
+    }
+  } catch (err) {
+    console.warn('Failed to load user ids from Supabase:', err)
+  }
+
+  try {
+    const { query } = await import('../db/index')
+    const rows = await query('SELECT user_id FROM user_profiles')
+    return Array.from(new Set(rows.map((row: any) => row.user_id).filter(Boolean)))
+  } catch (err) {
+    console.warn('Failed to load user ids locally:', err)
+    return []
+  }
+}
+
+export async function notifyManagementChangeToAllUsers(
+  actorUserId: string,
+  action: 'created' | 'updated' | 'deleted',
+  sectionLabel: string,
+  itemTitle?: string
+) {
+  const userIds = await getAllUserIds()
+  if (userIds.length === 0) return
+
+  const actionLabel = action.charAt(0).toUpperCase() + action.slice(1)
+  const title = `${sectionLabel} ${actionLabel}`
+  const body = itemTitle
+    ? `"${itemTitle}" was ${action} in ${sectionLabel.toLowerCase()}.`
+    : `A ${sectionLabel.toLowerCase()} item was ${action}.`
+
+  await Promise.all(
+    userIds.map((userId) =>
+      sendLocalNotification(userId, title, body, 'management_broadcast', {
+        actorUserId,
+        action,
+        sectionLabel,
+        itemTitle: itemTitle ?? '',
+      })
+    )
+  )
+}
+
 // ─── Helpers to create typed notifications ────────────────────────────────────
 
 export async function notifyNewUpload(userId: string, songTitle: string) {

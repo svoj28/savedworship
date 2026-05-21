@@ -1,5 +1,5 @@
 // components/CustomDrawerContent.tsx
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   View,
   StyleSheet,
@@ -10,14 +10,68 @@ import {
   Clipboard,
   Image,
   Animated,
+  Modal,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import Svg, { Rect } from 'react-native-svg'
+import QRCodeGenerator from 'qrcode-generator'
 import { getCurrentUser, signOut, AuthUser } from '../lib/auth'
-import { getContactsByUserId } from '../db/queries'
-import { getUserProfileByUserId } from '../db/queries'
+import { getContactsByUserId, getContactsByRecipientId, getUserProfileByUserId } from '../db/queries'
 import { Contact, UserProfile } from '../db/models'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { generateShortId } from '../lib/shortId'
+import { onTableChange } from '../lib/sync'
+
+type QRCodeGraphicProps = {
+  value: string
+  size: number
+}
+
+function QRCodeGraphic({ value, size }: QRCodeGraphicProps) {
+  const qr = useMemo(() => {
+    const generated = QRCodeGenerator(0, 'M')
+    generated.addData(value)
+    generated.make()
+    return generated
+  }, [value])
+
+  const moduleCount = qr.getModuleCount()
+  const modules: React.ReactElement[] = []
+
+  for (let row = 0; row < moduleCount; row += 1) {
+    for (let column = 0; column < moduleCount; column += 1) {
+      if (!qr.isDark(row, column)) {
+        continue
+      }
+
+      modules.push(
+        <Rect
+          key={`${row}-${column}`}
+          x={column}
+          y={row}
+          width={1}
+          height={1}
+          fill="#000"
+        />
+      )
+    }
+  }
+
+  return (
+    <Svg width={size} height={size} viewBox={`0 0 ${moduleCount} ${moduleCount}`}>
+      <Rect x={0} y={0} width={moduleCount} height={moduleCount} fill="#fff" />
+      {modules}
+    </Svg>
+  )
+}
+
+function buildRecipientQrValue(userId: string) {
+  return JSON.stringify({
+    type: 'savedworship:recipient',
+    userId,
+    shortId: generateShortId(userId),
+  })
+}
 
 interface Props {
   visible: boolean
@@ -30,6 +84,7 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [expandFriends, setExpandFriends] = useState(true)
+  const [showQRModal, setShowQRModal] = useState(false)
   const navigation = useNavigation<any>()
 
   useEffect(() => {
@@ -44,6 +99,21 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
       }
     }, [user])
   )
+
+  useEffect(() => {
+    const unsubContacts = onTableChange('contacts', () => {
+      loadContacts()
+    })
+    const unsubProfiles = onTableChange('user_profiles', () => {
+      loadProfile()
+      loadContacts()
+    })
+
+    return () => {
+      unsubContacts()
+      unsubProfiles()
+    }
+  }, [user])
 
   const loadUser = async () => {
     try {
@@ -62,13 +132,38 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
   const loadContacts = async (userId?: string) => {
     if (!userId && !user) return
     try {
-      const userContacts = await getContactsByUserId(userId || user!.id)
       const selfId = userId || user!.id
-      setContacts(userContacts.filter(c => c.contactUserId !== selfId))
+      const [outgoing, incoming] = await Promise.all([
+        getContactsByUserId(selfId),
+        getContactsByRecipientId(selfId),
+      ])
+
+      const pairKey = (a: string, b: string) => [a, b].sort().join('::')
+      const groups = new Map<string, Contact[]>()
+      for (const contact of [...outgoing, ...incoming]) {
+        const key = pairKey(contact.userId, contact.contactUserId)
+        const list = groups.get(key) || []
+        list.push(contact)
+        groups.set(key, list)
+      }
+
+      const acceptedUnique = Array.from(groups.values()).flatMap((group) => {
+        const blocked = group.find(contact => contact.status === 'blocked')
+        if (blocked) return []
+
+        const accepted = group.find(contact => contact.status === 'accepted')
+        if (!accepted) return []
+
+        return [accepted]
+      })
+
+      setContacts(acceptedUnique)
     } catch (err) {
       console.error('Error loading contacts:', err)
     }
   }
+
+  const acceptedContacts = contacts.filter(c => c.status === 'accepted')
 
   const loadProfile = async (userId?: string) => {
     if (!userId && !user) return
@@ -162,20 +257,37 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
 
         {/* Recipient ID */}
         {user?.id && (
-          <TouchableOpacity
-            style={styles.idContainer}
-            onPress={() => copyToClipboard(generateShortId(user.id), 'Recipient ID')}
-            activeOpacity={0.7}
-          >
-            <View style={styles.idRow}>
-              <Text style={styles.idLabel}>RECIPIENT ID</Text>
-              <View style={styles.copyBadge}>
-                <Ionicons name="copy-outline" size={11} color="#fff" />
-                <Text style={styles.copyText}>COPY</Text>
+          <>
+            <TouchableOpacity
+              style={styles.idContainer}
+              onPress={() => copyToClipboard(generateShortId(user.id), 'Recipient ID')}
+              activeOpacity={0.7}
+            >
+              <View style={styles.idRow}>
+                <Text style={styles.idLabel}>RECIPIENT ID</Text>
+                <View style={styles.copyBadge}>
+                  <Ionicons name="copy-outline" size={11} color="#fff" />
+                  <Text style={styles.copyText}>COPY</Text>
+                </View>
               </View>
-            </View>
-            <Text style={styles.idValue}>{generateShortId(user.id)}</Text>
-          </TouchableOpacity>
+              <Text style={styles.idValue}>{generateShortId(user.id)}</Text>
+            </TouchableOpacity>
+
+            {/* QR Code */}
+            <TouchableOpacity
+              style={styles.qrCodeContainer}
+              onPress={() => setShowQRModal(true)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.qrCodeWrapper}>
+                <QRCodeGraphic value={buildRecipientQrValue(user.id)} size={80} />
+              </View>
+              <View style={styles.qrLabel}>
+                <Ionicons name="scan-circle-outline" size={12} color="#aaa" />
+                <Text style={styles.qrLabelText}>Tap to enlarge</Text>
+              </View>
+            </TouchableOpacity>
+          </>
         )}
       </View>
 
@@ -199,80 +311,6 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
           <Text style={styles.menuLabel}>Edit Profile</Text>
           <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => handleNavigate('AddContacts')}
-          activeOpacity={0.6}
-        >
-          <View style={styles.menuIcon}>
-            <Ionicons name="person-add-outline" size={18} color="#000" />
-          </View>
-          <Text style={styles.menuLabel}>Add Contacts</Text>
-          <Ionicons name="chevron-forward" size={16} color="#ccc" />
-        </TouchableOpacity>
-
-        {/* Section: Members */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionLabel}>MEMBERS</Text>
-          <TouchableOpacity
-            onPress={() => setExpandFriends(!expandFriends)}
-            style={styles.expandButton}
-          >
-            <Ionicons
-              name={expandFriends ? 'chevron-up' : 'chevron-down'}
-              size={14}
-              color="#888"
-            />
-          </TouchableOpacity>
-        </View>
-
-        {expandFriends && (
-          <View style={styles.friendsContainer}>
-            {contacts.length === 0 ? (
-              <View style={styles.emptyFriends}>
-                <Ionicons name="people-outline" size={22} color="#ccc" />
-                <Text style={styles.emptyFriendsText}>No members yet</Text>
-              </View>
-            ) : (
-              contacts.map((contact, index) => (
-                <TouchableOpacity
-                  key={contact.id}
-                  style={[
-                    styles.friendItem,
-                    index === contacts.length - 1 && { borderBottomWidth: 0 },
-                  ]}
-                  onPress={() => {
-                    onClose()
-                    navigation.navigate('AddContacts')
-                  }}
-                  activeOpacity={0.6}
-                >
-                  <View style={styles.friendAvatar}>
-                    <Text style={styles.friendAvatarText}>
-                      {(contact.contactName || 'F')[0].toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.friendInfo}>
-                    <Text style={styles.friendName}>
-                      {contact.contactName || 'Member'}
-                    </Text>
-                    <Text style={styles.friendId}>
-                      {generateShortId(contact.contactUserId)}
-                    </Text>
-                  </View>
-                  {contact.status === 'accepted' && (
-                    <View style={styles.statusDot} />
-                  )}
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        )}
-
-        <View style={styles.countRow}>
-          <Text style={styles.countText}>{contacts.length} member{contacts.length !== 1 ? 's' : ''}</Text>
-        </View>
 
         {/* Section: Tools */}
         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>TOOLS</Text>
@@ -324,6 +362,53 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
       </View>
+
+      {/* QR Code Modal */}
+      <Modal
+        visible={showQRModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowQRModal(false)}
+      >
+        <View style={styles.qrModalOverlay}>
+          <TouchableOpacity
+            style={styles.qrModalBackdrop}
+            onPress={() => setShowQRModal(false)}
+            activeOpacity={1}
+          />
+          <View style={styles.qrModalContent}>
+            <View style={styles.qrModalHeader}>
+              <Text style={styles.qrModalTitle}>Your Profile QR Code</Text>
+              <TouchableOpacity
+                onPress={() => setShowQRModal(false)}
+                style={styles.qrModalCloseButton}
+              >
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.qrModalBody}>
+              <View style={styles.qrModalQRWrapper}>
+                {user?.id && (
+                  <QRCodeGraphic value={buildRecipientQrValue(user.id)} size={240} />
+                )}
+              </View>
+              <Text style={styles.qrModalSubtext}>Share this QR code for direct messaging</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.qrModalCopyButton}
+              onPress={() => {
+                copyToClipboard(generateShortId(user?.id || ''), 'Recipient ID')
+                setShowQRModal(false)
+              }}
+            >
+              <Ionicons name="copy-outline" size={16} color="#fff" />
+              <Text style={styles.qrModalCopyText}>Copy Recipient ID</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -615,6 +700,114 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#333',
+    letterSpacing: 0.3,
+  },
+
+  // ── QR Code ──────────────────────────────────────────────
+  qrCodeContainer: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 16,
+    marginTop: 10,
+    alignItems: 'center',
+  },
+  qrCodeWrapper: {
+    backgroundColor: '#fff',
+    padding: 8,
+    borderRadius: 6,
+    marginBottom: 10,
+  },
+  qrLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  qrLabelText: {
+    fontSize: 11,
+    color: '#aaa',
+    fontStyle: 'italic',
+    letterSpacing: 0.3,
+  },
+
+  // ── QR Modal ─────────────────────────────────────────────
+  qrModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  qrModalBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  qrModalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    width: '85%',
+    maxWidth: 320,
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  qrModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  qrModalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    letterSpacing: 0.2,
+  },
+  qrModalCloseButton: {
+    padding: 4,
+  },
+  qrModalBody: {
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    alignItems: 'center',
+  },
+  qrModalQRWrapper: {
+    backgroundColor: '#f5f5f5',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  qrModalSubtext: {
+    fontSize: 12,
+    color: '#777',
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  qrModalCopyButton: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    marginBottom: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#000',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  qrModalCopyText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#fff',
     letterSpacing: 0.3,
   },
 })

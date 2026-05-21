@@ -47,8 +47,10 @@ export async function initializeDatabase() {
         key TEXT,
         created_at INTEGER,
         updated_at INTEGER,
-        _synced INTEGER DEFAULT 0
+        _synced INTEGER DEFAULT 0,
+        youtube_url TEXT
       );
+        
       
       CREATE TABLE IF NOT EXISTS lineups (
         id TEXT PRIMARY KEY,
@@ -204,6 +206,10 @@ try {
 
 try {
   await dbInstance.execAsync(`ALTER TABLE songs ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE songs ADD COLUMN youtube_url TEXT;`)
 } catch (e) {}
 
 try {

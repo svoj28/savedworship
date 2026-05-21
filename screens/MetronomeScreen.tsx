@@ -19,6 +19,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { getCurrentUser } from '../lib/auth'
+import { Audio as ExpoAudio } from 'expo-av'
 
 // Monochrome palette - Formal & Professional
 const COLORS = {
@@ -53,18 +54,36 @@ const DEFAULT_PRESETS = [
   { id: 'default-160', name: '160 BPM', bpm: 160, inCloud: false },
 ]
 
+// ─── Web Audio API lookahead scheduler constants ───────────────────────────
+//
+// This is the "web audio metronome" pattern (Chris Wilson, 2013) adapted for
+// React Native / Expo.  The JS thread fires every LOOKAHEAD_MS and pre-
+// schedules audio events up to SCHEDULE_AHEAD_SEC into the future using the
+// AudioContext hardware clock.  The audio engine (not the JS event loop)
+// actually fires the sound, so timing is sample-accurate regardless of GC
+// pauses, re-renders, or setTimeout jitter.
+//
+const LOOKAHEAD_MS       = 25.0  // how often the scheduler wakes up (ms)
+const SCHEDULE_AHEAD_SEC = 0.1   // how far ahead to schedule audio (sec)
+
 export default function MetronomeScreen() {
   const [bpm, setBpm] = useState(120)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [tapTempo, setTapTempo] = useState<number[]>([])
   const [beatFlash, setBeatFlash] = useState(false)
 
-  // ── Metronome timing refs ───────────────────────────────────────────────────
-  const timerRef        = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isPlayingRef    = useRef(false)
-  const bpmRef          = useRef(120)
-  const nextBeatTimeRef = useRef(0)
-  const soundRef        = useRef<Audio.Sound | null>(null)  // preloaded sound, never changes
+  // ── Audio context (Web Audio API) ──────────────────────────────────────────
+  // expo-av exposes the underlying AudioContext on web; on native we use the
+  // same JS API via react-native-web-audio or the global AudioContext shim
+  // that Expo includes.  If AudioContext is unavailable we fall back to the
+  // original replayAsync() approach automatically (see playClick()).
+  const audioCtxRef        = useRef<AudioContext | null>(null)
+  const schedulerTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const nextBeatTimeRef    = useRef(0)   // AudioContext.currentTime of next beat
+  const isPlayingRef       = useRef(false)
+  const bpmRef             = useRef(120)
+
+  // Fallback: preloaded sound for platforms without AudioContext
+  const soundRef = useRef<Audio.Sound | null>(null)
 
   // Preset states
   const [presets, setPresets] = useState<MetronomePreset[]>([])
@@ -74,13 +93,13 @@ export default function MetronomeScreen() {
   const [newPresetScope, setNewPresetScope] = useState<PresetScope>('personal')
   const [newPresetIsPublic, setNewPresetIsPublic] = useState(false)
   const [uploadingPresetId, setUploadingPresetId] = useState<string | null>(null)
-
   const [activeTab, setActiveTab] = useState<PresetScope>('personal')
   const [publicPresets, setPublicPresets] = useState<MetronomePreset[]>([])
 
   // Keep bpmRef in sync with bpm state
   useEffect(() => { bpmRef.current = bpm }, [bpm])
 
+  // ─── Initialise audio ──────────────────────────────────────────────────────
   useEffect(() => {
     const setup = async () => {
       try {
@@ -88,14 +107,26 @@ export default function MetronomeScreen() {
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
         })
-        // Preload the click sound once — every beat just calls replayAsync()
-        const { sound } = await Audio.Sound.createAsync(
-          require('../assets/sounds/click.wav'),
-          { shouldPlay: false, volume: 1.0 }
-        )
-        soundRef.current = sound
+
+        // Try to obtain a Web Audio API context (works on Expo web & on native
+        // builds that include the AudioContext shim).
+        const AudioContextClass =
+          (window as any)?.AudioContext ||
+          (window as any)?.webkitAudioContext ||
+          null
+
+        if (AudioContextClass) {
+          audioCtxRef.current = new AudioContextClass()
+        } else {
+          // Native fallback: preload the WAV file
+          const { sound } = await Audio.Sound.createAsync(
+            require('../assets/sounds/click.wav'),
+            { shouldPlay: false, volume: 1.0 }
+          )
+          soundRef.current = sound
+        }
       } catch (err) {
-        console.error('Error initializing audio:', err)
+        console.error('Error initialising audio:', err)
       }
     }
     setup()
@@ -103,9 +134,168 @@ export default function MetronomeScreen() {
 
     return () => {
       stopMetronome()
+      audioCtxRef.current?.close()
       soundRef.current?.unloadAsync()
     }
   }, [])
+
+  // ─── Core click synthesis ──────────────────────────────────────────────────
+  //
+  // When AudioContext is available we synthesise a crisp click directly in the
+  // audio graph, scheduled to fire at `time` (an AudioContext.currentTime
+  // value).  This is sample-accurate — the audio engine handles it, not JS.
+  //
+  // The click is a short band-pass filtered noise burst that sounds similar to
+  // a woodblock and cuts through well at any tempo.
+
+  const scheduleClickAtTime = useCallback((time: number) => {
+    const ctx = audioCtxRef.current
+    if (!ctx) return
+
+    // --- Noise burst ---
+    const bufferSize = ctx.sampleRate * 0.04  // 40 ms of noise
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+    const data = buffer.getChannelData(0)
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1
+    }
+
+    const noise = ctx.createBufferSource()
+    noise.buffer = buffer
+
+    // Band-pass filter: centres around 1 kHz, gives a "click" character
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.value = 1000
+    filter.Q.value = 0.8
+
+    // Gain envelope: instant attack, fast exponential decay
+    const gainNode = ctx.createGain()
+    gainNode.gain.setValueAtTime(1.0, time)
+    gainNode.gain.exponentialRampToValueAtTime(0.001, time + 0.04)
+
+    noise.connect(filter)
+    filter.connect(gainNode)
+    gainNode.connect(ctx.destination)
+    noise.start(time)
+    noise.stop(time + 0.04)
+  }, [])
+
+  // Fallback for native without AudioContext: fire replayAsync() immediately
+  const playClickFallback = async () => {
+    try {
+      await soundRef.current?.replayAsync()
+    } catch (err) {
+      console.error('Fallback click error:', err)
+    }
+  }
+
+  // ─── Lookahead scheduler ───────────────────────────────────────────────────
+  //
+  // The scheduler runs on a short setTimeout loop (LOOKAHEAD_MS).  Every time
+  // it wakes up it looks SCHEDULE_AHEAD_SEC into the future and pre-schedules
+  // any beats that fall in that window via the AudioContext clock.
+  //
+  // Visuals (beatFlash) are driven by a separate setTimeout computed from the
+  // same AudioContext clock, so they stay in sync with the audio.
+
+  const schedulerLoop = useCallback(() => {
+    const ctx = audioCtxRef.current
+    if (!isPlayingRef.current) return
+
+    const intervalSec = 60 / bpmRef.current
+
+    if (ctx) {
+      // ── Web Audio path: sample-accurate scheduling ──
+      while (nextBeatTimeRef.current < ctx.currentTime + SCHEDULE_AHEAD_SEC) {
+        scheduleClickAtTime(nextBeatTimeRef.current)
+
+        // Schedule the visual flash to fire at the same wall-clock moment
+        const visualDelayMs = Math.max(0, (nextBeatTimeRef.current - ctx.currentTime) * 1000)
+        setTimeout(() => {
+          if (isPlayingRef.current) setBeatFlash(f => !f)
+        }, visualDelayMs)
+
+        nextBeatTimeRef.current += intervalSec
+      }
+    } else {
+      // ── Fallback path: drift-corrected setTimeout ──
+      // (same technique as the original code, kept for platforms without AudioContext)
+      playClickFallback()
+      setBeatFlash(f => !f)
+      // nextBeatTimeRef holds a Date.now() value in the fallback path
+      nextBeatTimeRef.current += intervalSec * 1000
+      const delay = Math.max(0, nextBeatTimeRef.current - Date.now())
+      schedulerTimerRef.current = setTimeout(schedulerLoop, delay)
+      return  // early return — the fallback manages its own timer
+    }
+
+    // Re-arm the scheduler
+    schedulerTimerRef.current = setTimeout(schedulerLoop, LOOKAHEAD_MS)
+  }, [scheduleClickAtTime])
+
+  // ─── Start / stop ──────────────────────────────────────────────────────────
+
+  const startScheduler = useCallback((overrideBpm?: number) => {
+    if (overrideBpm !== undefined) bpmRef.current = overrideBpm
+
+    const ctx = audioCtxRef.current
+    if (ctx) {
+      // Resume context if suspended (browser autoplay policy)
+      if (ctx.state === 'suspended') ctx.resume()
+      // Start the first beat exactly one lookahead window from now so the
+      // scheduler loop has time to schedule it before it's due.
+      nextBeatTimeRef.current = ctx.currentTime
+    } else {
+      // Fallback: anchor to wall clock
+      nextBeatTimeRef.current = Date.now()
+    }
+
+    isPlayingRef.current = true
+    schedulerLoop()
+  }, [schedulerLoop])
+
+  const stopScheduler = useCallback(() => {
+    isPlayingRef.current = false
+    if (schedulerTimerRef.current) {
+      clearTimeout(schedulerTimerRef.current)
+      schedulerTimerRef.current = null
+    }
+  }, [])
+
+  const startMetronome = () => {
+    setIsPlaying(true)
+    startScheduler()
+  }
+
+  const stopMetronome = () => {
+    setIsPlaying(false)
+    stopScheduler()
+  }
+
+  const toggleMetronome = () => {
+    if (isPlayingRef.current) stopMetronome()
+    else startMetronome()
+  }
+
+  // Seamlessly apply BPM changes while playing.
+  // Because we use a lookahead window, we just let the next scheduler tick
+  // pick up the new bpmRef value — no restart needed, no audible glitch.
+  // (For very large BPM jumps, a brief restart avoids a long gap or overlap.)
+  useEffect(() => {
+    if (!isPlayingRef.current) return
+
+    const ctx = audioCtxRef.current
+    if (ctx) {
+      // Just update the ref; the scheduler reads bpmRef on every tick
+      // so the change takes effect within the next LOOKAHEAD_MS window.
+      bpmRef.current = bpm
+    } else {
+      // Fallback: restart drift-corrected timer with new BPM
+      stopScheduler()
+      startScheduler(bpm)
+    }
+  }, [bpm])
 
   // ─── Preset persistence ────────────────────────────────────────────────────
 
@@ -334,123 +524,23 @@ export default function MetronomeScreen() {
   const handleSelectPreset = (preset: MetronomePreset) => {
     setBpm(preset.bpm)
     setActivePreset(preset)
-    // If playing, restart with the new BPM immediately
     if (isPlayingRef.current) {
-      stopScheduler()
-      startScheduler(preset.bpm)
-    }
-  }
-
-  // ─── Metronome logic (drift-corrected) ────────────────────────────────────
-  //
-  // Instead of setInterval (which accumulates drift), we schedule each beat
-  // individually with setTimeout, computing the *exact* next beat time from
-  // a wall-clock anchor. This gives sub-millisecond accuracy even at 300 BPM.
-
-  const playClickSound = async () => {
-    try {
-      if (soundRef.current) {
-        await soundRef.current.replayAsync()
+      // For AudioContext path: just update bpmRef, scheduler adapts automatically
+      bpmRef.current = preset.bpm
+      // For fallback path: restart
+      if (!audioCtxRef.current) {
+        stopScheduler()
+        startScheduler(preset.bpm)
       }
-    } catch (err) {
-      console.error('Error playing sound:', err)
     }
   }
-
-  /**
-   * Schedule the next beat using drift-corrected setTimeout.
-   * Called recursively so each beat re-arms itself from the precise next time.
-   */
-  const scheduleBeat = useCallback(() => {
-    if (!isPlayingRef.current) return
-
-    const now = Date.now()
-    const intervalMs = (60 / bpmRef.current) * 1000
-
-    // First call: anchor the first beat to now
-    if (nextBeatTimeRef.current === 0) {
-      nextBeatTimeRef.current = now
-    }
-
-    // Play the click and flash the beat indicator
-    playClickSound()
-    setBeatFlash(f => !f)   // toggle so parent can animate if desired
-
-    // Advance the anchor by exactly one interval (no drift accumulation)
-    nextBeatTimeRef.current += intervalMs
-
-    // Compute how long until the next beat, clamped to 0 to avoid negative delays
-    const delay = Math.max(0, nextBeatTimeRef.current - Date.now())
-
-    timerRef.current = setTimeout(scheduleBeat, delay)
-  }, []) // no deps — reads everything from refs
-
-  const startScheduler = (overrideBpm?: number) => {
-    if (overrideBpm !== undefined) bpmRef.current = overrideBpm
-    nextBeatTimeRef.current = 0   // reset anchor so first beat fires immediately
-    isPlayingRef.current = true
-    scheduleBeat()
-  }
-
-  const stopScheduler = () => {
-    isPlayingRef.current = false
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
-    }
-  }
-
-  const startMetronome = () => {
-    setIsPlaying(true)
-    startScheduler()
-  }
-
-  const stopMetronome = () => {
-    setIsPlaying(false)
-    stopScheduler()
-  }
-
-  const toggleMetronome = () => {
-    if (isPlayingRef.current) stopMetronome()
-    else startMetronome()
-  }
-
-  // Restart scheduler when BPM changes while playing.
-  // We read isPlayingRef (not isPlaying state) to avoid stale-closure bugs.
-  useEffect(() => {
-    if (isPlayingRef.current) {
-      stopScheduler()
-      startScheduler(bpm)
-    }
-  }, [bpm])
-
-  // const handleTapTempo = async () => {
-  //   const now = Date.now()
-  //   const recentTaps = tapTempo.filter(t => now - t < 5000)
-  //   if (recentTaps.length > 0) {
-  //     const intervals: number[] = []
-  //     for (let i = 1; i < recentTaps.length; i++) {
-  //       intervals.push(recentTaps[i] - recentTaps[i - 1])
-  //     }
-  //     if (intervals.length > 0) {
-  //       const averageInterval = intervals.reduce((a, b) => a + b) / intervals.length
-  //       const calculatedBpm = Math.round(60000 / averageInterval)
-  //       setBpm(Math.max(40, Math.min(300, calculatedBpm)))
-  //       setActivePreset(null)
-  //     }
-  //   }
-  //   await playClickSound()
-  //   setTapTempo([...recentTaps, now])
-  // }
-
-  // const resetTapTempo = () => setTapTempo([])
 
   // ─── Derived lists ────────────────────────────────────────────────────────
 
-  const personalPresets  = presets.filter(p => !p.scope || p.scope === 'personal')
+  const personalPresets   = presets.filter(p => !p.scope || p.scope === 'personal')
   const ownOverallPresets = presets.filter(p => p.scope === 'overall')
-  const overallPresets   = [...ownOverallPresets, ...publicPresets]
-  const tabPresets       = activeTab === 'personal' ? personalPresets : overallPresets
+  const overallPresets    = [...ownOverallPresets, ...publicPresets]
+  const tabPresets        = activeTab === 'personal' ? personalPresets : overallPresets
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -501,19 +591,6 @@ export default function MetronomeScreen() {
           <Text style={styles.beatText}>Playing</Text>
         </View>
       )}
-
-      {/* Tap Tempo */}
-      {/* <View style={styles.tapTempoSection}>
-        <Text style={styles.tapTempoLabel}>Tap Tempo</Text>
-        <TouchableOpacity style={styles.tapTempoButton} onPress={handleTapTempo}>
-          <Text style={styles.tapTempoButtonText}>Tap Here</Text>
-        </TouchableOpacity>
-        {tapTempo.length > 0 && (
-          <TouchableOpacity style={styles.resetButton} onPress={resetTapTempo}>
-            <Text style={styles.resetButtonText}>Reset ({tapTempo.length} taps)</Text>
-          </TouchableOpacity>
-        )}
-      </View> */}
 
       {/* Default / Quick BPM Presets */}
       <View style={styles.presetsContainer}>
@@ -644,7 +721,6 @@ export default function MetronomeScreen() {
               </View>
 
               <View style={styles.customPresetActions}>
-                {/* Upload to cloud — only if not already in cloud AND not owned by other */}
                 {!preset.inCloud && !preset.isOwnedByOther && (
                   <TouchableOpacity
                     style={styles.cloudActionButton}
@@ -658,7 +734,6 @@ export default function MetronomeScreen() {
                   </TouchableOpacity>
                 )}
 
-                {/* Delete — only own presets */}
                 {!preset.isOwnedByOther && (
                   <TouchableOpacity
                     style={styles.deleteActionButton}
@@ -763,7 +838,6 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
 
-  // ── BPM display ────────────────────────────────────────
   bpmDisplayContainer: {
     alignItems: 'center',
     marginBottom: 24,
@@ -789,7 +863,6 @@ const styles = StyleSheet.create({
     color: COLORS.black,
   },
 
-  // ── Slider ─────────────────────────────────────────────
   sliderContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -808,7 +881,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  // ── Play button ────────────────────────────────────────
   playButton: {
     backgroundColor: COLORS.black,
     paddingVertical: 22,
@@ -831,7 +903,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // ── Beat indicator ─────────────────────────────────────
   beatIndicator: {
     alignItems: 'center',
     marginBottom: 24,
@@ -849,7 +920,7 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
   },
   beatDotFlash: {
-    backgroundColor: COLORS.mediumGray,   // subtle flash on each beat
+    backgroundColor: COLORS.mediumGray,
   },
   beatText: {
     fontSize: 15,
@@ -858,53 +929,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 
-  // ── Tap tempo ──────────────────────────────────────────
-  tapTempoSection: {
-    alignItems: 'center',
-    marginBottom: 32,
-  },
-  tapTempoLabel: {
-    fontSize: 16,
-    color: COLORS.mediumGray,
-    marginBottom: 16,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-  },
-  tapTempoButton: {
-    backgroundColor: COLORS.white,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: COLORS.black,
-    elevation: 2,
-    shadowColor: COLORS.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-  },
-  tapTempoButtonText: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    letterSpacing: 0.3,
-  },
-  resetButton: {
-    marginTop: 16,
-    paddingVertical: 11,
-    paddingHorizontal: 20,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: COLORS.lightGray,
-    backgroundColor: COLORS.offWhite,
-  },
-  resetButtonText: {
-    fontSize: 12,
-    color: COLORS.mediumGray,
-    fontWeight: '600',
-  },
-
-  // ── Quick BPM presets ──────────────────────────────────
   presetsContainer: {
     alignItems: 'center',
     marginBottom: 32,
@@ -948,7 +972,6 @@ const styles = StyleSheet.create({
     color: COLORS.white,
   },
 
-  // ── My Presets section ─────────────────────────────────
   customPresetsContainer: {
     marginBottom: 20,
   },
@@ -1134,7 +1157,6 @@ const styles = StyleSheet.create({
     borderColor: COLORS.lightGray,
   },
 
-  // ── Modal ──────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

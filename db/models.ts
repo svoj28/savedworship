@@ -31,6 +31,7 @@ export interface Song {
   title: string
   content: string
   key: string
+  youtubeUrl?: string
   createdAt: number
   updatedAt: number
   synced: boolean

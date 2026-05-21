@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import {
   View,
   Text,
@@ -10,15 +10,16 @@ import {
   Alert,
   ActivityIndicator,
 StatusBar,
+Linking
 } from 'react-native'
 import * as DocumentPicker from 'expo-document-picker'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { getCurrentUser } from '../lib/auth'
 import {
-  getLineupsByUserId,
-  getFileDroppersByUserId,
-  getAnnouncementsByUserId,
-  getVersionDroppersByUserId,
+  getAllLineups,
+  getAllFileDroppers,
+  getAllAnnouncements,
+  getAllVersionDroppers,
   createLineup,
   createFileDropper,
   createImportantAnnouncement,
@@ -32,9 +33,13 @@ import {
   deleteAnnouncement,
   deleteVersionDropper,
 } from '../db/queries'
+import YoutubePlayer from 'react-native-youtube-iframe'
 import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
 import { useRole } from '../lib/useRole'
-import { notifyNewUpload } from '../lib/notifications'
+import { notifyManagementChangeToAllUsers } from '../lib/notifications'
+import { onTableChange } from '../lib/sync'
+import { supabase } from '../lib/supabase'
+import { useNotifications } from '../lib/NotificationContext'
 
 
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
@@ -58,7 +63,7 @@ interface SectionConfig {
 
 const SECTIONS: SectionConfig[] = [
   { key: 'lineup',        label: 'Lineup',         icon: 'list-outline',        countKey: 'lineups',       countLabel: 'items'   },
-  { key: 'conversation',  label: 'Important Messages',   icon: 'chatbubbles-outline', countKey: undefined,       countLabel: 'Messages needed to be pinned'   },
+  { key: 'conversation',  label: 'Important Messages',   icon: 'chatbubbles-outline', countKey: 'announcements', countLabel: 'messages'   },
   { key: 'files',         label: 'Files',          icon: 'folder-outline',      countKey: 'files',         countLabel: 'files'   },
   { key: 'announcements', label: 'Announcements',  icon: 'megaphone-outline',   countKey: 'announcements', countLabel: 'items'   },
   { key: 'versions',      label: 'Versions',       icon: 'play-circle-outline', countKey: 'versions',      countLabel: 'videos'  },
@@ -72,11 +77,28 @@ const SECTION_TITLES: Record<Exclude<Section, null>, string> = {
   versions:      'Version Dropper',
 }
 
-export default function ManagementScreen() {
+function extractYouTubeId(url: string): string | null {
+  if (!url) return null
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+  ]
+  for (const p of patterns) {
+    const m = url.match(p)
+    if (m) return m[1]
+  }
+  return null
+}
+
+export default function ManagementScreen({ route }: any) {
   const [activeSection, setActiveSection] = useState<Section>(null)
   const [userId, setUserId] = useState<string>('')
   const [loading, setLoading] = useState(false)
-  const { canManageContent } = useRole()
+  const [saving, setSaving] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const { isAdmin } = useRole()
+  const { notifications } = useNotifications()
+  const lastManagementNotificationIdRef = React.useRef<string | null>(null)
 
     const [lineups, setLineups] = useState<Lineup[]>([])
   const [files, setFiles] = useState<FileDropper[]>([])
@@ -87,26 +109,16 @@ export default function ManagementScreen() {
   const [formData, setFormData] = useState<FormData>({})
   const [editingId, setEditingId] = useState<string | null>(null)
   const [pickingFile, setPickingFile] = useState(false)
+  const [selectedItem, setSelectedItem] = useState<any | null>(null)
 
-  useEffect(() => {
-    const loadUser = async () => {
-      const user = await getCurrentUser()
-      if (user) {
-        setUserId(user.id)
-        await loadData(user.id)
-      }
-    }
-    loadUser()
-  }, [])
-
-  const loadData = async (id: string) => {
+  const refreshData = useCallback(async () => {
     setLoading(true)
     try {
       const [lineupData, fileData, announcementData, versionData] = await Promise.all([
-        getLineupsByUserId(id),
-        getFileDroppersByUserId(id),
-        getAnnouncementsByUserId(id),
-        getVersionDroppersByUserId(id),
+        getAllLineups(),
+        getAllFileDroppers(),
+        getAllAnnouncements(),
+        getAllVersionDroppers(),
       ])
       setLineups(lineupData)
       setFiles(fileData)
@@ -117,7 +129,78 @@ export default function ManagementScreen() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const user = await getCurrentUser()
+      if (user) {
+        setUserId(user.id)
+      }
+    }
+    loadUser()
+    refreshData()
+  }, [])
+
+  useEffect(() => {
+    const latestManagementNotification = [...notifications]
+      .find(notification => {
+        if (notification.type !== 'management_broadcast') return false
+        if (!userId) return true
+        return notification.data?.actorUserId !== userId
+      })
+
+    if (!latestManagementNotification) return
+    if (lastManagementNotificationIdRef.current === latestManagementNotification.id) return
+
+    lastManagementNotificationIdRef.current = latestManagementNotification.id
+    refreshData()
+  }, [notifications, refreshData])
+
+  useEffect(() => {
+    const initialSection = route?.params?.initialSection as Section | undefined
+    if (initialSection) {
+      setActiveSection(initialSection)
+    }
+  }, [route?.params?.initialSection])
+
+  useEffect(() => {
+    const unsubLineups = onTableChange('lineups', refreshData)
+    const unsubFiles = onTableChange('file_droppers', refreshData)
+    const unsubAnnouncements = onTableChange('important_announcements', refreshData)
+    const unsubVersions = onTableChange('version_droppers', refreshData)
+
+    const lineupsChannel = supabase
+      .channel('management-lineups')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lineups' }, refreshData)
+      .subscribe()
+
+    const filesChannel = supabase
+      .channel('management-files')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'file_droppers' }, refreshData)
+      .subscribe()
+
+    const announcementsChannel = supabase
+      .channel('management-announcements')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'important_announcements' }, refreshData)
+      .subscribe()
+
+    const versionsChannel = supabase
+      .channel('management-versions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'version_droppers' }, refreshData)
+      .subscribe()
+
+    return () => {
+      unsubLineups()
+      unsubFiles()
+      unsubAnnouncements()
+      unsubVersions()
+      supabase.removeChannel(lineupsChannel)
+      supabase.removeChannel(filesChannel)
+      supabase.removeChannel(announcementsChannel)
+      supabase.removeChannel(versionsChannel)
+    }
+  }, [refreshData])
 
 const getCount = (key?: string): number => {
     if (!key) return 0
@@ -133,6 +216,7 @@ const getCount = (key?: string): number => {
   const getItems = (): any[] => {
     if (activeSection === 'lineup') return lineups
     if (activeSection === 'files') return files
+    if (activeSection === 'conversation') return announcements
     if (activeSection === 'announcements') return announcements
     if (activeSection === 'versions') return versions
     return []
@@ -153,6 +237,10 @@ const getCount = (key?: string): number => {
     setShowForm(true)
   }
 
+  const handleOpenItem = (item: any) => {
+    setSelectedItem(item)
+  }
+
   const handlePickFile = async () => {
     try {
       setPickingFile(true)
@@ -168,43 +256,221 @@ const getCount = (key?: string): number => {
     }
   }
 
+  const handleSaveConfirm = () => {
+    if (!isAdmin) {
+      Alert.alert('Access denied', 'Only admins can add or edit management items.')
+      return
+    }
+    if (saving || deletingId) return
+
+    const actionLabel = editingId ? 'Save changes' : 'Add item'
+    Alert.alert(
+      actionLabel,
+      editingId
+        ? `Save your changes to "${formData.title?.trim() || 'this item'}"?`
+        : `Add "${formData.title?.trim() || 'this item'}" to ${sectionTitle.toLowerCase()}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: actionLabel, onPress: handleSubmit },
+      ]
+    )
+  }
+
+  const upsertLocalItem = (item: any) => {
+    if (activeSection === 'lineup') {
+      setLineups(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+      return
+    }
+    if (activeSection === 'files') {
+      setFiles(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+      return
+    }
+    if (activeSection === 'conversation' || activeSection === 'announcements') {
+      setAnnouncements(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+      return
+    }
+    if (activeSection === 'versions') {
+      setVersions(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+    }
+  }
+
+  const removeLocalItem = (itemId: string) => {
+    if (activeSection === 'lineup') {
+      setLineups(prev => prev.filter(item => item.id !== itemId))
+      return
+    }
+    if (activeSection === 'files') {
+      setFiles(prev => prev.filter(item => item.id !== itemId))
+      return
+    }
+    if (activeSection === 'conversation' || activeSection === 'announcements') {
+      setAnnouncements(prev => prev.filter(item => item.id !== itemId))
+      return
+    }
+    if (activeSection === 'versions') {
+      setVersions(prev => prev.filter(item => item.id !== itemId))
+    }
+  }
+
   const handleSubmit = async () => {
+    if (!isAdmin) {
+      Alert.alert('Access denied', 'Only admins can add or edit management items.')
+      return
+    }
+    if (saving || deletingId) return
     if (!formData.title?.trim()) {       Alert.alert('Error', 'Please enter a title');       return }
+    setSaving(true)
     try {
       const now = Date.now()
       if (activeSection === 'lineup') {
-        if (editingId)           await updateLineup(editingId, {             title: formData.title,             description: formData.description,             updatedAt: now           })
-        else {           await createLineup({             title: formData.title,             description: formData.description,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
+        if (editingId) {
+          await updateLineup(editingId, {
+            title: formData.title,
+            description: formData.description,
+            updatedAt: now,
+          })
+          upsertLocalItem({
+            id: editingId,
+            title: formData.title,
+            description: formData.description,
+            userId,
+            updatedAt: now,
+          })
+          void notifyManagementChangeToAllUsers(userId, 'updated', 'Lineup', formData.title)
+        } else {
+          const created = await createLineup({
+            title: formData.title,
+            description: formData.description,
+            userId,
+            createdAt: now,
+            updatedAt: now,
+            synced: false,
+          })
+          upsertLocalItem(created)
+          void notifyManagementChangeToAllUsers(userId, 'created', 'Lineup', formData.title)
+        }
       } else if (activeSection === 'files') {
         if (!formData.fileUrl?.trim()) {           Alert.alert('Error', 'Please enter a file URL');           return         }
-        if (editingId)           await updateFileDropper(editingId, {             title: formData.title,             description: formData.description,             fileUrl: formData.fileUrl,             updatedAt: now           })
-        else {           await createFileDropper({             title: formData.title,             description: formData.description,             fileUrl: formData.fileUrl,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
-      } else if (activeSection === 'announcements') {
+        if (editingId) {
+          await updateFileDropper(editingId, {
+            title: formData.title,
+            description: formData.description,
+            fileUrl: formData.fileUrl,
+            updatedAt: now,
+          })
+          upsertLocalItem({
+            id: editingId,
+            title: formData.title,
+            description: formData.description,
+            fileUrl: formData.fileUrl,
+            userId,
+            updatedAt: now,
+          })
+          void notifyManagementChangeToAllUsers(userId, 'updated', 'File', formData.title)
+        } else {
+          const created = await createFileDropper({
+            title: formData.title,
+            description: formData.description,
+            fileUrl: formData.fileUrl,
+            userId,
+            createdAt: now,
+            updatedAt: now,
+            synced: false,
+          })
+          upsertLocalItem(created)
+          void notifyManagementChangeToAllUsers(userId, 'created', 'File', formData.title)
+        }
+      } else if (activeSection === 'conversation' || activeSection === 'announcements') {
         if (!formData.content?.trim()) {           Alert.alert('Error', 'Please enter announcement content');           return         }
-        if (editingId)           await updateAnnouncement(editingId, {             title: formData.title,             content: formData.content,             updatedAt: now           })
-        else {           await createImportantAnnouncement({             title: formData.title,             content: formData.content,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
+        if (editingId) {
+          await updateAnnouncement(editingId, {
+            title: formData.title,
+            content: formData.content,
+            updatedAt: now,
+          })
+          upsertLocalItem({
+            id: editingId,
+            title: formData.title,
+            content: formData.content,
+            userId,
+            updatedAt: now,
+          })
+          void notifyManagementChangeToAllUsers(userId, 'updated', 'Important Message', formData.title)
+        } else {
+          const created = await createImportantAnnouncement({
+            title: formData.title,
+            content: formData.content,
+            userId,
+            createdAt: now,
+            updatedAt: now,
+            synced: false,
+          })
+          upsertLocalItem(created)
+          void notifyManagementChangeToAllUsers(userId, 'created', 'Important Message', formData.title)
+        }
       } else if (activeSection === 'versions') {
         if (!formData.youtubeUrl?.trim()) {           Alert.alert('Error', 'Please enter a YouTube URL');           return         }
-        if (editingId)           await updateVersionDropper(editingId, {             title: formData.title,             description: formData.description,             youtubeUrl: formData.youtubeUrl,             updatedAt: now           })
-        else {           await createVersionDropper({             title: formData.title,             description: formData.description,             youtubeUrl: formData.youtubeUrl,             userId,             createdAt: now,             updatedAt: now,             synced: false });           await notifyNewUpload(userId, formData.title)         }
+        if (editingId) {
+          await updateVersionDropper(editingId, {
+            title: formData.title,
+            description: formData.description,
+            youtubeUrl: formData.youtubeUrl,
+            updatedAt: now,
+          })
+          upsertLocalItem({
+            id: editingId,
+            title: formData.title,
+            description: formData.description,
+            youtubeUrl: formData.youtubeUrl,
+            userId,
+            updatedAt: now,
+          })
+          void notifyManagementChangeToAllUsers(userId, 'updated', 'Version', formData.title)
+        } else {
+          const created = await createVersionDropper({
+            title: formData.title,
+            description: formData.description,
+            youtubeUrl: formData.youtubeUrl,
+            userId,
+            createdAt: now,
+            updatedAt: now,
+            synced: false,
+          })
+          upsertLocalItem(created)
+          void notifyManagementChangeToAllUsers(userId, 'created', 'Version', formData.title)
+        }
       }
-      setShowForm(false);       setFormData({});       await loadData(userId)
+      setShowForm(false)
+      setFormData({})
     } catch (err) {       Alert.alert('Error', 'Failed to save item')     }
+    finally {
+      setSaving(false)
+    }
   }
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (item: any) => {
+    if (!isAdmin) {
+      Alert.alert('Access denied', 'Only admins can delete management items.')
+      return
+    }
+    if (saving || deletingId) return
     Alert.alert('Delete Item', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
+          setDeletingId(item.id)
           try {
-            if (activeSection === 'lineup') await deleteLineup(id)
-            else if (activeSection === 'files') await deleteFileDropper(id)
-            else if (activeSection === 'announcements') await deleteAnnouncement(id)
-            else if (activeSection === 'versions') await deleteVersionDropper(id)
-            await loadData(userId)
+            if (activeSection === 'lineup') await deleteLineup(item.id)
+            else if (activeSection === 'files') await deleteFileDropper(item.id)
+            else if (activeSection === 'conversation' || activeSection === 'announcements') await deleteAnnouncement(item.id)
+            else if (activeSection === 'versions') await deleteVersionDropper(item.id)
+            removeLocalItem(item.id)
+            void notifyManagementChangeToAllUsers(userId, 'deleted', sectionTitle, item.title)
           } catch (err) {             Alert.alert('Error', 'Failed to delete item')           }
+          finally {
+            setDeletingId(null)
+          }
         },
       },
     ])
@@ -272,7 +538,7 @@ const getCount = (key?: string): number => {
           <Text style={styles.sectionHeaderEyebrow}>MANAGEMENT</Text>
           <Text style={styles.sectionHeaderTitle}>{sectionTitle}</Text>
         </View>
-        {canManageContent ? (
+        {isAdmin ? (
           <TouchableOpacity style={styles.addBtn} onPress={handleAddNew} activeOpacity={0.8}>
             <Ionicons name="add" size={18} color="#FAFAFA" />
           </TouchableOpacity>
@@ -290,7 +556,7 @@ const getCount = (key?: string): number => {
           </View>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptySubtitle}>
-            {canManageContent ? 'Tap + to add your first item' : 'No items have been added'}
+            {isAdmin ? 'Tap + to add your first item' : 'No items have been added'}
           </Text>
         </View>
       ) : (
@@ -300,7 +566,7 @@ const getCount = (key?: string): number => {
           </Text>
 
           {items.map((item, idx) => (
-          <View key={item.id} style={styles.itemCard}>
+          <TouchableOpacity key={item.id} style={styles.itemCard} onPress={() => handleOpenItem(item)} activeOpacity={0.75}>
             <View style={styles.itemIndexWrap}>
                 <Text style={styles.itemIndex}>{idx + 1}</Text>
               </View>
@@ -320,21 +586,22 @@ const getCount = (key?: string): number => {
                     <Text style={styles.itemUrl} numberOfLines={1}>{item.fileUrl}</Text>
                   </View>
                 ) : null}
+                <Text style={styles.itemViewMore}>Tap to view full content</Text>
               </View>
-            {canManageContent && (
+            {isAdmin && (
             <View style={styles.itemActions}>
               <TouchableOpacity style={styles.itemActionBtn} onPress={() => handleEdit(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
                 <Ionicons name="pencil-outline" size={15} color="#0A0A0A" />
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.itemActionBtn, styles.itemActionBtnDestructive]} onPress={() => handleDelete(item.id)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+              <TouchableOpacity style={[styles.itemActionBtn, styles.itemActionBtnDestructive]} onPress={() => handleDelete(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
                 <Ionicons name="trash-outline" size={15} color="#C0C0C0" />
               </TouchableOpacity>
             </View>
             )}
-          </View>
+          </TouchableOpacity>
         ))}
 
-         {canManageContent && (
+         {isAdmin && (
         <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddNew} activeOpacity={0.7}>
           <Ionicons name="add" size={17} color="#0A0A0A" />
           <Text style={styles.addMoreText}>Add Another</Text>
@@ -356,8 +623,8 @@ const getCount = (key?: string): number => {
               <Text style={styles.modalTitle}>
                 {editingId ? 'Edit Item' : `Add ${sectionTitle}`}
               </Text>
-              <TouchableOpacity onPress={handleSubmit} style={styles.modalSaveBtn}>
-                <Text style={styles.modalSave}>Save</Text>
+              <TouchableOpacity onPress={handleSaveConfirm} style={[styles.modalSaveBtn, (saving || !!deletingId) && styles.modalSaveBtnDisabled]} disabled={saving || !!deletingId}>
+                {saving ? <ActivityIndicator size="small" color="#FAFAFA" /> : <Text style={styles.modalSave}>Save</Text>}
               </TouchableOpacity>
             </View>
 
@@ -371,7 +638,7 @@ const getCount = (key?: string): number => {
                 onChangeText={(text) => setFormData({ ...formData, title: text })}
                               />
 
-              {activeSection === 'announcements' && (
+              {(activeSection === 'conversation' || activeSection === 'announcements') && (
 <>
                   <Text style={[styles.fieldLabel, { marginTop: 20 }]}>CONTENT</Text>
                 <TextInput
@@ -453,12 +720,133 @@ const getCount = (key?: string): number => {
           </View>
         </View>
       </Modal>
+
+      {(loading || saving || deletingId) && (
+        <View style={styles.busyOverlay} pointerEvents="auto">
+          <View style={styles.busyCard}>
+            <ActivityIndicator size="large" color="#0A0A0A" />
+            <Text style={styles.busyTitle}>{saving ? 'Saving changes…' : 'Deleting item…'}</Text>
+            <Text style={styles.busySubtitle}>Please wait until the operation finishes.</Text>
+          </View>
+        </View>
+      )}
+
+      <Modal visible={selectedItem !== null} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={styles.detailBackdrop} activeOpacity={1} onPress={() => setSelectedItem(null)} />
+          <View style={styles.detailSheet}>
+            <View style={styles.detailHandle} />
+            <View style={styles.detailHead}>
+              <View style={styles.detailHeadTextWrap}>
+                <Text style={styles.detailEyebrow}>{sectionTitle}</Text>
+                <Text style={styles.detailTitle}>{selectedItem?.title || 'Item'}</Text>
+              </View>
+              <TouchableOpacity onPress={() => setSelectedItem(null)} style={styles.detailCloseBtn}>
+                <Ionicons name="close" size={20} color="#0A0A0A" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.detailBody} contentContainerStyle={styles.detailBodyContent} showsVerticalScrollIndicator={false}>
+              {selectedItem?.description ? (
+                <View style={styles.detailBlock}>
+                  <Text style={styles.detailLabel}>DESCRIPTION</Text>
+                  <Text style={styles.detailText}>{selectedItem.description}</Text>
+                </View>
+              ) : null}
+
+              {selectedItem?.content ? (
+                <View style={styles.detailBlock}>
+                  <Text style={styles.detailLabel}>CONTENT</Text>
+                  <Text style={styles.detailText}>{selectedItem.content}</Text>
+                </View>
+              ) : null}
+
+              {selectedItem?.youtubeUrl ? (
+  <View style={styles.detailBlock}>
+    <Text style={styles.detailLabel}>VIDEO</Text>
+    {(() => {
+      const videoId = extractYouTubeId(selectedItem.youtubeUrl)
+      return videoId ? (
+        <View style={styles.detailYoutubeWrap}>
+          <YoutubePlayer height={180} videoId={videoId} play={false} />
+          <TouchableOpacity
+            style={styles.detailOpenYoutubeBtn}
+            onPress={() => {
+              const url = /^https?:\/\//i.test(selectedItem.youtubeUrl)
+                ? selectedItem.youtubeUrl
+                : `https://${selectedItem.youtubeUrl}`
+              Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open YouTube'))
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="logo-youtube" size={14} color="#FF0000" />
+            <Text style={styles.detailOpenYoutubeBtnText}>Open in YouTube</Text>
+            <Ionicons name="open-outline" size={13} color="#888" />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <Text style={styles.detailMonoText}>{selectedItem.youtubeUrl}</Text>
+      )
+    })()}
+  </View>
+) : null}
+
+              {selectedItem?.fileUrl ? (
+                <View style={styles.detailBlock}>
+                  <Text style={styles.detailLabel}>FILE URL</Text>
+                  <Text style={styles.detailMonoText}>{selectedItem.fileUrl}</Text>
+                </View>
+              ) : null}
+
+              {selectedItem?.fileName ? (
+                <View style={styles.detailBlock}>
+                  <Text style={styles.detailLabel}>FILE NAME</Text>
+                  <Text style={styles.detailText}>{selectedItem.fileName}</Text>
+                </View>
+              ) : null}
+            </ScrollView>
+
+            {isAdmin && selectedItem && (
+              <View style={styles.detailActions}>
+                <TouchableOpacity style={[styles.detailActionBtn, styles.detailActionBtnSecondary]} onPress={() => { const item = selectedItem; setSelectedItem(null); handleEdit(item) }}>
+                  <Ionicons name="pencil-outline" size={16} color="#0A0A0A" />
+                  <Text style={styles.detailActionBtnText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.detailActionBtn, styles.detailActionBtnDestructive]} onPress={() => { const item = selectedItem; setSelectedItem(null); handleDelete(item) }}>
+                  <Ionicons name="trash-outline" size={16} color="#FFF" />
+                  <Text style={styles.detailActionBtnTextDestructive}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
         </View>
   )
 }
 
 const styles = StyleSheet.create({
   container: {     flex: 1,     backgroundColor: '#FAFAFA' },
+
+  detailYoutubeWrap: {
+  borderRadius: 12,
+  overflow: 'hidden',
+  backgroundColor: '#000',
+},
+detailOpenYoutubeBtn: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+  paddingHorizontal: 14,
+  paddingVertical: 10,
+  backgroundColor: '#111',
+},
+detailOpenYoutubeBtnText: {
+  flex: 1,
+  fontSize: 13,
+  fontWeight: '600',
+  color: '#CCC',
+},
 
   // Dashboard
   dashboardContent: { paddingBottom: 60   },
@@ -542,6 +930,7 @@ paddingHorizontal: 16,
   itemBody: { flex: 1, gap: 4 },
   itemTitle: { fontSize: 14, fontWeight: '700', color: '#0A0A0A', letterSpacing: -0.1 },
   itemMeta: { fontSize: 12, color: '#ADADAD', lineHeight: 17 },
+  itemViewMore: { marginTop: 4, fontSize: 11, color: '#8A8A8A', fontWeight: '600' },
   itemUrlRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
   itemUrl: { fontSize: 11, color: '#ADADAD', flex: 1 },
   itemActions: { flexDirection: 'row', gap: 6, marginTop: 2, flexShrink: 0 },
@@ -577,6 +966,7 @@ justifyContent: 'space-between',
   modalTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
   modalCancel: { fontSize: 14, color: '#ADADAD', fontWeight: '500', minWidth: 54 },
   modalSaveBtn: { backgroundColor: '#0A0A0A', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, minWidth: 54, alignItems: 'center' },
+  modalSaveBtnDisabled: { opacity: 0.6 },
   modalSave: { fontSize: 13, fontWeight: '700', color: '#FAFAFA' },
   modalBody: { paddingHorizontal: 20, paddingTop: 20 },
   fieldLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, marginBottom: 9, textTransform: 'uppercase' },
@@ -588,4 +978,62 @@ justifyContent: 'space-between',
   selectedFileName: { fontSize: 13, fontWeight: '600', color: '#0A0A0A' },
   selectedFileUrl: { fontSize: 11, color: '#ADADAD', marginTop: 2 },
   orDivider: { fontSize: 11, color: '#C8C8C8', textAlign: 'center', fontWeight: '500', letterSpacing: 0.5, marginVertical: 12 },
+  busyOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  busyCard: {
+    width: '78%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E6E6E6',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 6,
+  },
+  busyTitle: {
+    marginTop: 12,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0A0A0A',
+    textAlign: 'center',
+  },
+  busySubtitle: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#7A7A7A',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  detailBackdrop: { ...StyleSheet.absoluteFillObject },
+  detailSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, maxHeight: '88%', paddingBottom: 18 },
+  detailHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 12, marginBottom: 8 },
+  detailHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  detailHeadTextWrap: { flex: 1, paddingRight: 16 },
+  detailEyebrow: { fontSize: 9, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, marginBottom: 4, textTransform: 'uppercase' },
+  detailTitle: { fontSize: 18, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
+  detailCloseBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center' },
+  detailBody: { maxHeight: 360 },
+  detailBodyContent: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10, gap: 14 },
+  detailBlock: { gap: 6 },
+  detailLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, textTransform: 'uppercase' },
+  detailText: { fontSize: 14, color: '#222', lineHeight: 21 },
+  detailMonoText: { fontSize: 13, color: '#222', lineHeight: 20, fontFamily: 'monospace' },
+  detailActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingTop: 10 },
+  detailActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 12, paddingVertical: 13 },
+  detailActionBtnSecondary: { backgroundColor: '#F2F2F2' },
+  detailActionBtnDestructive: { backgroundColor: '#0A0A0A' },
+  detailActionBtnText: { fontSize: 13, fontWeight: '700', color: '#0A0A0A' },
+  detailActionBtnTextDestructive: { fontSize: 13, fontWeight: '700', color: '#FFF' },
 })

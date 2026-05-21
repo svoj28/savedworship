@@ -15,6 +15,7 @@ export async function getUserProfileByShortId(shortId: string): Promise<UserProf
 import { execute, query, queryOne, transaction } from './index'
 import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, Contact, UserProfile, Playlist, PlaylistItem } from './models'
 import { syncRowToSupabase, deleteRowFromSupabase } from '../lib/syncToSupabase'
+import { supabase } from '../lib/supabase'
 import uuid from 'react-native-uuid'
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -35,11 +36,17 @@ export async function createArtist(data: Omit<Artist, 'id'>): Promise<Artist> {
 }
 
 export async function getArtistById(id: string): Promise<Artist | null> {
+  const { data } = await supabase.from('artists').select('*').eq('id', id).limit(1)
+  if (data && data.length > 0) return mapArtist(data[0])
+
   const result = await queryOne('SELECT * FROM artists WHERE id = ?', [id])
   return result ? mapArtist(result) : null
 }
 
 export async function getArtistsByUserId(userId: string): Promise<Artist[]> {
+  const { data } = await supabase.from('artists').select('*').eq('user_id', userId).order('name')
+  if (data && data.length > 0) return data.map(mapArtist)
+
   const results = await query('SELECT * FROM artists WHERE user_id = ? ORDER BY name', [userId])
   return results.map(mapArtist)
 }
@@ -75,11 +82,17 @@ export async function createChordList(data: Omit<ChordList, 'id'>): Promise<Chor
 }
 
 export async function getChordListById(id: string): Promise<ChordList | null> {
+  const { data } = await supabase.from('chord_lists').select('*').eq('id', id).limit(1)
+  if (data && data.length > 0) return mapChordList(data[0])
+
   const result = await queryOne('SELECT * FROM chord_lists WHERE id = ?', [id])
   return result ? mapChordList(result) : null
 }
 
 export async function getChordListsByUserId(userId: string): Promise<ChordList[]> {
+  const { data } = await supabase.from('chord_lists').select('*').eq('user_id', userId).order('title')
+  if (data && data.length > 0) return data.map(mapChordList)
+
   const results = await query('SELECT * FROM chord_lists WHERE user_id = ? ORDER BY title', [userId])
   return results.map(mapChordList)
 }
@@ -121,19 +134,25 @@ export async function createSong(data: Omit<Song, 'id'>): Promise<Song> {
   const id = uuid.v4() as string
   const song = { id, ...data }
   await execute(
-    'INSERT INTO songs (id, chord_list_id, user_id, title, content, key, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [song.id, song.chordListId, song.userId || '', song.title, song.content, song.key, song.createdAt, song.updatedAt, 0]
+    'INSERT INTO songs (id, chord_list_id, user_id, title, content, key, youtube_url, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [song.id, song.chordListId, song.userId || '', song.title, song.content, song.key, song.youtubeUrl || '', song.createdAt, song.updatedAt, 0]
   )
   await syncRowToSupabase('songs', song)
   return song
 }
 
 export async function getSongById(id: string): Promise<Song | null> {
+  const { data } = await supabase.from('songs').select('*').eq('id', id).limit(1)
+  if (data && data.length > 0) return mapSong(data[0])
+
   const result = await queryOne('SELECT * FROM songs WHERE id = ?', [id])
   return result ? mapSong(result) : null
 }
 
 export async function getSongsByChordListId(chordListId: string): Promise<Song[]> {
+  const { data } = await supabase.from('songs').select('*').eq('chord_list_id', chordListId).order('title')
+  if (data && data.length > 0) return data.map(mapSong)
+
   const results = await query('SELECT * FROM songs WHERE chord_list_id = ? ORDER BY title', [chordListId])
   return results.map(mapSong)
 }
@@ -161,7 +180,7 @@ export async function createLineup(data: Omit<Lineup, 'id'>): Promise<Lineup> {
     'INSERT INTO lineups (id, title, user_id, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [lineup.id, lineup.title, lineup.userId, lineup.description || '', lineup.createdAt, lineup.updatedAt, 0]
   )
-  await syncRowToSupabase('lineups', lineup)
+  void syncRowToSupabase('lineups', lineup).catch(err => console.warn('Background sync failed for lineups:', err))
   return lineup
 }
 
@@ -175,6 +194,14 @@ export async function getLineupsByUserId(userId: string): Promise<Lineup[]> {
   return results.map(mapLineup)
 }
 
+export async function getAllLineups(): Promise<Lineup[]> {
+  const { data } = await supabase.from('lineups').select('*').order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapLineup)
+
+  const results = await query('SELECT * FROM lineups ORDER BY created_at DESC')
+  return results.map(mapLineup)
+}
+
 export async function updateLineup(id: string, data: Partial<Lineup>): Promise<void> {
   const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'synced', 'createdAt'].includes(key))
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
@@ -182,7 +209,7 @@ export async function updateLineup(id: string, data: Partial<Lineup>): Promise<v
   if (!updates) return
   await execute(`UPDATE lineups SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
   const updated = await getLineupById(id)
-  if (updated) await syncRowToSupabase('lineups', updated)
+  if (updated) void syncRowToSupabase('lineups', updated).catch(err => console.warn('Background sync failed for lineups:', err))
 }
 
 export async function deleteLineup(id: string): Promise<void> {
@@ -192,7 +219,7 @@ export async function deleteLineup(id: string): Promise<void> {
   }
   await execute('DELETE FROM lineup_items WHERE lineup_id = ?', [id])
   await execute('DELETE FROM lineups WHERE id = ?', [id])
-  await deleteRowFromSupabase('lineups', id)
+  void deleteRowFromSupabase('lineups', id).catch(err => console.warn('Background delete sync failed for lineups:', err))
 }
 
 // ─── MESSAGES ─────────────────────────────────────────────────────────────────
@@ -234,7 +261,7 @@ export async function createFileDropper(data: Omit<FileDropper, 'id'>): Promise<
     'INSERT INTO file_droppers (id, title, user_id, file_url, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [file.id, file.title, file.userId, file.fileUrl, file.description || '', file.createdAt, file.updatedAt, 0]
   )
-  await syncRowToSupabase('file_droppers', file)
+  void syncRowToSupabase('file_droppers', file).catch(err => console.warn('Background sync failed for file_droppers:', err))
   return file
 }
 
@@ -248,6 +275,14 @@ export async function getFileDroppersByUserId(userId: string): Promise<FileDropp
   return results.map(mapFileDropper)
 }
 
+export async function getAllFileDroppers(): Promise<FileDropper[]> {
+  const { data } = await supabase.from('file_droppers').select('*').order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapFileDropper)
+
+  const results = await query('SELECT * FROM file_droppers ORDER BY created_at DESC')
+  return results.map(mapFileDropper)
+}
+
 export async function updateFileDropper(id: string, data: Partial<FileDropper>): Promise<void> {
   const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'createdAt'].includes(key))
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
@@ -255,12 +290,12 @@ export async function updateFileDropper(id: string, data: Partial<FileDropper>):
   if (!updates) return
   await execute(`UPDATE file_droppers SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
   const updated = await getFileDropperById(id)
-  if (updated) await syncRowToSupabase('file_droppers', updated)
+  if (updated) void syncRowToSupabase('file_droppers', updated).catch(err => console.warn('Background sync failed for file_droppers:', err))
 }
 
 export async function deleteFileDropper(id: string): Promise<void> {
   await execute('DELETE FROM file_droppers WHERE id = ?', [id])
-  await deleteRowFromSupabase('file_droppers', id)
+  void deleteRowFromSupabase('file_droppers', id).catch(err => console.warn('Background delete sync failed for file_droppers:', err))
 }
 
 // ─── IMPORTANT ANNOUNCEMENTS ──────────────────────────────────────────────────
@@ -271,7 +306,7 @@ export async function createImportantAnnouncement(data: Omit<ImportantAnnounceme
     'INSERT INTO important_announcements (id, title, user_id, content, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [announcement.id, announcement.title, announcement.userId, announcement.content, announcement.createdAt, announcement.updatedAt, 0]
   )
-  await syncRowToSupabase('important_announcements', announcement)
+  void syncRowToSupabase('important_announcements', announcement).catch(err => console.warn('Background sync failed for important_announcements:', err))
   return announcement
 }
 
@@ -285,6 +320,14 @@ export async function getAnnouncementsByUserId(userId: string): Promise<Importan
   return results.map(mapImportantAnnouncement)
 }
 
+export async function getAllAnnouncements(): Promise<ImportantAnnouncement[]> {
+  const { data } = await supabase.from('important_announcements').select('*').order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapImportantAnnouncement)
+
+  const results = await query('SELECT * FROM important_announcements ORDER BY created_at DESC')
+  return results.map(mapImportantAnnouncement)
+}
+
 export async function updateAnnouncement(id: string, data: Partial<ImportantAnnouncement>): Promise<void> {
   const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'createdAt'].includes(key))
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
@@ -292,12 +335,12 @@ export async function updateAnnouncement(id: string, data: Partial<ImportantAnno
   if (!updates) return
   await execute(`UPDATE important_announcements SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
   const updated = await getAnnouncementById(id)
-  if (updated) await syncRowToSupabase('important_announcements', updated)
+  if (updated) void syncRowToSupabase('important_announcements', updated).catch(err => console.warn('Background sync failed for important_announcements:', err))
 }
 
 export async function deleteAnnouncement(id: string): Promise<void> {
   await execute('DELETE FROM important_announcements WHERE id = ?', [id])
-  await deleteRowFromSupabase('important_announcements', id)
+  void deleteRowFromSupabase('important_announcements', id).catch(err => console.warn('Background delete sync failed for important_announcements:', err))
 }
 
 // ─── VERSION DROPPERS ─────────────────────────────────────────────────────────
@@ -308,7 +351,7 @@ export async function createVersionDropper(data: Omit<VersionDropper, 'id'>): Pr
     'INSERT INTO version_droppers (id, title, user_id, youtube_url, description, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [version.id, version.title, version.userId, version.youtubeUrl, version.description || '', version.createdAt, version.updatedAt, 0]
   )
-  await syncRowToSupabase('version_droppers', version)
+  void syncRowToSupabase('version_droppers', version).catch(err => console.warn('Background sync failed for version_droppers:', err))
   return version
 }
 
@@ -322,6 +365,14 @@ export async function getVersionDroppersByUserId(userId: string): Promise<Versio
   return results.map(mapVersionDropper)
 }
 
+export async function getAllVersionDroppers(): Promise<VersionDropper[]> {
+  const { data } = await supabase.from('version_droppers').select('*').order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapVersionDropper)
+
+  const results = await query('SELECT * FROM version_droppers ORDER BY created_at DESC')
+  return results.map(mapVersionDropper)
+}
+
 export async function updateVersionDropper(id: string, data: Partial<VersionDropper>): Promise<void> {
   const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'createdAt'].includes(key))
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
@@ -329,12 +380,12 @@ export async function updateVersionDropper(id: string, data: Partial<VersionDrop
   if (!updates) return
   await execute(`UPDATE version_droppers SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
   const updated = await getVersionDropperById(id)
-  if (updated) await syncRowToSupabase('version_droppers', updated)
+  if (updated) void syncRowToSupabase('version_droppers', updated).catch(err => console.warn('Background sync failed for version_droppers:', err))
 }
 
 export async function deleteVersionDropper(id: string): Promise<void> {
   await execute('DELETE FROM version_droppers WHERE id = ?', [id])
-  await deleteRowFromSupabase('version_droppers', id)
+  void deleteRowFromSupabase('version_droppers', id).catch(err => console.warn('Background delete sync failed for version_droppers:', err))
 }
 
 // ─── CONTACTS ─────────────────────────────────────────────────────────────────
@@ -350,16 +401,30 @@ export async function addContact(data: Omit<Contact, 'id'>): Promise<Contact> {
 }
 
 export async function getContactById(id: string): Promise<Contact | null> {
+  const { data } = await supabase.from('contacts').select('*').eq('id', id).limit(1)
+  if (data && data.length > 0) return mapContact(data[0])
+
   const result = await queryOne('SELECT * FROM contacts WHERE id = ?', [id])
   return result ? mapContact(result) : null
 }
 
 export async function getContactsByUserId(userId: string): Promise<Contact[]> {
+  const { data } = await supabase.from('contacts').select('*').eq('user_id', userId).order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapContact)
+
   const results = await query('SELECT * FROM contacts WHERE user_id = ? ORDER BY created_at DESC', [userId])
   return results.map(mapContact)
 }
 
 export async function getContactByUserIdAndContactUserId(userId: string, contactUserId: string): Promise<Contact | null> {
+  const { data } = await supabase
+    .from('contacts')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('contact_user_id', contactUserId)
+    .limit(1)
+  if (data && data.length > 0) return mapContact(data[0])
+
   const result = await queryOne(
     'SELECT * FROM contacts WHERE user_id = ? AND contact_user_id = ?',
     [userId, contactUserId]
@@ -430,11 +495,17 @@ export async function createPlaylist(data: Omit<Playlist, 'id'>): Promise<Playli
 }
 
 export async function getPlaylistById(id: string): Promise<Playlist | null> {
+  const { data } = await supabase.from('playlists').select('*').eq('id', id).limit(1)
+  if (data && data.length > 0) return mapPlaylist(data[0])
+
   const result = await queryOne('SELECT * FROM playlists WHERE id = ?', [id])
   return result ? mapPlaylist(result) : null
 }
 
 export async function getPlaylistsByUserId(userId: string): Promise<Playlist[]> {
+  const { data } = await supabase.from('playlists').select('*').eq('user_id', userId).order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapPlaylist)
+
   const results = await query('SELECT * FROM playlists WHERE user_id = ? ORDER BY created_at DESC', [userId])
   return results.map(mapPlaylist)
 }
@@ -472,6 +543,9 @@ export async function addToPlaylist(data: Omit<PlaylistItem, 'id'>): Promise<Pla
 }
 
 export async function getPlaylistItems(playlistId: string): Promise<PlaylistItem[]> {
+  const { data } = await supabase.from('playlist_items').select('*').eq('playlist_id', playlistId).order('position', { ascending: true })
+  if (data && data.length > 0) return data.map(mapPlaylistItem)
+
   const results = await query('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC', [playlistId])
   return results.map(mapPlaylistItem)
 }
@@ -527,7 +601,9 @@ function mapSong(row: any): Song {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     synced: Boolean(row._synced),
+    youtubeUrl: row.youtube_url,
   }
+    
 }
 
 function mapLineup(row: any): Lineup {

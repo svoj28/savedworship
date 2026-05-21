@@ -11,8 +11,10 @@ import {
   Platform,
 StatusBar,
 } from 'react-native'
-import { execute, queryOne } from '../db/index'
+import { execute } from '../db/index'
+import { getChordListById } from '../db/queries'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { onTableChange } from '../lib/sync'
 
 interface Props {
   route: any
@@ -33,13 +35,21 @@ const [savedAt, setSavedAt] = useState<Date | null>(null)
     loadNote()
   }, [navigation])
 
+  useEffect(() => {
+    const unsub = onTableChange('chord_lists', () => {
+      loadNote()
+    })
+
+    return () => unsub()
+  }, [noteId])
+
   const loadNote = async () => {
     try {
-      const row: any = await queryOne('SELECT * FROM chord_lists WHERE id = ?', [noteId])
+      const row = await getChordListById(noteId)
       if (row) {
         setTitle(row.title)
-        setContent(row.content || '')
-if (row.updated_at) setSavedAt(new Date(row.updated_at))
+        setContent((row as any).content || '')
+if ((row as any).updatedAt) setSavedAt(new Date((row as any).updatedAt))
       }
     } catch (err) {
       console.error('Error loading note:', err)

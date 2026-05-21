@@ -21,6 +21,7 @@ import { getUserProfileByUserId, createUserProfile, updateUserProfile } from '..
 import { UserProfile } from '../db/models'
 import { uploadAvatar } from '../lib/uploadAvatar'
 import { supabase } from '../lib/supabase'
+import { onTableChange } from '../lib/sync'
 
 const ROLES = [
   'Vocals',
@@ -86,6 +87,24 @@ export default function EditAccountScreen() {
 
   useEffect(() => {
     loadUserProfile()
+  }, [])
+
+  useEffect(() => {
+    const unsubLocal = onTableChange('user_profiles', () => {
+      loadUserProfile()
+    })
+
+    const userProfilesChannel = supabase
+      .channel('edit-account-user-profiles')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_profiles' }, () => {
+        loadUserProfile()
+      })
+      .subscribe()
+
+    return () => {
+      unsubLocal()
+      supabase.removeChannel(userProfilesChannel)
+    }
   }, [])
 
   const loadUserProfile = async () => {

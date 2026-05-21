@@ -8,10 +8,13 @@ import {
   getMuteState,
   setMuteState,
   registerForPushNotificationsAsync,
+  loadNotificationsFromSupabase,
+  notificationFromRow,
   AppNotification,
   MuteState,
   MuteOption,
 } from './notifications'
+import { supabase } from './supabase'
 
 interface NotificationContextValue {
   notifications: AppNotification[]
@@ -48,6 +51,7 @@ export function NotificationProvider({
     }
     setLoading(true)
     try {
+      await loadNotificationsFromSupabase(userId)
       const [notifs, count, mute] = await Promise.all([
         getNotifications(userId),
         getUnreadCount(userId),
@@ -61,6 +65,15 @@ export function NotificationProvider({
     } finally {
       setLoading(false)
     }
+  }, [userId])
+
+  const mergeNotificationRow = useCallback(async (row: any) => {
+    if (!userId || !row?.id) return
+    const next = notificationFromRow(row)
+    const existing = await getNotifications(userId)
+    const merged = [next, ...existing.filter(notification => notification.id !== next.id)].slice(0, 50)
+    setNotifications(merged)
+    setUnreadCount(merged.filter(notification => !notification.read).length)
   }, [userId])
 
   const markRead = useCallback(async (id: string) => {
@@ -78,8 +91,9 @@ export function NotificationProvider({
   const clearAll = useCallback(async () => {
     if (!userId) return
     await clearAllNotifications(userId)
-    await refresh()
-  }, [userId, refresh])
+    setNotifications([])
+    setUnreadCount(0)
+  }, [userId])
 
   const updateMute = useCallback(async (option: MuteOption) => {
     if (!userId) return
@@ -93,9 +107,27 @@ export function NotificationProvider({
     registerForPushNotificationsAsync()
     refresh()
 
+    const channel = supabase
+      .channel(`notifications-${userId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      }, async (payload) => {
+        if (payload.eventType === 'INSERT' && payload.new) {
+          await mergeNotificationRow(payload.new)
+          return
+        }
+
+        refresh()
+      })
+      .subscribe()
+
     pollRef.current = setInterval(refresh, 30000)
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
+      supabase.removeChannel(channel)
     }
   }, [userId, refresh])
 

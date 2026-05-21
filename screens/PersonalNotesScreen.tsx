@@ -1,5 +1,5 @@
 // screens/PersonalNotesScreen.tsx
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   ScrollView,
@@ -22,6 +22,7 @@ import { useRole } from '../lib/useRole'
 import { syncRowToSupabase } from '../lib/syncToSupabase'
 import { getChordListById } from '../db/queries'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { onTableChange } from '../lib/sync'
 
 interface Props {
   navigation: any
@@ -45,6 +46,16 @@ const [searchFocused, setSearchFocused] = useState(false)
       loadPersonalNotes()
     }, [])
   )
+
+  useEffect(() => {
+    const unsubArtists = onTableChange('artists', () => loadPersonalNotes())
+    const unsubChordLists = onTableChange('chord_lists', () => loadPersonalNotes())
+
+    return () => {
+      unsubArtists()
+      unsubChordLists()
+    }
+  }, [])
 
 const handleUploadToCloud = async (noteId: string) => {
   Alert.alert(

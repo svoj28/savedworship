@@ -30,7 +30,7 @@ export interface SyncState {
  * Handles auto-sync, real-time subscriptions, and status tracking
  */
 export function useSyncManager(options: UseSyncManagerOptions) {
-  const { userId, autoSync = true, syncInterval = 60000, enableRealtime = true } = options
+  const { userId, autoSync = true, syncInterval = 10000, enableRealtime = true } = options
   
   const [syncState, setSyncState] = useState<SyncState>(() => {
     const status = getSyncStatus()

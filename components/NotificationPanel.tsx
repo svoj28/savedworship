@@ -12,8 +12,9 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { useNotifications } from '../lib/NotificationContext'
 import { AppNotification, MuteOption, getMuteLabel, isMuted } from '../lib/notifications'
-import { updateContact, getContactsByUserId, getContactByUserIdAndContactUserId, deleteContact, addContact } from '../db/queries'
+import { addContact, getContactByUserIdAndContactUserId, updateContact } from '../db/queries'
 import { notifyContactAccepted, notifyContactRejected } from '../lib/notifications'
+import { navigateFromNotification } from '../lib/notificationNavigation'
 
 const MUTE_OPTIONS: { label: string; value: MuteOption }[] = [
   { label: 'Turn on notifications', value: 'unmuted' },
@@ -29,6 +30,7 @@ function notifIcon(type: AppNotification['type']): keyof typeof Ionicons.glyphMa
     case 'contact_request': return 'person-add-outline'
     case 'contact_accepted': return 'checkmark-circle-outline'
     case 'contact_rejected': return 'close-circle-outline'
+    case 'management_broadcast': return 'megaphone-outline'
     default: return 'notifications-outline'
   }
 }
@@ -40,6 +42,7 @@ function notifIconColor(type: AppNotification['type']): string {
     case 'contact_request': return '#444'
     case 'contact_accepted': return '#1a1a1a'
     case 'contact_rejected': return '#888'
+    case 'management_broadcast': return '#111'
     default: return '#aaa'
   }
 }
@@ -50,6 +53,7 @@ function notifIconBg(type: AppNotification['type']): string {
     case 'contact_request': return '#e8e8e8'
     case 'contact_accepted': return '#1a1a1a'
     case 'contact_rejected': return '#f5f5f5'
+    case 'management_broadcast': return '#f2f2f2'
     default: return '#f5f5f5'
   }
 }
@@ -76,7 +80,7 @@ interface Props {
 }
 
 export default function NotificationPanel({ visible, onClose }: Props) {
-  const { notifications, muteState, loading, markRead, markAllAsRead, clearAll, updateMute } = useNotifications()
+  const { notifications, muteState, loading, refresh, markRead, markAllAsRead, clearAll, updateMute } = useNotifications()
   const [showMuteMenu, setShowMuteMenu] = useState(false)
   const muted = isMuted(muteState)
 
@@ -87,36 +91,31 @@ export default function NotificationPanel({ visible, onClose }: Props) {
 
       if (!requesterId || !currentUserId) return
 
-      const incomingContact = await getContactByUserIdAndContactUserId(currentUserId, requesterId)
-      if (!incomingContact) {
-        Alert.alert('Error', 'Contact request not found')
-        return
+      const ownContact = await getContactByUserIdAndContactUserId(currentUserId, requesterId)
+      if (ownContact) {
+        await updateContact(ownContact.id, {
+          status: action === 'accept' ? 'accepted' : 'blocked',
+          updatedAt: Date.now(),
+        })
+      } else {
+        await addContact({
+          userId: currentUserId,
+          contactUserId: requesterId,
+          status: action === 'accept' ? 'accepted' : 'blocked',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          synced: false,
+        })
       }
 
-      const outgoingContact = await getContactByUserIdAndContactUserId(requesterId, currentUserId)
-
       if (action === 'accept') {
-        await updateContact(incomingContact.id, { status: 'accepted', updatedAt: Date.now() })
-        if (outgoingContact) {
-          await updateContact(outgoingContact.id, { status: 'accepted', updatedAt: Date.now() })
-        } else {
-          await addContact({
-            userId: requesterId,
-            contactUserId: currentUserId,
-            status: 'accepted',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            synced: false,
-          })
-        }
         await notifyContactAccepted(requesterId, 'Your contact request was accepted')
       } else {
-        await deleteContact(incomingContact.id)
-        if (outgoingContact) await deleteContact(outgoingContact.id)
         await notifyContactRejected(requesterId, 'Your contact request was declined')
       }
 
       await markRead(notif.id)
+      await refresh()
     } catch (err) {
       console.error('Contact response error:', err)
       Alert.alert('Error', `Failed to ${action} contact request`)
@@ -126,6 +125,11 @@ export default function NotificationPanel({ visible, onClose }: Props) {
   const handleMuteOption = async (option: MuteOption) => {
     setShowMuteMenu(false)
     await updateMute(option)
+  }
+
+  const handleNotificationPress = async (notif: AppNotification) => {
+    navigateFromNotification(notif)
+    await markRead(notif.id)
   }
 
   const handleClearAll = () => {
@@ -249,7 +253,7 @@ export default function NotificationPanel({ visible, onClose }: Props) {
                     !notif.read && styles.notifCardUnread,
                     index === 0 && { borderTopWidth: 0 },
                   ]}
-                  onPress={() => markRead(notif.id)}
+                  onPress={() => handleNotificationPress(notif)}
                   activeOpacity={0.65}
                 >
                   {/* Icon */}

@@ -1,5 +1,5 @@
 // screens/ChordListScreen.tsx
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   View,
   ScrollView,
@@ -10,25 +10,145 @@ import {
   Modal,
   TextInput,
   Alert,
-StatusBar,
+  StatusBar,
+  Linking,
+  Animated,
 } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import { useFocusEffect } from '@react-navigation/native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { Song, ChordList, Playlist, PlaylistItem } from '../db/models'
-import { transposeText, transposeChord, getAllKeys, getTransposeDistance } from '../lib/transpose'
-import { query, queryOne, execute, transaction } from '../db/index'
-import { getPlaylistsByUserId, getPlaylistItems, updatePlaylistItemPosition } from '../db/queries'
+import { transposeText, getAllKeys, getTransposeDistance } from '../lib/transpose'
+import { execute, query } from '../db/index'
+import {
+  getPlaylistsByUserId,
+  getPlaylistItems,
+  updatePlaylistItemPosition,
+  getChordListById,
+  getSongsByChordListId,
+} from '../db/queries'
 import { getCurrentUser } from '../lib/auth'
 import { useRole } from '../lib/useRole'
+import { supabase } from '../lib/supabase'
+import { onTableChange } from '../lib/sync'
+import YoutubePlayer from 'react-native-youtube-iframe'
 
 interface Props {
   route: any
   navigation: any
 }
 
-type ViewMode = 'lyrics' | 'chords' | 'both'
+type ViewMode  = 'lyrics' | 'chords' | 'both'
 type BrowseMode = 'single' | 'artist' | 'playlist'
+type SongTab   = 'sheet' | 'video'
+
+type SongSection = {
+  id: string
+  label: string
+  content: string
+}
+
+const SECTION_HEADER_PATTERN =
+  /^(?:\[(.+?)\]|(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)(?:\s*([0-9]+))?)\s*:??\s*$/i
+
+function normalizeSectionLabel(rawLabel: string, fallbackIndex: number) {
+  const cleaned = rawLabel.replace(/\[|\]/g, '').trim()
+  const match = cleaned.match(
+    /^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)\s*([0-9]+)?$/i
+  )
+  if (!match) return cleaned || `Section ${fallbackIndex + 1}`
+  const base   = match[1].replace(/[-\s]/g, ' ')
+  const number = match[2] ? ` ${match[2]}` : ''
+  return `${base.charAt(0).toUpperCase()}${base.slice(1).toLowerCase()}${number}`
+}
+
+function extractYouTubeId(url: string): string | null {
+  if (!url) return null
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+  ]
+  for (const p of patterns) {
+    const m = url.match(p)
+    if (m) return m[1]
+  }
+  return null
+}
+
+/**
+ * For 'both' mode: render [Chord] inline, stripping the brackets,
+ * and keep the full line including any lyric text.
+ */
+function renderChordContent(content: string): string {
+  return content.replace(/\[([^\]]+)\]/g, '$1 ')
+}
+
+/**
+ * For 'chords' mode:
+ * - Only keep lines that contain at least one [chord]
+ * - Strip the [] brackets so only the chord name shows
+ * - Remove any remaining non-chord text on that line
+ *   (i.e. extract ONLY the chord tokens, space-separated)
+ */
+function extractChordsOnlyFromContent(content: string): string {
+  const lines = content.split(/\r?\n/)
+  const chordLines: string[] = []
+
+  for (const line of lines) {
+    const matches = [...line.matchAll(/\[([^\]]+)\]/g)]
+    if (matches.length > 0) {
+      // Only emit the chord names, no surrounding lyric text
+      chordLines.push(matches.map(m => m[1]).join('  '))
+    }
+    // Lines with no [chord] tokens are silently dropped
+  }
+
+  return chordLines.join('\n')
+}
+
+function parseSongSections(content: string): SongSection[] {
+  const lines = content.split(/\r?\n/)
+  const sections: SongSection[] = []
+  let currentLabel = 'Full Song'
+  let currentLines: string[] = []
+  let foundAnyHeader = false
+
+  const flush = (label: string) => {
+    const body = currentLines.join('\n').trim()
+    if (body) {
+      sections.push({
+        id: `${sections.length}-${label.toLowerCase().replace(/\s+/g, '-')}`,
+        label,
+        content: body,
+      })
+    }
+    currentLines = []
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const match = trimmed.match(SECTION_HEADER_PATTERN)
+    if (match) {
+      const label = normalizeSectionLabel(
+        match[1] || `${match[2] || 'Section'} ${match[3] || ''}`.trim(),
+        sections.length
+      )
+      if (currentLines.length > 0 || sections.length === 0) flush(currentLabel)
+      currentLabel = label
+      foundAnyHeader = true
+      continue
+    }
+    currentLines.push(line)
+  }
+  flush(currentLabel)
+
+  if (!foundAnyHeader) {
+    return [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
+  }
+  return sections.length > 0
+    ? sections
+    : [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
+}
 
 interface BrowseItem {
   id: string
@@ -39,86 +159,145 @@ interface BrowseItem {
   position?: number
 }
 
+const SCROLL_SPEEDS = [
+  { label: 'Slow', value: 20 },
+  { label: 'Med',  value: 45 },
+  { label: 'Fast', value: 80 },
+]
+
 export default function ChordListScreen({ route, navigation }: Props) {
   const { chordListId } = route.params
-  const [chordList, setChordList] = useState<any>(null)
-  const [songs, setSongs] = useState<Song[]>([])
-  const [selectedSongId, setSelectedSongId] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>('both')
-  const [transposeToKey, setTransposeToKey] = useState<string>('C')
-  const [loading, setLoading] = useState(true)
-  const [editingModalVisible, setEditingModalVisible] = useState(false)
-  const [editingContent, setEditingContent] = useState('')
-  const { canManageChords } = useRole()
-  
-    const [browseMode, setBrowseMode] = useState<BrowseMode>('single')
-  const [browseItems, setBrowseItems] = useState<BrowseItem[]>([])
+  const [chordList, setChordList]               = useState<any>(null)
+  const [songs, setSongs]                       = useState<Song[]>([])
+  const [selectedSongId, setSelectedSongId]     = useState<string | null>(null)
+  const [viewMode, setViewMode]                 = useState<ViewMode>('both')
+  const [transposeToKey, setTransposeToKey]     = useState<string>('C')
+  const [loading, setLoading]                   = useState(true)
+  const { canManageChords }                     = useRole()
+  const [browseMode, setBrowseMode]             = useState<BrowseMode>('single')
+  const [browseItems, setBrowseItems]           = useState<BrowseItem[]>([])
   const [currentItemIndex, setCurrentItemIndex] = useState(0)
-    const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
-  const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
+  const [playlists, setPlaylists]               = useState<Playlist[]>([])
   const [showPlaylistModal, setShowPlaylistModal] = useState(false)
-  const [artistId, setArtistId] = useState<string | null>(null)
-  const [userId, setUserId] = useState<string | null>(null)
-const [showTransposePicker, setShowTransposePicker] = useState(false)
+  const [artistId, setArtistId]                 = useState<string | null>(null)
+  const [showTransposePicker, setShowTransposePicker] = useState(false)
+  const [activeSongTab, setActiveSongTab]       = useState<SongTab>('sheet')
+  const [activeSectionId, setActiveSectionId]   = useState<string | null>(null)
+  const [showOptionsModal, setShowOptionsModal] = useState(false)
 
-    useEffect(() => {
-    navigation.setOptions({       headerLeft: () => null     })
+  const contentScrollRef      = useRef<ScrollView | null>(null)
+  const sectionNavScrollRef   = useRef<ScrollView | null>(null)
+  const sectionOffsetsRef     = useRef<Record<string, number>>({})
+  const sectionPillOffsetsRef = useRef<Record<string, number>>({})
+
+  const [isAutoScrolling, setIsAutoScrolling]   = useState(false)
+  const [scrollSpeedIndex, setScrollSpeedIndex] = useState(0)
+  const autoScrollRef       = useRef<ReturnType<typeof setInterval> | null>(null)
+  const scrollYRef          = useRef(0)
+  const contentHeightRef    = useRef(0)
+  const scrollViewHeightRef = useRef(0)
+  const scrollFadeAnim      = useRef(new Animated.Value(0)).current
+
+  // Keep a ref to the latest browseItems/currentItemIndex for use inside interval
+  const browseItemsRef      = useRef<BrowseItem[]>([])
+  const currentItemIndexRef = useRef(0)
+  browseItemsRef.current      = browseItems
+  currentItemIndexRef.current = currentItemIndex
+
+  useEffect(() => {
+    navigation.setOptions({ headerLeft: () => null })
   }, [navigation])
 
   useFocusEffect(
-    React.useCallback(() => {
-      loadChordList()
-    }, [chordListId])
+    React.useCallback(() => { loadChordList() }, [chordListId])
   )
 
+  useEffect(() => {
+    const u1 = onTableChange('chord_lists',    () => loadChordList())
+    const u2 = onTableChange('songs',          () => loadChordList())
+    const u3 = onTableChange('playlists',      () => loadChordList())
+    const u4 = onTableChange('playlist_items', () => loadChordList())
+    return () => { u1(); u2(); u3(); u4() }
+  }, [chordListId])
+
+  useEffect(() => { stopAutoScroll() }, [selectedSongId, viewMode, transposeToKey])
+
+  // ── Auto-scroll ────────────────────────────────────────────────────────
+  const startAutoScroll = useCallback(() => {
+    if (autoScrollRef.current) clearInterval(autoScrollRef.current)
+    setIsAutoScrolling(true)
+    Animated.timing(scrollFadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start()
+    const speed = SCROLL_SPEEDS[scrollSpeedIndex].value
+    const interval = 16
+    const pixelsPerTick = (speed * interval) / 1000
+    autoScrollRef.current = setInterval(() => {
+      const maxScroll = contentHeightRef.current - scrollViewHeightRef.current
+      if (scrollYRef.current >= maxScroll - 1) {
+        // ── AUTO-ADVANCE to next song when scroll reaches bottom ──
+        const items   = browseItemsRef.current
+        const curIdx  = currentItemIndexRef.current
+        if (curIdx < items.length - 1) {
+          stopAutoScroll()
+          const newIndex = curIdx + 1
+          setCurrentItemIndex(newIndex)
+          if (items[newIndex].songId) setSelectedSongId(items[newIndex].songId!)
+          // Brief delay then restart scroll for the new song
+          setTimeout(() => startAutoScroll(), 1200)
+        } else {
+          stopAutoScroll()
+        }
+        return
+      }
+      scrollYRef.current = Math.min(scrollYRef.current + pixelsPerTick, maxScroll)
+      contentScrollRef.current?.scrollTo({ y: scrollYRef.current, animated: false })
+    }, interval)
+  }, [scrollSpeedIndex])
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRef.current) { clearInterval(autoScrollRef.current); autoScrollRef.current = null }
+    setIsAutoScrolling(false)
+    Animated.timing(scrollFadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start()
+  }, [])
+
+  const toggleAutoScroll = () => {
+    if (isAutoScrolling) stopAutoScroll()
+    else startAutoScroll()
+  }
+
+  useEffect(() => { if (isAutoScrolling) startAutoScroll() }, [scrollSpeedIndex])
+  useEffect(() => { return () => { if (autoScrollRef.current) clearInterval(autoScrollRef.current) } }, [])
+
+  // ── Load data ──────────────────────────────────────────────────────────
   const loadChordList = async () => {
     try {
       setLoading(true)
-            const user = await getCurrentUser()
-      if (user) {
-        setUserId(user.id)
-                const userPlaylists = await getPlaylistsByUserId(user.id)
-        setPlaylists(userPlaylists)
-      }
-      
-            const listRow: any = await queryOne('SELECT * FROM chord_lists WHERE id = ?', [chordListId])
-      if (listRow) {
-        setChordList({
-          id: listRow.id,
-          title: listRow.title,
-          artistId: listRow.artist_id,
-          userId: listRow.user_id,
-          isPrivate: Boolean(listRow.is_private),
-          createdAt: listRow.created_at,
-          updatedAt: listRow.updated_at,
-          synced: Boolean(listRow._synced),
-                  })
-        setArtistId(listRow.artist_id)
-      }
+      const user = await getCurrentUser()
+      if (user) setPlaylists(await getPlaylistsByUserId(user.id))
 
-            const songRows: any[] = await query('SELECT * FROM songs WHERE chord_list_id = ? ORDER BY title', [chordListId])
-            const mapped: Song[] = (songRows || []).map(row => ({
+      const clRecord = await getChordListById(chordListId)
+      if (clRecord) { setChordList(clRecord); setArtistId(clRecord.artistId) }
+
+      const songRows = await getSongsByChordListId(chordListId)
+      const mapped: Song[] = (songRows || []).map(row => ({
         id: row.id,
-        chordListId: row.chord_list_id,
+        chordListId: row.chordListId,
         title: row.title,
         content: row.content,
         key: row.key,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        synced: Boolean(row._synced),
-        userId: row.user_id ?? '',
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        synced: row.synced,
+        userId: row.userId ?? '',
+        youtubeUrl: row.youtubeUrl,
       }))
       setSongs(mapped)
 
-            const initialItems: BrowseItem[] = mapped.map(song => ({
-        id: song.id,
-        title: song.title,
-        type: 'song',
-        songId: song.id,
-        chordListId: song.chordListId,
+      const initialItems: BrowseItem[] = mapped.map(song => ({
+        id: song.id, title: song.title, type: 'song',
+        songId: song.id, chordListId: song.chordListId,
       }))
       setBrowseItems(initialItems)
-
       if (mapped.length > 0) {
         setSelectedSongId(mapped[0].id)
         setCurrentItemIndex(0)
@@ -135,87 +314,170 @@ const [showTransposePicker, setShowTransposePicker] = useState(false)
   const loadArtistSongs = async () => {
     if (!artistId) return
     try {
-      const songRows: any[] = await query(
-        `SELECT s.* FROM songs s
-         JOIN chord_lists cl ON s.chord_list_id = cl.id
-         WHERE cl.artist_id = ? AND cl.is_private = 0
-         ORDER BY s.title`,
-        [artistId]
-      )
-            const mapped: Song[] = (songRows || []).map(row => ({
-        id: row.id,
-        chordListId: row.chord_list_id,
-        title: row.title,
-        content: row.content,
-        key: row.key,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        synced: Boolean(row._synced),
-        userId: row.user_id ?? '',
-      }))
-
-      const items: BrowseItem[] = mapped.map(song => ({
-        id: song.id,
-        title: song.title,
-        type: 'song',
-        songId: song.id,
-        chordListId: song.chordListId,
-      }))
-
-      setBrowseItems(items)
-      if (items.length > 0) {
-        setCurrentItemIndex(0)
-        setSelectedSongId(items[0].id)
+      const { data: clRows } = await supabase
+        .from('chord_lists').select('id').eq('artist_id', artistId)
+        .or('is_private.eq.0,is_private.is.null')
+      const clIds = (clRows || []).map(r => r.id)
+      let songRows: any[] = []
+      if (clIds.length > 0) {
+        const { data } = await supabase
+          .from('songs').select('*').in('chord_list_id', clIds).order('title')
+        songRows = data || []
       }
-    } catch (err) {
-            Alert.alert('Error', 'Failed to load artist songs')
-    }
+      const mapped: Song[] = (songRows || []).map(row => ({
+        id: row.id, chordListId: row.chord_list_id, title: row.title,
+        content: row.content, key: row.key,
+        createdAt: row.created_at, updatedAt: row.updated_at,
+        synced: Boolean(row._synced), userId: row.user_id ?? '',
+        youtubeUrl: row.youtube_url,
+      }))
+      if (mapped.length === 0) {
+        const localRows: any[] = await query(
+          `SELECT s.* FROM songs s JOIN chord_lists cl ON s.chord_list_id = cl.id
+           WHERE cl.artist_id = ? AND cl.is_private = 0 ORDER BY s.title`,
+          [artistId]
+        )
+        const fb: Song[] = (localRows || []).map(row => ({
+          id: row.id, chordListId: row.chord_list_id, title: row.title,
+          content: row.content, key: row.key, createdAt: row.created_at,
+          updatedAt: row.updated_at, synced: Boolean(row._synced),
+          userId: row.user_id ?? '', youtubeUrl: row.youtube_url,
+        }))
+        const fbItems: BrowseItem[] = fb.map(song => ({
+          id: song.id, title: song.title, type: 'song',
+          songId: song.id, chordListId: song.chordListId,
+        }))
+        setBrowseItems(fbItems)
+        if (fbItems.length > 0) { setCurrentItemIndex(0); setSelectedSongId(fbItems[0].id!) }
+        return
+      }
+      const items: BrowseItem[] = mapped.map(song => ({
+        id: song.id, title: song.title, type: 'song',
+        songId: song.id, chordListId: song.chordListId,
+      }))
+      setBrowseItems(items)
+      if (items.length > 0) { setCurrentItemIndex(0); setSelectedSongId(items[0].id!) }
+    } catch { Alert.alert('Error', 'Failed to load artist songs') }
+  }
+
+  const resolveTitle = async (id: string, type: 'song' | 'chord_list'): Promise<string> => {
+    const table = type === 'song' ? 'songs' : 'chord_lists'
+    const fallback = type === 'song' ? `Song ${id.substring(0, 8)}` : `Chord List ${id.substring(0, 8)}`
+    try {
+      const rows: any[] = await query(`SELECT title FROM ${table} WHERE id = ?`, [id])
+      if (rows[0]?.title) return rows[0].title
+    } catch {}
+    try {
+      const { data } = await supabase.from(table).select('title').eq('id', id).single()
+      if (data?.title) return data.title
+    } catch {}
+    return fallback
+  }
+
+  const fetchSongForViewer = async (songId: string): Promise<Song | null> => {
+    try {
+      const rows: any[] = await query('SELECT * FROM songs WHERE id = ?', [songId])
+      if (rows[0]) {
+        const r = rows[0]
+        return {
+          id: r.id,
+          chordListId: r.chord_list_id ?? r.chordListId,
+          title: r.title,
+          content: r.content,
+          key: r.key,
+          createdAt: r.created_at ?? r.createdAt,
+          updatedAt: r.updated_at ?? r.updatedAt,
+          synced: Boolean(r._synced ?? r.synced),
+          userId: r.user_id ?? r.userId ?? '',
+          youtubeUrl: r.youtube_url ?? r.youtubeUrl,
+        }
+      }
+    } catch {}
+    try {
+      const { data } = await supabase.from('songs').select('*').eq('id', songId).single()
+      if (data) {
+        return {
+          id: data.id,
+          chordListId: data.chord_list_id,
+          title: data.title,
+          content: data.content,
+          key: data.key,
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+          synced: Boolean(data._synced),
+          userId: data.user_id ?? '',
+          youtubeUrl: data.youtube_url,
+        }
+      }
+    } catch {}
+    return null
   }
 
   const loadPlaylistSongs = async (playlistId: string) => {
     try {
       const playlistItems = await getPlaylistItems(playlistId)
-            const items: BrowseItem[] = playlistItems.map((item, idx) => ({
+
+      const [resolvedTitles, fetchedSongs] = await Promise.all([
+        Promise.all(
+          playlistItems.map(item =>
+            item.songId
+              ? resolveTitle(item.songId, 'song')
+              : item.chordListId
+              ? resolveTitle(item.chordListId, 'chord_list')
+              : Promise.resolve('Unknown')
+          )
+        ),
+        Promise.all(
+          playlistItems.map(item =>
+            item.songId ? fetchSongForViewer(item.songId) : Promise.resolve(null)
+          )
+        ),
+      ])
+
+      const items: BrowseItem[] = playlistItems.map((item, i) => ({
         id: item.id,
-        title: item.songId
-? `Song ${item.songId.substring(0, 8)}`
-: `Chord List ${item.chordListId?.substring(0, 8)}`,
+        title: resolvedTitles[i],
         type: item.songId ? 'song' : 'chord_list',
         songId: item.songId,
         chordListId: item.chordListId,
         position: item.position,
       }))
 
+      const newSongs = fetchedSongs.filter(Boolean) as Song[]
+      if (newSongs.length > 0) {
+        setSongs(prev => {
+          const existingIds = new Set(prev.map(s => s.id))
+          const toAdd = newSongs.filter(s => !existingIds.has(s.id))
+          return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+        })
+      }
+
       setBrowseItems(items)
       setSelectedPlaylistId(playlistId)
       if (items.length > 0) {
         setCurrentItemIndex(0)
-        if (items[0].songId)           setSelectedSongId(items[0].songId)
-              }
+        if (items[0].songId) {
+          setSelectedSongId(items[0].songId)
+          const firstSong = fetchedSongs[0]
+          if (firstSong) setTransposeToKey(firstSong.key || 'C')
+        }
+      }
       setShowPlaylistModal(false)
-    } catch (err) {
-            Alert.alert('Error', 'Failed to load playlist')
-    }
+    } catch { Alert.alert('Error', 'Failed to load playlist') }
   }
 
   const handleBrowseModeChange = (mode: BrowseMode) => {
     setBrowseMode(mode)
-        if (mode === 'single') {
-      const initialItems: BrowseItem[] = songs.map(song => ({
-        id: song.id,
-        title: song.title,
-        type: 'song',
-        songId: song.id,
-        chordListId: song.chordListId,
+    if (mode === 'single') {
+      const items: BrowseItem[] = songs.map(s => ({
+        id: s.id, title: s.title, type: 'song', songId: s.id, chordListId: s.chordListId,
       }))
-      setBrowseItems(initialItems)
-      if (initialItems.length > 0) {
-        setCurrentItemIndex(0)
-        setSelectedSongId(initialItems[0].id)
-      }
+      setBrowseItems(items)
+      if (items.length > 0) { setCurrentItemIndex(0); setSelectedSongId(items[0].id) }
     } else if (mode === 'artist') {
       loadArtistSongs()
     } else {
+      setShowOptionsModal(false)
       setShowPlaylistModal(true)
     }
   }
@@ -224,117 +486,171 @@ const [showTransposePicker, setShowTransposePicker] = useState(false)
     if (currentItemIndex > 0) {
       const newIndex = currentItemIndex - 1
       setCurrentItemIndex(newIndex)
-      if (browseItems[newIndex].songId)         setSelectedSongId(browseItems[newIndex].songId!)
-          }
+      if (browseItems[newIndex].songId) setSelectedSongId(browseItems[newIndex].songId!)
+    }
   }
-
   const handleNextItem = () => {
     if (currentItemIndex < browseItems.length - 1) {
       const newIndex = currentItemIndex + 1
       setCurrentItemIndex(newIndex)
-      if (browseItems[newIndex].songId)         setSelectedSongId(browseItems[newIndex].songId!)
-          }
+      if (browseItems[newIndex].songId) setSelectedSongId(browseItems[newIndex].songId!)
+    }
   }
 
   const handleMoveUp = async () => {
     if (currentItemIndex === 0 || !selectedPlaylistId) return
-        try {
-      const currentItem = browseItems[currentItemIndex]
-      const previousItem = browseItems[currentItemIndex - 1]
-            const tempPosition = currentItem.position || currentItemIndex
-      await updatePlaylistItemPosition(currentItem.id, previousItem.position || currentItemIndex - 1)
-      await updatePlaylistItemPosition(previousItem.id, tempPosition)
-            await loadPlaylistSongs(selectedPlaylistId)
+    try {
+      const cur  = browseItems[currentItemIndex]
+      const prev = browseItems[currentItemIndex - 1]
+      await updatePlaylistItemPosition(cur.id, prev.position ?? currentItemIndex - 1)
+      await updatePlaylistItemPosition(prev.id, cur.position ?? currentItemIndex)
+      await loadPlaylistSongs(selectedPlaylistId)
       setCurrentItemIndex(currentItemIndex - 1)
-    } catch (err) {
-            Alert.alert('Error', 'Failed to reorder items')
-    }
+    } catch { Alert.alert('Error', 'Failed to reorder items') }
   }
 
   const handleMoveDown = async () => {
     if (currentItemIndex >= browseItems.length - 1 || !selectedPlaylistId) return
-        try {
-      const currentItem = browseItems[currentItemIndex]
-      const nextItem = browseItems[currentItemIndex + 1]
-            const tempPosition = currentItem.position || currentItemIndex
-      await updatePlaylistItemPosition(currentItem.id, nextItem.position || currentItemIndex + 1)
-      await updatePlaylistItemPosition(nextItem.id, tempPosition)
-            await loadPlaylistSongs(selectedPlaylistId)
+    try {
+      const cur  = browseItems[currentItemIndex]
+      const next = browseItems[currentItemIndex + 1]
+      await updatePlaylistItemPosition(cur.id, next.position ?? currentItemIndex + 1)
+      await updatePlaylistItemPosition(next.id, cur.position ?? currentItemIndex)
+      await loadPlaylistSongs(selectedPlaylistId)
       setCurrentItemIndex(currentItemIndex + 1)
-    } catch (err) {
-            Alert.alert('Error', 'Failed to reorder items')
-    }
-  }
-
-  const selectedSong = songs.find((s) => s.id === selectedSongId)
-  const currentBrowseItem = browseItems[currentItemIndex]
-
-    const getDisplayContent = () => {
-    if (!selectedSong) return ''
-    let content = selectedSong.content
-    const originalKey = selectedSong.key || 'C'
-        const semitones = getTransposeDistance(originalKey, transposeToKey)
-        if (semitones !== 0)       content = transposeText(content, semitones)
-    
-    if (viewMode === 'lyrics') {
-      return content.replace(/\[([^\]]+)\]/g, '').trim()
-    } else if (viewMode === 'chords') {
-      const chords: string[] = []
-      const chordMatches = content.matchAll(/\[([^\]]+)\]/g)
-      for (const match of chordMatches)         chords.push(match[1])
-            return `Chords used:\n${chords.join('  ·  ')}`
-    } else {
-      return content
-    }
+    } catch { Alert.alert('Error', 'Failed to reorder items') }
   }
 
   const handleEditSong = () => {
     if (!selectedSong) return
-    setEditingContent(selectedSong.content)
-    setEditingModalVisible(true)
-  }
-
-  const handleSaveEdit = async () => {
-    if (!selectedSong) return
-    try {
-      await execute(        'UPDATE songs SET content = ?, updated_at = ? WHERE id = ?',         [editingContent, Date.now(), selectedSong.id]      )
-      setEditingModalVisible(false)
-      loadChordList()
-    } catch (err) {
-      Alert.alert('Error', 'Failed to save song')
-    }
+    setShowOptionsModal(false)
+    navigation.navigate('SongEditor', {
+      songId: selectedSong.id,
+      chordListId: selectedSong.chordListId,
+    })
   }
 
   const handleDeleteSong = async () => {
     if (!selectedSong) return
+    setShowOptionsModal(false)
     Alert.alert('Delete Song', 'Are you sure you want to delete this song?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
-style: 'destructive',
+        style: 'destructive',
         onPress: async () => {
           try {
             await execute('DELETE FROM songs WHERE id = ?', [selectedSong.id])
             navigation.navigate('ChordListsTab', { screen: 'ChordListsHome' })
-          } catch (err) {
-            Alert.alert('Error', 'Failed to delete song')
-          }
+          } catch { Alert.alert('Error', 'Failed to delete song') }
         },
       },
     ])
   }
 
+  const selectedSong      = songs.find(s => s.id === selectedSongId) ?? songs[0] ?? null
+  const currentBrowseItem = browseItems[currentItemIndex]
+
+  const displayContent = useMemo(() => {
+    if (!selectedSong) return ''
+    let content = selectedSong.content || ''
+    const semitones = getTransposeDistance(selectedSong.key || 'C', transposeToKey)
+    if (semitones !== 0) content = transposeText(content, semitones)
+
+    if (viewMode === 'lyrics') {
+      // Remove all [chord] tokens entirely; keep lyric lines
+      return content.replace(/\[([^\]]+)\]/g, '').trim()
+    }
+
+    if (viewMode === 'chords') {
+      // FIXED: only lines with [chord] brackets are kept;
+      // each kept line shows only the chord names (no lyric text, no brackets)
+      return extractChordsOnlyFromContent(content)
+    }
+
+    // 'both': keep everything, strip [] but leave chord text inline
+    return content
+  }, [selectedSong, transposeToKey, viewMode])
+
+  /**
+   * For 'chords' mode we display the content directly (already stripped).
+   * For 'both' mode we strip [] inline while rendering.
+   * For 'lyrics' mode content is already clean.
+   */
+  const renderSectionContent = (content: string): string => {
+    if (viewMode === 'both') return renderChordContent(content)
+    // 'lyrics' and 'chords' content is already clean from displayContent/parseSongSections
+    return content
+  }
+
+  const parsedSections = useMemo(() => parseSongSections(displayContent), [displayContent])
+
+  useEffect(() => {
+    sectionOffsetsRef.current = {}
+    sectionPillOffsetsRef.current = {}
+    setActiveSectionId(parsedSections[0]?.id ?? null)
+    contentScrollRef.current?.scrollTo({ y: 0, animated: false })
+    scrollYRef.current = 0
+  }, [selectedSongId, viewMode, transposeToKey, parsedSections])
+
+  const scrollToSection = (sectionId: string) => {
+    setActiveSectionId(sectionId)
+    const offset = sectionOffsetsRef.current[sectionId]
+    if (typeof offset === 'number') {
+      const y = Math.max(0, offset - 12)
+      scrollYRef.current = y
+      contentScrollRef.current?.scrollTo({ y, animated: true })
+    }
+    const pillX = sectionPillOffsetsRef.current[sectionId]
+    if (typeof pillX === 'number') {
+      sectionNavScrollRef.current?.scrollTo({ x: Math.max(0, pillX - 60), animated: true })
+    }
+  }
+
+  // Update activeSectionId as user scrolls manually
+  const handleContentScroll = useCallback((e: any) => {
+    scrollYRef.current = e.nativeEvent.contentOffset.y
+    const scrollY = e.nativeEvent.contentOffset.y
+
+    // Find which section is currently at the top of the viewport
+    const offsets = sectionOffsetsRef.current
+    const sections = parsedSections
+    let activeId = sections[0]?.id ?? null
+
+    for (const section of sections) {
+      const sectionTop = offsets[section.id]
+      if (typeof sectionTop === 'number' && scrollY >= sectionTop - 40) {
+        activeId = section.id
+      }
+    }
+
+    if (activeId !== activeSectionId) {
+      setActiveSectionId(activeId)
+      // Scroll the section pill into view
+      if (activeId) {
+        const pillX = sectionPillOffsetsRef.current[activeId]
+        if (typeof pillX === 'number') {
+          sectionNavScrollRef.current?.scrollTo({ x: Math.max(0, pillX - 60), animated: true })
+        }
+      }
+    }
+  }, [parsedSections, activeSectionId])
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#0A0A0A" />
-<Text style={styles.loadingText}>Loading…</Text>
+        <Text style={styles.loadingText}>Loading…</Text>
       </View>
     )
   }
 
-  const isFirst = currentItemIndex === 0
-  const isLast = currentItemIndex >= browseItems.length - 1
+  const isFirst     = currentItemIndex === 0
+  const isLast      = currentItemIndex >= browseItems.length - 1
+  const hasSections = parsedSections.length > 1
+  const youtubeUrl  = selectedSong?.youtubeUrl?.trim() || ''
+  const youtubeId   = extractYouTubeId(youtubeUrl)
+  const hasVideo    = Boolean(youtubeId)
 
   return (
     <View style={styles.container}>
@@ -342,222 +658,387 @@ style: 'destructive',
 
       {/* ─── HEADER ─── */}
       <View style={styles.header}>
-<TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => navigation.goBack()}
-          activeOpacity={0.7}
-        >
+        <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={16} color="#0A0A0A" />
         </TouchableOpacity>
-
         <View style={styles.headerMeta}>
           <Text style={styles.headerEyebrow}>CHORD LIST</Text>
           <Text style={styles.headerTitle} numberOfLines={1}>
-{chordList?.title || 'Chord List'}
-</Text>
-</View>
-
-          {browseItems.length > 1 && (
-<View style={styles.headerBadge}>
+            {chordList?.title || 'Chord List'}
+          </Text>
+        </View>
+        {browseItems.length > 1 && (
+          <View style={styles.headerBadge}>
             <Text style={styles.headerBadgeText}>
               {currentItemIndex + 1}/{browseItems.length}
             </Text>
-</View>
-          )}
-              </View>
-
-      {/* ─── BROWSE MODE TABS ─── */}
-      <View style={styles.browseModeBar}>
-        {(['single', 'artist', 'playlist'] as const).map((mode) => (
-          <TouchableOpacity
-            key={mode}
-            style={[styles.browseModeTab, browseMode === mode && styles.browseModeTabActive]}
-            onPress={() => handleBrowseModeChange(mode)}
-          activeOpacity={0.75}
-          >
-            <Ionicons
-              name={
-                mode === 'single' ? 'musical-note' :
-                mode === 'artist' ? 'person' : 'list'
-              }
-              size={13}
-              color={browseMode === mode ? '#FAFAFA' : '#ADADAD'}
-              style={{ marginRight: 5 }}
-            />
-            <Text style={[styles.browseModeText, browseMode === mode && styles.browseModeTextActive]}>
-              {mode === 'single' ? 'Single' : mode === 'artist' ? 'Artist' : 'Playlist'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+          </View>
+        )}
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={() => setShowOptionsModal(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="ellipsis-horizontal" size={16} color="#0A0A0A" />
+        </TouchableOpacity>
       </View>
 
-      {/* ─── NAVIGATION CONTROLS ─── */}
+      {/* ─── NAV CONTROLS ─── */}
       {browseItems.length > 1 && (
         <View style={styles.navBar}>
           <TouchableOpacity
             style={[styles.navArrow, isFirst && styles.navArrowDisabled]}
-            onPress={handlePreviousItem}
-            disabled={isFirst}
-            activeOpacity={0.7}
+            onPress={handlePreviousItem} disabled={isFirst} activeOpacity={0.7}
           >
             <Ionicons name="chevron-back" size={18} color={isFirst ? '#D4D4D4' : '#0A0A0A'} />
           </TouchableOpacity>
-          
           <View style={styles.navCenter}>
-            <Text style={styles.navTitle} numberOfLines={1}>
-              {currentBrowseItem?.title}
-            </Text>
+            <Text style={styles.navTitle} numberOfLines={1}>{currentBrowseItem?.title}</Text>
             <View style={styles.navDots}>
-              {browseItems.slice(
-                Math.max(0, currentItemIndex - 2),
-                Math.min(browseItems.length, currentItemIndex + 3)
-              ).map((_, i) => {
-                const realIndex = Math.max(0, currentItemIndex - 2) + i
-                return (
-                  <View
-                    key={realIndex}
-                    style={[
-                      styles.navDot,
-                      realIndex === currentItemIndex && styles.navDotActive,
-                    ]}
-                  />
-                )
-              })}
+              {browseItems
+                .slice(Math.max(0, currentItemIndex - 2), Math.min(browseItems.length, currentItemIndex + 3))
+                .map((_, i) => {
+                  const realIndex = Math.max(0, currentItemIndex - 2) + i
+                  return (
+                    <View
+                      key={realIndex}
+                      style={[styles.navDot, realIndex === currentItemIndex && styles.navDotActive]}
+                    />
+                  )
+                })}
             </View>
           </View>
-          
           <TouchableOpacity
             style={[styles.navArrow, isLast && styles.navArrowDisabled]}
-            onPress={handleNextItem}
-            disabled={isLast}
-            activeOpacity={0.7}
+            onPress={handleNextItem} disabled={isLast} activeOpacity={0.7}
           >
             <Ionicons name="chevron-forward" size={18} color={isLast ? '#D4D4D4' : '#0A0A0A'} />
           </TouchableOpacity>
         </View>
       )}
 
-      {/* ─── PLAYLIST REORDER CONTROLS ─── */}
-      {browseMode === 'playlist' && browseItems.length > 1 && (
-        <View style={styles.reorderBar}>
-          <TouchableOpacity
-            style={[styles.reorderBtn, isFirst && styles.reorderBtnDisabled]}
-            onPress={handleMoveUp}
-            disabled={isFirst}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-up" size={14} color={isFirst ? '#C4C4C4' : '#0A0A0A'} />
-            <Text style={[styles.reorderBtnText, isFirst && styles.reorderBtnTextDisabled]}>Move Up</Text>
-          </TouchableOpacity>
-
-          <View style={styles.reorderDivider} />
-          
-          <TouchableOpacity
-            style={[styles.reorderBtn, isLast && styles.reorderBtnDisabled]}
-            onPress={handleMoveDown}
-            disabled={isLast}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-down" size={14} color={isLast ? '#C4C4C4' : '#0A0A0A'} />
-            <Text style={[styles.reorderBtnText, isLast && styles.reorderBtnTextDisabled]}>Move Down</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-{/* ─── CONTROLS ROW: View Mode + Transpose ─── */}
-      <View style={styles.controlsRow}>
-      {/* View Mode Pills */}
-      <View style={styles.viewModePills}>
-        {(['lyrics', 'chords', 'both'] as const).map((mode) => (
-          <TouchableOpacity
-            key={mode}
-            style={[styles.pill, viewMode === mode && styles.pillActive]}
-            onPress={() => setViewMode(mode)}
-activeOpacity={0.75}
-          >
-            <Text               style={[                styles.pillText,                 viewMode === mode && styles.pillTextActive]}            >
-              {mode === 'lyrics' ? 'Lyrics' : mode === 'chords' ? 'Chords' : 'Both'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Transpose Chip */}
-      <TouchableOpacity
-style={styles.transposeChip}
-          onPress={() => setShowTransposePicker(true)}
-          activeOpacity={0.75}
-        >
-          <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
-        <Text style={styles.transposeChipText}>
-{selectedSong?.key || 'C'} → {transposeToKey}
-        </Text>
-        <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
-        </TouchableOpacity>
-      </View>
-
-      {/* ─── SONG SELECTOR (when multiple songs in single mode) ─── */}
-      {songs.length > 1 && browseMode === 'single' && (
-        <View style={styles.songPickerWrap}>
-<Ionicons name="musical-note" size={13} color="#B0B0B0" style={{ marginLeft: 14 }} />
-          <Picker
-style={styles.songPicker}
-            selectedValue={selectedSongId}
-            onValueChange={(value) => {
-setSelectedSongId(value)
-              const song = songs.find(s => s.id === value)
-              if (song) setTransposeToKey(song.key || 'C')
-            }}
-            dropdownIconColor="#ADADAD"
-          >
-            {songs.map((song) => (
-              <Picker.Item key={song.id} label={song.title} value={song.id} />
-            ))}
-          </Picker>
-        </View>
-      )}
-
-      {/* ─── CONTENT AREA ─── */}
-      <ScrollView
-style={styles.contentArea}
-        contentContainerStyle={styles.contentInner}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Song title */}
-        {selectedSong && (
-          <View style={styles.songHeader}>
-            <Text style={styles.songTitle}>{selectedSong.title}</Text>
-            <View style={styles.keyBadge}>
-              <Text style={styles.keyBadgeText}>Key of {transposeToKey}</Text>
-            </View>
-          </View>
-        )}
-
-        <Text style={styles.content}>{getDisplayContent()}</Text>
-      </ScrollView>
-
-      {/* ─── BOTTOM ACTION BAR ─── */}
-      {canManageChords && (
-      <View style={styles.actionBar}>
-        <TouchableOpacity style={styles.actionBtn} onPress={handleEditSong} activeOpacity={0.75}>
-            <Ionicons name="pencil-outline" size={16} color="#0A0A0A" />
-          <Text style={styles.actionBtnText}>Edit</Text>
-        </TouchableOpacity>
-
-          <View style={styles.actionDivider} />
-
+      {/* ─── SHEET / VIDEO TABS ─── */}
+      <View style={styles.songTabBar}>
         <TouchableOpacity
-style={[styles.actionBtn, styles.actionBtnDestructive]}
-onPress={handleDeleteSong}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="trash-outline" size={16} color="#888" />
-          <Text style={[styles.actionBtnText, styles.actionBtnTextDestructive]}>Delete</Text>
+          style={[styles.songTab, activeSongTab === 'sheet' && styles.songTabActive]}
+          onPress={() => setActiveSongTab('sheet')} activeOpacity={0.75}
+        >
+          <Ionicons name="document-text-outline" size={14}
+            color={activeSongTab === 'sheet' ? '#0A0A0A' : '#ADADAD'} style={{ marginRight: 5 }} />
+          <Text style={[styles.songTabText, activeSongTab === 'sheet' && styles.songTabTextActive]}>
+            Sheet
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.songTab, activeSongTab === 'video' && styles.songTabActive, !hasVideo && styles.songTabDisabled]}
+          onPress={() => hasVideo && setActiveSongTab('video')}
+          activeOpacity={hasVideo ? 0.75 : 1}
+        >
+          <Ionicons name="logo-youtube" size={14}
+            color={activeSongTab === 'video' ? '#FF0000' : '#ADADAD'} style={{ marginRight: 5 }} />
+          <Text style={[styles.songTabText, activeSongTab === 'video' && styles.songTabTextActive, !hasVideo && styles.songTabTextDisabled]}>
+            Video{!hasVideo ? ' (none)' : ''}
+          </Text>
         </TouchableOpacity>
       </View>
-       )}
-      
-      {/* ─── TRANSPOSE PICKER MODAL ─── */}
+
+      {/* ─── VIDEO TAB ─── */}
+      {activeSongTab === 'video' && hasVideo && (
+        <View style={styles.videoContainer}>
+          <YoutubePlayer height={220} videoId={youtubeId!} play={false} />
+          <View style={styles.videoMeta}>
+            <Text style={styles.videoSongTitle} numberOfLines={1}>{selectedSong?.title}</Text>
+            <TouchableOpacity
+              style={styles.openYoutubeBtn}
+              onPress={() => {
+                const url = /^https?:\/\//i.test(youtubeUrl) ? youtubeUrl : `https://${youtubeUrl}`
+                Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open YouTube'))
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="logo-youtube" size={14} color="#FF0000" />
+              <Text style={styles.openYoutubeBtnText}>Open in YouTube</Text>
+              <Ionicons name="open-outline" size={13} color="#888" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ─── SHEET TAB ─── */}
+      {activeSongTab === 'sheet' && (
+        <>
+          {/* Controls Row */}
+          <View style={styles.controlsRow}>
+            <View style={styles.viewModePills}>
+              {(['lyrics', 'chords', 'both'] as const).map(mode => (
+                <TouchableOpacity
+                  key={mode}
+                  style={[styles.pill, viewMode === mode && styles.pillActive]}
+                  onPress={() => setViewMode(mode)} activeOpacity={0.75}
+                >
+                  <Text style={[styles.pillText, viewMode === mode && styles.pillTextActive]}>
+                    {mode === 'lyrics' ? 'Lyrics' : mode === 'chords' ? 'Chords' : 'Both'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={styles.transposeChip}
+              onPress={() => setShowTransposePicker(true)} activeOpacity={0.75}
+            >
+              <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
+              <Text style={styles.transposeChipText}>
+                {selectedSong?.key || 'C'}{' → '}{transposeToKey}
+              </Text>
+              <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.scrollIconBtn, isAutoScrolling && styles.scrollIconBtnActive]}
+              onPress={toggleAutoScroll}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name={isAutoScrolling ? 'pause' : 'play'}
+                size={14}
+                color={isAutoScrolling ? '#FAFAFA' : '#0A0A0A'}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Section Navigator — shown whenever there are multiple sections */}
+          {hasSections && selectedSong && (
+            <View style={styles.sectionNavBar}>
+              <ScrollView
+                ref={sectionNavScrollRef}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.sectionNavScrollContent}
+              >
+                {parsedSections.map((section, idx) => {
+                  const isActive = section.id === activeSectionId
+                  return (
+                    <TouchableOpacity
+                      key={section.id}
+                      style={[styles.sectionNavPill, isActive && styles.sectionNavPillActive]}
+                      onPress={() => scrollToSection(section.id)}
+                      activeOpacity={0.7}
+                      onLayout={e => {
+                        sectionPillOffsetsRef.current[section.id] = e.nativeEvent.layout.x
+                      }}
+                    >
+                      <View style={[styles.sectionNavIndex, isActive && styles.sectionNavIndexActive]}>
+                        <Text style={[styles.sectionNavIndexText, isActive && styles.sectionNavIndexTextActive]}>
+                          {idx + 1}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[styles.sectionNavPillText, isActive && styles.sectionNavPillTextActive]}
+                        numberOfLines={1}
+                      >
+                        {section.label}
+                      </Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Song Picker */}
+          {songs.length > 1 && browseMode === 'single' && (
+            <View style={styles.songPickerWrap}>
+              <Ionicons name="musical-note" size={13} color="#B0B0B0" style={{ marginLeft: 14 }} />
+              <Picker
+                style={styles.songPicker}
+                selectedValue={selectedSongId}
+                onValueChange={value => {
+                  setSelectedSongId(value)
+                  const song = songs.find(s => s.id === value)
+                  if (song) setTransposeToKey(song.key || 'C')
+                }}
+                dropdownIconColor="#ADADAD"
+              >
+                {songs.map(song => (
+                  <Picker.Item key={song.id} label={song.title} value={song.id} />
+                ))}
+              </Picker>
+            </View>
+          )}
+
+          {/* Content Area */}
+          <View style={{ flex: 1 }}>
+            <ScrollView
+              ref={contentScrollRef}
+              style={styles.contentArea}
+              contentContainerStyle={styles.contentInner}
+              showsVerticalScrollIndicator={false}
+              scrollEventThrottle={16}
+              onScroll={handleContentScroll}
+              onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
+              onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
+            >
+              {selectedSong && (
+                <View style={styles.songHeader}>
+                  <Text style={styles.songTitle}>{selectedSong.title}</Text>
+                  <View style={styles.keyBadge}>
+                    <Text style={styles.keyBadgeText}>Key of {transposeToKey}</Text>
+                  </View>
+                </View>
+              )}
+
+              {selectedSong ? (
+                <View style={styles.sectionList}>
+                  {parsedSections.map(section => (
+                    <View
+                      key={section.id}
+                      style={[
+                        styles.sectionBlock,
+                        activeSectionId === section.id && styles.sectionBlockActive,
+                      ]}
+                      onLayout={event => {
+                        sectionOffsetsRef.current[section.id] = event.nativeEvent.layout.y
+                      }}
+                    >
+                      <View style={styles.sectionBadge}>
+                        <Text style={styles.sectionBadgeText}>{section.label}</Text>
+                      </View>
+                      <Text style={styles.content}>
+                        {renderSectionContent(section.content)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.emptySongState}>
+                  <Ionicons name="musical-note-outline" size={24} color="#C8C8C8" />
+                  <Text style={styles.emptySongTitle}>No songs found</Text>
+                  <Text style={styles.emptySongSubtitle}>
+                    This chord list does not have any songs attached yet.
+                  </Text>
+                </View>
+              )}
+              <View style={{ height: 80 }} />
+            </ScrollView>
+
+            {/* Auto-scroll badge */}
+            <Animated.View style={[styles.scrollingBadge, { opacity: scrollFadeAnim }]}>
+              <Ionicons name="refresh" size={10} color="#FAFAFA" style={{ marginRight: 4 }} />
+              <Text style={styles.scrollingBadgeText}>
+                Scrolling · {SCROLL_SPEEDS[scrollSpeedIndex].label}
+              </Text>
+            </Animated.View>
+          </View>
+        </>
+      )}
+
+      {/* ═══ OPTIONS MODAL (⋯) ═══ */}
+      <Modal visible={showOptionsModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHead}>
+              <View style={{ width: 54 }} />
+              <Text style={styles.modalTitle}>Options</Text>
+              <TouchableOpacity onPress={() => setShowOptionsModal(false)}>
+                <Text style={styles.modalDone}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScrollBody}>
+
+              {/* Browse Mode */}
+              <View style={styles.optionSection}>
+                <Text style={styles.optionSectionLabel}>BROWSE MODE</Text>
+                <View style={styles.browseModeBar}>
+                  {(['single', 'artist', 'playlist'] as const).map(mode => (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[styles.browseModeTab, browseMode === mode && styles.browseModeTabActive]}
+                      onPress={() => handleBrowseModeChange(mode)}
+                      activeOpacity={0.75}
+                    >
+                      <Ionicons
+                        name={mode === 'single' ? 'musical-note' : mode === 'artist' ? 'person' : 'list'}
+                        size={13}
+                        color={browseMode === mode ? '#FAFAFA' : '#ADADAD'}
+                        style={{ marginRight: 5 }}
+                      />
+                      <Text style={[styles.browseModeText, browseMode === mode && styles.browseModeTextActive]}>
+                        {mode === 'single' ? 'Single' : mode === 'artist' ? 'Artist' : 'Playlist'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Auto-scroll speed */}
+              <View style={styles.optionSection}>
+                <Text style={styles.optionSectionLabel}>AUTO-SCROLL SPEED</Text>
+                <View style={styles.speedPillsRow}>
+                  {SCROLL_SPEEDS.map((s, i) => (
+                    <TouchableOpacity
+                      key={s.label}
+                      style={[styles.speedPill, scrollSpeedIndex === i && styles.speedPillActive]}
+                      onPress={() => setScrollSpeedIndex(i)} activeOpacity={0.75}
+                    >
+                      <Text style={[styles.speedPillText, scrollSpeedIndex === i && styles.speedPillTextActive]}>
+                        {s.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Reorder (playlist mode) */}
+              {browseMode === 'playlist' && browseItems.length > 1 && (
+                <View style={styles.optionSection}>
+                  <Text style={styles.optionSectionLabel}>REORDER IN PLAYLIST</Text>
+                  <View style={styles.reorderBar}>
+                    <TouchableOpacity
+                      style={[styles.reorderBtn, isFirst && styles.reorderBtnDisabled]}
+                      onPress={handleMoveUp} disabled={isFirst} activeOpacity={0.7}
+                    >
+                      <Ionicons name="arrow-up" size={14} color={isFirst ? '#C4C4C4' : '#0A0A0A'} />
+                      <Text style={[styles.reorderBtnText, isFirst && styles.reorderBtnTextDisabled]}>Move Up</Text>
+                    </TouchableOpacity>
+                    <View style={styles.reorderDivider} />
+                    <TouchableOpacity
+                      style={[styles.reorderBtn, isLast && styles.reorderBtnDisabled]}
+                      onPress={handleMoveDown} disabled={isLast} activeOpacity={0.7}
+                    >
+                      <Ionicons name="arrow-down" size={14} color={isLast ? '#C4C4C4' : '#0A0A0A'} />
+                      <Text style={[styles.reorderBtnText, isLast && styles.reorderBtnTextDisabled]}>Move Down</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* Song actions */}
+              {canManageChords && activeSongTab === 'sheet' && (
+                <View style={styles.optionSection}>
+                  <Text style={styles.optionSectionLabel}>SONG</Text>
+                  <View style={styles.songActionGroup}>
+                    <TouchableOpacity style={styles.songActionRow} onPress={handleEditSong} activeOpacity={0.7}>
+                      <Ionicons name="pencil-outline" size={16} color="#0A0A0A" />
+                      <Text style={styles.songActionText}>Edit song</Text>
+                      <Ionicons name="chevron-forward" size={14} color="#D4D4D4" />
+                    </TouchableOpacity>
+                    <View style={styles.songActionDivider} />
+                    <TouchableOpacity style={styles.songActionRow} onPress={handleDeleteSong} activeOpacity={0.7}>
+                      <Ionicons name="trash-outline" size={16} color="#E05252" />
+                      <Text style={[styles.songActionText, { color: '#E05252' }]}>Delete song</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              <View style={{ height: 20 }} />
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── TRANSPOSE MODAL ─── */}
       <Modal visible={showTransposePicker} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
@@ -571,22 +1052,17 @@ onPress={handleDeleteSong}
                 <Text style={styles.modalDone}>Done</Text>
               </TouchableOpacity>
             </View>
-
             <View style={styles.transposeInfo}>
               <Text style={styles.transposeInfoText}>
-                Original: <Text style={styles.transposeInfoKey}>{selectedSong?.key || 'C'}</Text>
-                {'   →   '}
-                Target: <Text style={styles.transposeInfoKey}>{transposeToKey}</Text>
+                {`Original: ${selectedSong?.key || 'C'}   →   Target: ${transposeToKey}`}
               </Text>
             </View>
-
             <View style={styles.keyGrid}>
-              {getAllKeys().map((key) => (
+              {getAllKeys().map(key => (
                 <TouchableOpacity
                   key={key}
                   style={[styles.keyCell, transposeToKey === key && styles.keyCellActive]}
-                  onPress={() => setTransposeToKey(key)}
-                  activeOpacity={0.7}
+                  onPress={() => setTransposeToKey(key)} activeOpacity={0.7}
                 >
                   <Text style={[styles.keyCellText, transposeToKey === key && styles.keyCellTextActive]}>
                     {key}
@@ -598,97 +1074,42 @@ onPress={handleDeleteSong}
         </View>
       </Modal>
 
-      {/* ─── PLAYLIST SELECTION MODAL ─── */}
+      {/* ─── PLAYLIST MODAL ─── */}
       <Modal visible={showPlaylistModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
             <View style={styles.modalHead}>
-              <TouchableOpacity
-                onPress={() => {
-                  setShowPlaylistModal(false)
-                  setBrowseMode('single')
-                }}
-              >
+              <TouchableOpacity onPress={() => { setShowPlaylistModal(false); setBrowseMode('single') }}>
                 <Text style={styles.modalCancel}>Cancel</Text>
               </TouchableOpacity>
-            <Text style={styles.modalTitle}>Select Playlist</Text>
-<View style={{ width: 54 }} />
+              <Text style={styles.modalTitle}>Select Playlist</Text>
+              <View style={{ width: 54 }} />
             </View>
-
             <ScrollView style={styles.modalScrollBody} showsVerticalScrollIndicator={false}>
               {playlists.length === 0 ? (
-<View style={styles.modalEmpty}>
+                <View style={styles.modalEmpty}>
                   <Ionicons name="musical-notes-outline" size={28} color="#D0D0D0" />
-                <Text style={styles.modalEmptyText}>No playlists yet</Text>
-</View>
+                  <Text style={styles.modalEmptyText}>No playlists yet</Text>
+                </View>
               ) : (
                 playlists.map((playlist, idx) => (
                   <TouchableOpacity
                     key={playlist.id}
-                    style={[
-                      styles.playlistOption,
-                      idx < playlists.length - 1 && styles.playlistOptionBorder,
-                    ]}
-                    onPress={() => loadPlaylistSongs(playlist.id)}
-activeOpacity={0.7}
+                    style={[styles.playlistOption, idx < playlists.length - 1 && styles.playlistOptionBorder]}
+                    onPress={() => loadPlaylistSongs(playlist.id)} activeOpacity={0.7}
                   >
-<View style={styles.playlistOptionNum}>
+                    <View style={styles.playlistOptionNum}>
                       <Text style={styles.playlistOptionNumText}>{idx + 1}</Text>
                     </View>
                     <Text style={styles.playlistOptionText}>{playlist.title}</Text>
-<Ionicons name="chevron-forward" size={15} color="#D4D4D4" />
+                    <Ionicons name="chevron-forward" size={15} color="#D4D4D4" />
                   </TouchableOpacity>
                 ))
               )}
-<View style={{ height: 20 }} />
+              <View style={{ height: 20 }} />
             </ScrollView>
-                      </View>
-        </View>
-      </Modal>
-
-      {/* ─── EDIT MODAL ─── */}
-      <Modal visible={editingModalVisible} animationType="slide">
-        <View style={styles.editModalContainer}>
-<StatusBar barStyle="dark-content" backgroundColor="#FFF" />
-          <View style={styles.editModalHeader}>
-            <TouchableOpacity
-onPress={() => setEditingModalVisible(false)}
-              style={styles.editModalHeaderBtn}
->
-              <Text style={styles.editModalCancel}>Cancel</Text>
-            </TouchableOpacity>
-            <View style={styles.editModalTitleWrap}>
-              <Text style={styles.editModalEyebrow}>EDITING</Text>
-              <Text style={styles.editModalTitle} numberOfLines={1}>
-                {selectedSong?.title}
-              </Text>
-            </View>
-            <TouchableOpacity
-onPress={handleSaveEdit}
-              style={[styles.editModalHeaderBtn, styles.editModalSaveBtn]}
->
-              <Text style={styles.editModalSave}>Save</Text>
-            </TouchableOpacity>
           </View>
-
-          <View style={styles.editFormatHint}>
-            <Ionicons name="information-circle-outline" size={13} color="#B0B0B0" />
-            <Text style={styles.editFormatHintText}>
-              Wrap chords in brackets: [Am] [G] [C]
-            </Text>
-          </View>
-
-          <TextInput
-            style={styles.editInput}
-            multiline
-            value={editingContent}
-            onChangeText={setEditingContent}
-            placeholder="[Am] Amazing grace how [G] sweet the sound..."
-            placeholderTextColor="#C8C8C8"
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
         </View>
       </Modal>
     </View>
@@ -696,553 +1117,130 @@ onPress={handleSaveEdit}
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FAFAFA',
-  },
-  loadingContainer: {
-    flex: 1,
-backgroundColor: '#FAFAFA',
-    justifyContent: 'center',
-    alignItems: 'center',
-  gap: 14,
-  },
-  loadingText: {
-    fontSize: 12,
-    letterSpacing: 1.4,
-    color: '#ADADAD',
-    textTransform: 'uppercase',
-    fontWeight: '600',
-  },
+  container: { flex: 1, backgroundColor: '#FAFAFA' },
+  loadingContainer: { flex: 1, backgroundColor: '#FAFAFA', justifyContent: 'center', alignItems: 'center', gap: 14 },
+  loadingText: { fontSize: 12, letterSpacing: 1.4, color: '#ADADAD', textTransform: 'uppercase', fontWeight: '600' },
 
-  // Header
-  header: {
-flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-    gap: 12,
-  },
-  backBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#F2F2F2',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerMeta: {
-    flex: 1,
-    gap: 2,
-  },
-  headerEyebrow: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#C0C0C0',
-letterSpacing: 2,
-  },
-  headerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0A0A0A',
-    letterSpacing: -0.4,
-  },
-  headerBadge: {
-    backgroundColor: '#0A0A0A',
-    borderRadius: 9,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  headerBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#FAFAFA',
-    letterSpacing: 0.5,
-  },
+  header: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 10 },
+  iconBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center' },
+  headerMeta: { flex: 1, gap: 2 },
+  headerEyebrow: { fontSize: 9, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2 },
+  headerTitle: { fontSize: 16, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.4 },
+  headerBadge: { backgroundColor: '#F2F2F2', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1, borderColor: '#EBEBEB' },
+  headerBadgeText: { fontSize: 11, fontWeight: '700', color: '#555', letterSpacing: 0.5 },
 
-  // Browse Mode Bar
-  browseModeBar: {
-    flexDirection: 'row',
-    backgroundColor: '#FFF',
-paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-    gap: 8,
-  },
-  browseModeTab: {
-    flex: 1,
-flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-        borderRadius: 10,
-    backgroundColor: '#F2F2F2',
-  },
-  browseModeTabActive: {
-    backgroundColor: '#0A0A0A',
-  },
-  browseModeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ADADAD',
-  },
-  browseModeTextActive: {
-    color: '#FAFAFA',
-  },
-  
-  // Navigation Bar
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-        backgroundColor: '#FFF',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-    gap: 8,
-  },
-  navArrow: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#F2F2F2',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
-  },
-  navArrowDisabled: {
-    backgroundColor: '#F8F8F8',
-    borderColor: '#F0F0F0',
-  },
-  navCenter: {
-    flex: 1,
-alignItems: 'center',
-    gap: 6,
-  },
-  navTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0A0A0A',
-    letterSpacing: -0.1,
-  },
-  navDots: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center',
-  },
-  navDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#E0E0E0',
-  },
-  navDotActive: {
-    width: 14,
-    backgroundColor: '#0A0A0A',
-  },
+  navBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8 },
+  navArrow: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#EBEBEB' },
+  navArrowDisabled: { backgroundColor: '#F8F8F8', borderColor: '#F0F0F0' },
+  navCenter: { flex: 1, alignItems: 'center', gap: 6 },
+  navTitle: { fontSize: 13, fontWeight: '700', color: '#0A0A0A', letterSpacing: -0.1 },
+  navDots: { flexDirection: 'row', gap: 4, alignItems: 'center' },
+  navDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#E0E0E0' },
+  navDotActive: { width: 14, backgroundColor: '#0A0A0A' },
 
-  // Reorder Bar
-  reorderBar: {
-    flexDirection: 'row',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-    alignItems: 'center',
-  },
-  reorderBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 9,
-    backgroundColor: '#F5F5F5',
-    gap: 6,
-  },
-  reorderBtnDisabled: {
-    opacity: 0.45,
-      },
-  reorderBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#0A0A0A',
-  },
-  reorderBtnTextDisabled: {
-    color: '#C4C4C4',
-  },
-  reorderDivider: {
-    width: 10,
-  },
+  songTabBar: { flexDirection: 'row', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8 },
+  songTab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 9, borderRadius: 10, backgroundColor: '#F2F2F2' },
+  songTabActive: { backgroundColor: '#FAFAFA', borderWidth: 1.5, borderColor: '#0A0A0A' },
+  songTabDisabled: { opacity: 0.5 },
+  songTabText: { fontSize: 13, fontWeight: '600', color: '#ADADAD' },
+  songTabTextActive: { color: '#0A0A0A' },
+  songTabTextDisabled: { color: '#CCCCCC' },
 
-  // Controls Row
-  controlsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-gap: 10,
-  },
-  viewModePills: {
-    flexDirection: 'row',
-    flex: 1,
-    backgroundColor: '#F2F2F2',
-    borderRadius: 10,
-    padding: 3,
-    gap: 2,
-  },
-  pill: {
-    flex: 1,
-    paddingVertical: 7,
-    alignItems: 'center',
-borderRadius: 8,
-  },
-  pillActive: {
-    backgroundColor: '#FFF',
-    shadowColor: '#000',
-shadowOffset: { width: 0, height: 1   },
-  shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  pillText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#ADADAD',
-  },
-  pillTextActive: {
-    color: '#0A0A0A',
-  },
-  transposeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F2F2F2',
-    borderRadius: 10,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
-  },
-  transposeChipText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#333',
-    letterSpacing: 0.1,
-  },
-  
-  // Song Picker
-  songPickerWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  backgroundColor: '#FFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-  },
-  songPicker: {
-    flex: 1,
-    color: '#0A0A0A',
-  },
+  videoContainer: { flex: 1, backgroundColor: '#0A0A0A' },
+  videoMeta: { padding: 20, gap: 12, backgroundColor: '#111' },
+  videoSongTitle: { fontSize: 18, fontWeight: '800', color: '#FAFAFA', letterSpacing: -0.4 },
+  openYoutubeBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', backgroundColor: '#1A1A1A', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  openYoutubeBtnText: { fontSize: 13, fontWeight: '600', color: '#CCC' },
 
-  // Content Area
-  contentArea: {
-    flex: 1,
-    backgroundColor: '#FAFAFA',
-  },
-  contentInner: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 40,
-  },
-  songHeader: {
-    marginBottom: 20,
-    gap: 8,
-  },
-  songTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0A0A0A',
-    letterSpacing: -0.6,
-    lineHeight: 26,
-  },
-  keyBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#0A0A0A',
-    borderRadius: 7,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  keyBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#FAFAFA',
-    letterSpacing: 0.5,
-  },
-  content: {
-    fontSize: 15,
-    lineHeight: 26,
-    color: '#2A2A2A',
-    fontFamily: 'Courier New',
-letterSpacing: 0.1,
-  },
-  
-  // Action Bar
-  actionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    borderTopWidth: 1,
-    borderTopColor: '#EBEBEB',
-paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 0,
-  },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-justifyContent: 'center',
-    paddingVertical: 11,
-    borderRadius: 12,
-    backgroundColor: '#F2F2F2',
-    gap: 7,
-  },
-  actionBtnDestructive: {
-    backgroundColor: '#F8F8F8',
-  },
-  actionBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0A0A0A',
-  },
-  actionBtnTextDestructive: {
-    color: '#999',
-  },
-  actionDivider: {
-    width: 10,
-  },
+  controlsRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8 },
+  viewModePills: { flexDirection: 'row', flex: 1, backgroundColor: '#F2F2F2', borderRadius: 10, padding: 3, gap: 2 },
+  pill: { flex: 1, paddingVertical: 7, alignItems: 'center', borderRadius: 8 },
+  pillActive: { backgroundColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3, elevation: 2 },
+  pillText: { fontSize: 12, fontWeight: '600', color: '#ADADAD' },
+  pillTextActive: { color: '#0A0A0A' },
+  transposeChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F2F2F2', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: '#EBEBEB' },
+  transposeChipText: { fontSize: 12, fontWeight: '700', color: '#333', letterSpacing: 0.1 },
+  scrollIconBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#EBEBEB' },
+  scrollIconBtnActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
 
-  // Modals shared
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#FFF',
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    paddingBottom: 36,
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#E0E0E0',
-    alignSelf: 'center',
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  modalHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  modalTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0A0A0A',
-    letterSpacing: -0.3,
-  },
-  modalCancel: {
-    fontSize: 14,
-    color: '#ADADAD',
-    fontWeight: '500',
-minWidth: 54,
-  },
-  modalDone: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0A0A0A',
-    minWidth: 54,
-    textAlign: 'right',
-  },
-  modalScrollBody: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-  },
-  modalEmpty: {
-    paddingVertical: 40,
-    alignItems: 'center',
-    gap: 10,
-  },
-  modalEmptyText: {
-    fontSize: 13,
-    color: '#C0C0C0',
-    fontWeight: '500',
-  },
+  scrollingBadge: { position: 'absolute', bottom: 14, left: 14, flexDirection: 'row', alignItems: 'center', backgroundColor: '#0A0A0A', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  scrollingBadgeText: { fontSize: 11, fontWeight: '700', color: '#FAFAFA' },
 
-  // Transpose Key Grid
-  transposeInfo: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F4F4F4',
-    alignItems: 'center',
-  },
-  transposeInfoText: {
-    fontSize: 13,
-    color: '#888',
-    fontWeight: '500',
-  },
-  transposeInfoKey: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0A0A0A',
-  },
-  keyGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 8,
-  },
-  keyCell: {
-    width: '22%',
-    paddingVertical: 13,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#F2F2F2',
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
-  },
-  keyCellActive: {
-    backgroundColor: '#0A0A0A',
-    borderColor: '#0A0A0A',
-  },
-  keyCellText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#555',
-  },
-  keyCellTextActive: {
-    color: '#FAFAFA',
-  },
+  sectionNavBar: { backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB', paddingVertical: 10 },
+  sectionNavScrollContent: { paddingHorizontal: 14, gap: 7, flexDirection: 'row', alignItems: 'center' },
+  sectionNavPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F2F2F2', borderWidth: 1, borderColor: '#EBEBEB', gap: 6 },
+  sectionNavPillActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
+  sectionNavIndex: { width: 16, height: 16, borderRadius: 8, backgroundColor: '#E0E0E0', alignItems: 'center', justifyContent: 'center' },
+  sectionNavIndexActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  sectionNavIndexText: { fontSize: 9, fontWeight: '800', color: '#888' },
+  sectionNavIndexTextActive: { color: '#FAFAFA' },
+  sectionNavPillText: { fontSize: 12, fontWeight: '700', color: '#555', maxWidth: 90 },
+  sectionNavPillTextActive: { color: '#FAFAFA' },
 
-  // Playlist options
-  playlistOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    gap: 12,
-  },
-  playlistOptionBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#F4F4F4',
-  },
-  playlistOptionNum: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    backgroundColor: '#F2F2F2',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  playlistOptionNumText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#888',
-  },
-  playlistOptionText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#0A0A0A',
-  },
-  
-  // Edit Modal
-  editModalContainer: {
-    flex: 1,
-    backgroundColor: '#FFF',
-  },
-  editModalHeader: {
-    flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-    gap: 12,
-  },
-  editModalHeaderBtn: {
-    minWidth: 60,
-  },
-  editModalSaveBtn: {
-    alignItems: 'flex-end',
-  },
-  editModalTitleWrap: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 2,
-  },
-  editModalEyebrow: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#C0C0C0',
-    letterSpacing: 2,
-  },
-  editModalTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0A0A0A',
-letterSpacing: -0.2,
-  },
-  editModalCancel: {
-    fontSize: 14,
-    color: '#ADADAD',
-    fontWeight: '500',
-  },
-  editModalSave: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0A0A0A',
-  },
-  editFormatHint: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    backgroundColor: '#F7F7F7',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  editFormatHintText: {
-    fontSize: 12,
-    color: '#B0B0B0',
-    fontWeight: '500',
-    fontFamily: 'Courier New',
-  },
-  editInput: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    fontSize: 15,
-    color: '#0A0A0A',
-    textAlignVertical: 'top',
-lineHeight: 26,
-    fontFamily: 'Courier New',
-  },
+  songPickerWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
+  songPicker: { flex: 1, color: '#0A0A0A' },
+
+  contentArea: { flex: 1, backgroundColor: '#FAFAFA' },
+  contentInner: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 40 },
+  songHeader: { marginBottom: 20, gap: 8 },
+  songTitle: { fontSize: 22, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.6, lineHeight: 26 },
+  keyBadge: { alignSelf: 'flex-start', backgroundColor: '#0A0A0A', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 4 },
+  keyBadgeText: { fontSize: 11, fontWeight: '700', color: '#FAFAFA', letterSpacing: 0.5 },
+  content: { fontSize: 15, lineHeight: 26, color: '#2A2A2A', fontFamily: 'Courier New', letterSpacing: 0.1 },
+  sectionList: { gap: 14 },
+  sectionBlock: { gap: 10, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#ECECEC' },
+  sectionBlockActive: { borderBottomColor: '#0A0A0A' },
+  sectionBadge: { alignSelf: 'flex-start', backgroundColor: '#F2F2F2', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#E8E8E8' },
+  sectionBadgeText: { fontSize: 11, fontWeight: '800', color: '#0A0A0A', letterSpacing: 0.4 },
+  emptySongState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 42, gap: 8 },
+  emptySongTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A' },
+  emptySongSubtitle: { fontSize: 12, color: '#A8A8A8', textAlign: 'center', lineHeight: 18 },
+
+  optionSection: { paddingHorizontal: 20, paddingTop: 18 },
+  optionSectionLabel: { fontSize: 10, fontWeight: '700', color: '#ADADAD', letterSpacing: 1.5, marginBottom: 10 },
+  browseModeBar: { flexDirection: 'row', gap: 8 },
+  browseModeTab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10, backgroundColor: '#F2F2F2' },
+  browseModeTabActive: { backgroundColor: '#0A0A0A' },
+  browseModeText: { fontSize: 12, fontWeight: '600', color: '#ADADAD' },
+  browseModeTextActive: { color: '#FAFAFA' },
+  speedPillsRow: { flexDirection: 'row', gap: 8 },
+  speedPill: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center', backgroundColor: '#F2F2F2', borderWidth: 1, borderColor: '#EBEBEB' },
+  speedPillActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
+  speedPillText: { fontSize: 13, fontWeight: '600', color: '#888' },
+  speedPillTextActive: { color: '#FAFAFA' },
+  reorderBar: { flexDirection: 'row', alignItems: 'center' },
+  reorderBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 9, backgroundColor: '#F5F5F5', gap: 6 },
+  reorderBtnDisabled: { opacity: 0.45 },
+  reorderBtnText: { fontSize: 13, fontWeight: '600', color: '#0A0A0A' },
+  reorderBtnTextDisabled: { color: '#C4C4C4' },
+  reorderDivider: { width: 10 },
+  songActionGroup: { borderRadius: 12, backgroundColor: '#F5F5F5', overflow: 'hidden', borderWidth: 1, borderColor: '#EBEBEB' },
+  songActionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
+  songActionText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#0A0A0A' },
+  songActionDivider: { height: 1, backgroundColor: '#EBEBEB', marginHorizontal: 16 },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingBottom: 36 },
+  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 12, marginBottom: 4 },
+  modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  modalTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
+  modalCancel: { fontSize: 14, color: '#ADADAD', fontWeight: '500', minWidth: 54 },
+  modalDone: { fontSize: 14, fontWeight: '700', color: '#0A0A0A', minWidth: 54, textAlign: 'right' },
+  modalScrollBody: { paddingHorizontal: 20, paddingTop: 8 },
+  modalEmpty: { paddingVertical: 40, alignItems: 'center', gap: 10 },
+  modalEmptyText: { fontSize: 13, color: '#C0C0C0', fontWeight: '500' },
+
+  transposeInfo: { paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F4F4F4', alignItems: 'center' },
+  transposeInfoText: { fontSize: 13, color: '#888', fontWeight: '500' },
+  keyGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, paddingVertical: 16, gap: 8 },
+  keyCell: { width: '22%', paddingVertical: 13, borderRadius: 12, alignItems: 'center', backgroundColor: '#F2F2F2', borderWidth: 1, borderColor: '#EBEBEB' },
+  keyCellActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
+  keyCellText: { fontSize: 14, fontWeight: '700', color: '#555' },
+  keyCellTextActive: { color: '#FAFAFA' },
+
+  playlistOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, gap: 12 },
+  playlistOptionBorder: { borderBottomWidth: 1, borderBottomColor: '#F4F4F4' },
+  playlistOptionNum: { width: 30, height: 30, borderRadius: 8, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center' },
+  playlistOptionNumText: { fontSize: 12, fontWeight: '800', color: '#888' },
+  playlistOptionText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#0A0A0A' },
 })

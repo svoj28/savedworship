@@ -33,7 +33,7 @@ function convertToSnakeCase(obj: any): any {
 }
 
 function toSupabaseRow(row: any) {
-  const { _synced, synced, deleted_at, ...rest } = row
+  const { _synced, synced, deleted_at, deletedAt, ...rest } = row
   return convertToSnakeCase(rest)
 }
 

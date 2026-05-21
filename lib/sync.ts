@@ -19,22 +19,47 @@ const TABLES = [
   'playlist_items'
 ]
 
+const PUBLIC_MANAGEMENT_TABLES = new Set([
+  'lineups',
+  'file_droppers',
+  'important_announcements',
+  'version_droppers',
+])
+
 interface SyncOptions {
   includeOffline?: boolean
   maxRetries?: number
   conflictResolution?: 'server-wins' | 'client-wins'
 }
 
+type TableListener = () => void
+const tableListeners: Map<string, Set<TableListener>> = new Map()
+
+export function onTableChange(table: string, fn: TableListener): () => void {
+  if (!tableListeners.has(table)) tableListeners.set(table, new Set())
+  tableListeners.get(table)!.add(fn)
+  return () => tableListeners.get(table)!.delete(fn)
+}
+
+function invalidateTable(table: string) {
+  tableListeners.get(table)?.forEach(fn => fn())
+}
+
 let isSyncRunning = false
 
+let syncQueue: Promise<void> = Promise.resolve()
+
 async function guardedSync(userId: string, since: number) {
-  if (isSyncRunning) return   // already syncing, skip
-  isSyncRunning = true
-  try {
-    await syncPullFromSupabase(userId, since)
-  } finally {
-    isSyncRunning = false
-  }
+  syncQueue = syncQueue.then(async () => {
+    if (isSyncRunning) return
+    isSyncRunning = true
+    try {
+      await syncPullFromSupabase(userId, since)
+    } finally {
+      isSyncRunning = false
+    }
+  })
+  await syncQueue
 }
 
 interface SyncStatus {
@@ -92,6 +117,145 @@ function toSupabasePayload(record: any) {
   return rest
 }
 
+function dedupeRowsById(rows: any[]) {
+  const seen = new Set<string>()
+  return rows.filter(row => {
+    if (!row?.id || seen.has(row.id)) return false
+    seen.add(row.id)
+    return true
+  })
+}
+
+async function upsertPulledRows(tableName: string, serverRecords: any[]) {
+  if (!serverRecords.length) return
+
+  for (const serverRecord of serverRecords) {
+    try {
+      const localRecord: any = await query(
+        `SELECT * FROM ${tableName} WHERE id = ?`,
+        [serverRecord.id]
+      )
+      const snakeCaseRecord = convertToSnakeCase(serverRecord)
+
+      if (localRecord && localRecord.length > 0) {
+        const localTime = localRecord[0].updated_at || 0
+        const serverTime = serverRecord.updated_at || 0
+        if (serverTime >= localTime) {
+          const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
+          await execute(
+            `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
+            [...Object.values(snakeCaseRecord), serverRecord.id]
+          )
+        }
+      } else {
+        const columns = Object.keys(snakeCaseRecord).join(', ')
+        const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+        await execute(
+          `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
+          Object.values(snakeCaseRecord)
+        )
+      }
+    } catch (err) {
+      console.error(`Error upserting ${tableName}/${serverRecord.id}:`, err)
+    }
+  }
+}
+
+async function fetchPublicChordListRefs(lastSyncTime: number = 0) {
+  let queryBuilder = supabase
+    .from('chord_lists')
+    .select('id, artist_id')
+    .or('is_private.eq.0,is_private.is.null')
+
+  if (lastSyncTime > 0) {
+    queryBuilder = queryBuilder.gt('updated_at_iso', new Date(lastSyncTime).toISOString())
+  }
+
+  const { data, error } = await queryBuilder
+
+  if (error) {
+    console.error('Failed to fetch public chord list references:', error)
+    return { chordListIds: [] as string[], artistIds: [] as string[] }
+  }
+
+  const chordListIds = [...new Set((data || []).map(row => row.id).filter(Boolean))]
+  const artistIds = [...new Set((data || []).map(row => row.artist_id).filter(Boolean))]
+
+  return { chordListIds, artistIds }
+}
+
+async function syncSharedChordLibraryTable(tableName: string, userId: string, lastSyncTime: number) {
+  const lastSyncIso = lastSyncTime > 0 ? new Date(lastSyncTime).toISOString() : null
+
+  if (tableName === 'artists') {
+    const [{ data: ownArtists }, { artistIds }] = await Promise.all([
+      (() => {
+        let builder = supabase.from('artists').select('*').eq('user_id', userId)
+        if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
+        return builder
+      })(),
+      fetchPublicChordListRefs(lastSyncTime),
+    ])
+
+    let publicArtists: any[] = []
+    if (artistIds.length > 0) {
+      let builder = supabase.from('artists').select('*').in('id', artistIds)
+      if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
+      const { data } = await builder
+      publicArtists = data || []
+    }
+
+    await upsertPulledRows(tableName, dedupeRowsById([...(ownArtists || []), ...publicArtists]))
+    return true
+  }
+
+  if (tableName === 'chord_lists') {
+    const [{ data: ownChordLists }, { data: publicChordLists }] = await Promise.all([
+      (() => {
+        let builder = supabase.from('chord_lists').select('*').eq('user_id', userId)
+        if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
+        return builder
+      })(),
+      (() => {
+        let builder = supabase.from('chord_lists').select('*').or('is_private.eq.0,is_private.is.null')
+        if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
+        return builder
+      })(),
+    ])
+
+    await upsertPulledRows(tableName, dedupeRowsById([...(ownChordLists || []), ...(publicChordLists || [])]))
+    return true
+  }
+
+  if (tableName === 'songs') {
+    const [{ data: ownSongs }, { chordListIds }] = await Promise.all([
+      (() => {
+        let builder = supabase.from('songs').select('*').eq('user_id', userId)
+        if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
+        return builder
+      })(),
+      fetchPublicChordListRefs(lastSyncTime),
+    ])
+
+    let publicSongs: any[] = []
+    if (chordListIds.length > 0) {
+      let builder = supabase.from('songs').select('*').in('chord_list_id', chordListIds)
+      if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
+      const { data } = await builder
+      publicSongs = data || []
+    }
+
+    await upsertPulledRows(tableName, dedupeRowsById([...(ownSongs || []), ...publicSongs]))
+    return true
+  }
+
+  return false
+}
+
+function isPublicManagementTable(tableName: string) {
+  return PUBLIC_MANAGEMENT_TABLES.has(tableName)
+}
+
 async function countUnsyncedRecords(tableName: string, userId: string): Promise<number> {
   try {
     const results = await query(
@@ -147,6 +311,60 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
     }
 
     for (const tableName of TABLES) {
+      if (isPublicManagementTable(tableName)) {
+        const unsyncedRecords: any[] = await query(
+          `SELECT * FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
+          [userId]
+        )
+
+        if (unsyncedRecords.length === 0) continue
+
+        for (const record of unsyncedRecords) {
+          let retries = 0
+          let success = false
+
+          while (retries < maxRetries && !success) {
+            try {
+              const data = toSupabasePayload(record)
+              const timestamp = record.updated_at || Date.now()
+
+              const { error } = await supabase.from(tableName).upsert(
+                {
+                  ...convertToSnakeCase(data),
+                  user_id: userId,
+                  updated_at: timestamp,
+                  updated_at_iso: new Date(timestamp).toISOString(),
+                },
+                { onConflict: 'id' }
+              )
+
+              if (error) {
+                console.warn(`Attempt ${retries + 1}: Failed to sync ${tableName}/${record.id}:`, error)
+                retries++
+                if (retries < maxRetries) {
+                  await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+                }
+              } else {
+                await execute(`UPDATE ${tableName} SET _synced = 1 WHERE id = ?`, [record.id])
+                success = true
+              }
+            } catch (err) {
+              console.error(`Error syncing ${tableName}/${record.id}:`, err)
+              retries++
+              if (retries < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+              }
+            }
+          }
+
+          if (!success) {
+            console.error(`Failed to sync ${tableName}/${record.id} after ${maxRetries} retries`)
+          }
+        }
+
+        continue
+      }
+
       const unsyncedRecords: any[] = await query(
         `SELECT * FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
         [userId]
@@ -213,6 +431,9 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
   try {
     for (const tableName of TABLES) {
       try {
+        if (await syncSharedChordLibraryTable(tableName, userId, lastSyncTime)) {
+          continue
+        }
 
         // ─── MESSAGES ─────────────────────────────────────────────────────
         if (tableName === 'messages') {
@@ -384,6 +605,58 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
           continue
         }
 
+        if (isPublicManagementTable(tableName)) {
+          let supabaseQuery = supabase
+            .from(tableName)
+            .select('*')
+
+          if (lastSyncTime > 0) {
+            const lastSyncIso = new Date(lastSyncTime).toISOString()
+            supabaseQuery = supabaseQuery.gt('updated_at_iso', lastSyncIso)
+          }
+
+          const { data, error } = await supabaseQuery
+
+          if (error) {
+            console.error(`Failed to fetch ${tableName}:`, error)
+            continue
+          }
+
+          if (!data || data.length === 0) continue
+
+          for (const serverRecord of data) {
+            try {
+              const localRecord: any = await query(
+                `SELECT * FROM ${tableName} WHERE id = ?`,
+                [serverRecord.id]
+              )
+              const snakeCaseRecord = convertToSnakeCase(serverRecord)
+
+              if (localRecord && localRecord.length > 0) {
+                const localTime = localRecord[0].updated_at || 0
+                const serverTime = serverRecord.updated_at || 0
+                if (conflictResolution === 'server-wins' || serverTime >= localTime) {
+                  const updates = Object.keys(snakeCaseRecord).map(k => `${k} = ?`).join(', ')
+                  await execute(
+                    `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
+                    [...Object.values(snakeCaseRecord), serverRecord.id]
+                  )
+                }
+              } else {
+                const columns = Object.keys(snakeCaseRecord).join(', ')
+                const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+                await execute(
+                  `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
+                  Object.values(snakeCaseRecord)
+                )
+              }
+            } catch (err) {
+              console.error(`Error upserting ${tableName}/${serverRecord.id}:`, err)
+            }
+          }
+          continue
+        }
+
         // ─── ALL OTHER TABLES ─────────────────────────────────────────────
         let supabaseQuery = supabase
           .from(tableName)
@@ -450,29 +723,38 @@ export async function fullSync(userId: string, options: SyncOptions = {}): Promi
     console.warn('Sync already in progress')
     return false
   }
+
+  // Safety: force-reset stuck flag after 30 seconds
+  const timeout = setTimeout(() => {
+    if (isSyncRunning) {
+      console.warn('Sync timed out — force resetting')
+      isSyncRunning = false
+    }
+  }, 30000)
+
   isSyncRunning = true
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session) {
-    console.warn('No Supabase session found, skipping push sync')
-    return false
-  }
 
   try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) {
+      console.warn('No Supabase session found, skipping sync')
+      return false
+    }
+
     updateSyncStatus({ isSyncing: true, syncError: null })
-    console.log('Starting full sync...')
 
     const lastSync = await getLastSyncTime()
     await syncPullFromSupabase(userId, lastSync, options)
     await syncPushToSupabase(userId, options)
-
     await setLastSyncTime(Date.now())
 
     let pending = 0
     try {
       pending = await countPendingChanges(userId)
     } catch (err) {
-      console.warn('Could not count pending changes, defaulting to 0:', err)
+      console.warn('Could not count pending changes:', err)
     }
+
     updateSyncStatus({
       isSyncing: false,
       lastSyncTime: Date.now(),
@@ -483,10 +765,12 @@ export async function fullSync(userId: string, options: SyncOptions = {}): Promi
     console.log('Full sync completed successfully')
     return true
   } catch (err) {
-    const errorMsg = String(err)
     console.error('Error in fullSync:', err)
-    updateSyncStatus({ isSyncing: false, syncError: errorMsg })
+    updateSyncStatus({ isSyncing: false, syncError: String(err) })
     return false
+  } finally {
+    clearTimeout(timeout)
+    isSyncRunning = false  // always reset, even on error
   }
 }
 
@@ -500,6 +784,79 @@ export async function syncTable(tableName: string, userId: string, options: Sync
     updateSyncStatus({ isSyncing: true, syncError: null })
 
     const lastSync = await getLastSyncTime()
+    if (await syncSharedChordLibraryTable(tableName, userId, lastSync)) {
+      updateSyncStatus({ isSyncing: false, lastSyncTime: Date.now(), syncError: null })
+      return true
+    }
+
+    if (isPublicManagementTable(tableName)) {
+      let supabaseQuery = supabase
+        .from(tableName)
+        .select('*')
+
+      if (lastSync > 0) {
+        const lastSyncIso = new Date(lastSync).toISOString()
+        supabaseQuery = supabaseQuery.gt('updated_at_iso', lastSyncIso)
+      }
+
+      const { data, error } = await supabaseQuery
+      if (error) throw error
+
+      if (data && data.length > 0) {
+        for (const serverRecord of data) {
+          const snakeCaseRecord = convertToSnakeCase(serverRecord)
+          const localRecord: any = await query(
+            `SELECT id FROM ${tableName} WHERE id = ?`,
+            [serverRecord.id]
+          )
+
+          if (localRecord && localRecord.length > 0) {
+            const updates = Object.keys(snakeCaseRecord).map(key => `${key} = ?`).join(', ')
+            const values = Object.values(snakeCaseRecord)
+            await execute(
+              `UPDATE ${tableName} SET ${updates}, _synced = 1 WHERE id = ?`,
+              [...values, serverRecord.id]
+            )
+          } else {
+            const columns = Object.keys(snakeCaseRecord).join(', ')
+            const placeholders = Object.keys(snakeCaseRecord).map(() => '?').join(', ')
+            const values = Object.values(snakeCaseRecord)
+            await execute(
+              `INSERT INTO ${tableName} (${columns}, _synced) VALUES (${placeholders}, 1)`,
+              values
+            )
+          }
+        }
+      }
+
+      const unsyncedRecords: any[] = await query(
+        `SELECT * FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
+        [userId]
+      )
+
+      for (const record of unsyncedRecords) {
+        const data = toSupabasePayload(record)
+        const timestamp = record.updated_at || Date.now()
+
+        const { error: upsertError } = await supabase.from(tableName).upsert(
+          {
+            ...convertToSnakeCase(data),
+            user_id: userId,
+            updated_at: timestamp,
+            updated_at_iso: new Date(timestamp).toISOString(),
+          },
+          { onConflict: 'id' }
+        )
+
+        if (!upsertError) {
+          await execute(`UPDATE ${tableName} SET _synced = 1 WHERE id = ?`, [record.id])
+        }
+      }
+
+      updateSyncStatus({ isSyncing: false })
+      return true
+    }
+
     let supabaseQuery = supabase
       .from(tableName)
       .select('*')
@@ -581,103 +938,83 @@ export function subscribeToChanges(userId: string, onUpdate: () => void) {
   const channels: any[] = []
   const stamp = Date.now()
 
-  for (const tableName of TABLES) {
-    const channel = supabase
-      .channel(`${tableName}-changes-${stamp}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: tableName,
-          filter: `user_id=eq.${userId}`,
-        },
-      async () => {
-        notifyDataRefresh(tableName)
-        await guardedSync(userId, Date.now() - 60000)
-        notifyDataRefresh(tableName)
-        onUpdate()
-      }
-      )
-      .subscribe()
-    channels.push(channel)
+  const handleChange = async (tableName: string) => {
+    console.log(`[realtime] change detected in ${tableName}`)
+    // invalidateTable(tableName)  // immediately notify UI
+    await guardedSync(userId, Date.now() - 10000)
+    invalidateTable(tableName)  // notify again after sync writes to SQLite
+    onUpdate()
   }
 
-  // Incoming contact requests
-  const incomingContactsChannel = supabase
-    .channel(`contacts-incoming-changes-${stamp}`)
-    .on(
-      'postgres_changes',
-      {
+  const subscribeTable = (channelName: string, tableName: string, filter?: string) => {
+    let channel = supabase
+      .channel(channelName)
+      .on('postgres_changes', {
         event: '*',
         schema: 'public',
-        table: 'contacts',
-        filter: `contact_user_id=eq.${userId}`,
-      },
-      async () => {
-        notifyDataRefresh('contacts')
-        
-         await guardedSync(userId, Date.now() - 60000)
-          notifyDataRefresh('contacts')
-          onUpdate()
+        table: tableName,
+        ...(filter ? { filter } : {}),
+      }, () => handleChange(tableName))
+      .subscribe((status) => {
+        console.log(`[realtime] ${tableName} subscription status:`, status)
+      })
 
-      }
-    )
+    return channel
+  }
+
+  // All user-owned tables
+  for (const tableName of TABLES) {
+    const filter = isPublicManagementTable(tableName) ? undefined : `user_id=eq.${userId}`
+    channels.push(subscribeTable(`${tableName}-${userId}-${stamp}`, tableName, filter))
+  }
+
+  // Shared chord-library content can change on another device and must refresh quickly.
+  channels.push(subscribeTable(`artists-shared-${userId}-${stamp}`, 'artists'))
+  channels.push(subscribeTable(`chord_lists-shared-${userId}-${stamp}`, 'chord_lists'))
+  channels.push(subscribeTable(`songs-shared-${userId}-${stamp}`, 'songs'))
+
+  // Incoming contacts
+  const contactsChannel = supabase
+    .channel(`contacts-in-${userId}-${stamp}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'contacts',
+      filter: `contact_user_id=eq.${userId}`,
+    }, () => handleChange('contacts'))
     .subscribe()
-  channels.push(incomingContactsChannel)
+  channels.push(contactsChannel)
 
   // Incoming direct messages
-  const incomingMessagesChannel = supabase
-    .channel(`messages-incoming-${stamp}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'messages',
-        filter: `receiver_id=eq.${userId}`,
-      },
-      async () => {
-        notifyDataRefresh('messages')
-       
-          await guardedSync(userId, Date.now() - 60000)
-          notifyDataRefresh('messages')
-          onUpdate()
-  
-      }
-    )
+  const dmChannel = supabase
+    .channel(`messages-dm-${userId}-${stamp}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'messages',
+      filter: `receiver_id=eq.${userId}`,
+    }, () => handleChange('messages'))
     .subscribe()
-  channels.push(incomingMessagesChannel)
+  channels.push(dmChannel)
 
-  // Overall chat messages
-  const overallChatChannel = supabase
+  // Overall chat
+  const overallChannel = supabase
     .channel(`messages-overall-${stamp}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'messages',
-        filter: `receiver_id=eq.overall-chat`,
-      },
-      async () => {
-        notifyDataRefresh('messages')
-     
-          await guardedSync(userId, Date.now() - 60000)
-          notifyDataRefresh('messages')
-          onUpdate()
-   
-      }
-    )
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'messages',
+      filter: `receiver_id=eq.overall-chat`,
+    }, () => handleChange('messages'))
     .subscribe()
-  channels.push(overallChatChannel)
+  channels.push(overallChannel)
 
   return () => {
-    channels.forEach((ch) => supabase.removeChannel(ch))
+    channels.forEach(ch => supabase.removeChannel(ch))
   }
 }
 
-export async function startPeriodicSync(userId: string, intervalMs: number = 60000) {
+export async function startPeriodicSync(userId: string, intervalMs: number = 10000) {
   await fullSync(userId)
 
   const syncInterval = setInterval(async () => {

@@ -163,6 +163,19 @@ export default function NotificationPanel({ visible, onClose }: Props) {
 
             <View style={styles.headerActions}>
               <TouchableOpacity
+                style={[styles.headerBtn, loading && styles.headerBtnDisabled]}
+                onPress={refresh}
+                activeOpacity={0.65}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#1a1a1a" />
+                ) : (
+                  <Ionicons name="refresh-outline" size={18} color="#1a1a1a" />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
                 style={[styles.headerBtn, showMuteMenu && styles.headerBtnActive, muted && styles.headerBtnMuted]}
                 onPress={() => setShowMuteMenu(v => !v)}
                 activeOpacity={0.65}
@@ -363,6 +376,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0a0a0a',
     letterSpacing: 0.1,
+  headerBtnDisabled: {
+    opacity: 0.65,
+  },
   },
   unreadCountBadge: {
     backgroundColor: '#1a1a1a',

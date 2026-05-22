@@ -13,6 +13,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as ImagePicker from 'expo-image-picker'
@@ -22,6 +23,7 @@ import { UserProfile } from '../db/models'
 import { uploadAvatar } from '../lib/uploadAvatar'
 import { supabase } from '../lib/supabase'
 import { onTableChange } from '../lib/sync'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 const ROLES = [
   'Vocals',
@@ -145,6 +147,8 @@ export default function EditAccountScreen() {
       if (!silent) setLoading(false)
     }
   }
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => loadUserProfile({ silent: true }))
 
   const handleSaveProfile = async () => {
     if (!user) return
@@ -323,7 +327,11 @@ export default function EditAccountScreen() {
 
   return (
     <>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
         {/* Avatar Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Profile Picture</Text>

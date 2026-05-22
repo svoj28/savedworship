@@ -175,21 +175,15 @@ function transposeChord(chord: string, semitones: number, targetKeyRoot: string)
  * Handles: I  bII  #IV  VIm  Vmaj7  bVIIsus4  etc.
  * Also accepts lowercase: i  iv  vim  etc. (normalises to uppercase)
  */
-function parseNashville(str: string): { numeral: string; modifiers: string } | null {
-  // Build a regex that matches any known Roman numeral (with optional flat/sharp prefix)
+function parseNashville(str: string): { numeral: string; modifiers: string; lowerCase: boolean } | null {
   const re = new RegExp(`^(${ROMAN_PATTERN})(.*)$`, 'i')
   const match = str.match(re)
   if (!match) return null
-
-  // Normalise case: the numeral part should be uppercase (but 'b'/'#' prefix stays)
   const rawNumeral = match[1]
-  const modifiers  = match[2] ?? ''
+  let modifiers = match[2] ?? ''
+  const lowerCase = /[a-z]/.test(rawNumeral)
 
-  // Reconstruct canonical casing: leading b/#, then uppercase letters
-  const numeralCanon = rawNumeral.replace(/([biIvV]+)/g, (m) => m.toUpperCase()).replace(/^B/, 'b')
-  // Simpler: just uppercase and then fix the flat prefix
   const upperNum = rawNumeral.toUpperCase()
-  // "BVII" → "bVII", "#IV" stays as-is
   const finalNumeral = rawNumeral.startsWith('b') || rawNumeral.startsWith('B')
     ? 'b' + upperNum.slice(1)
     : rawNumeral.startsWith('#')
@@ -197,7 +191,13 @@ function parseNashville(str: string): { numeral: string; modifiers: string } | n
     : upperNum
 
   if (!(finalNumeral in ROMAN_TO_SEMITONE)) return null
-  return { numeral: finalNumeral, modifiers }
+
+  // If lowercase numeral was used (e.g. "ii"), imply minor unless explicit modifiers present
+  if (lowerCase && !/\bm(?![a-zA-Z])/.test(modifiers) && !/maj|dim|aug/.test(modifiers)) {
+    modifiers = 'm' + modifiers
+  }
+
+  return { numeral: finalNumeral, modifiers, lowerCase }
 }
 
 /**
@@ -219,6 +219,22 @@ function transposeNashville(token: string, semitones: number): string {
   return newNumeral + modifiers
 }
 
+function nashvilleToChord(token: string, targetKeyRoot: string): string {
+  const parsed = parseNashville(token)
+  if (!parsed) return token
+  const semitone = ROMAN_TO_SEMITONE[parsed.numeral]
+  if (semitone === undefined) return token
+
+  const targetCanonical = normaliseRoot(targetKeyRoot)
+  const idx = SHARP_NOTES.indexOf(targetCanonical)
+  if (idx === -1) return token
+  const newIdx = (idx + semitone) % 12
+  const newCanonical = SHARP_NOTES[newIdx]
+  const newRoot = spellNote(newCanonical, targetKeyRoot)
+
+  return newRoot + parsed.modifiers
+}
+
 // ─── Bracket transposition ─────────────────────────────────────────────────────
 
 /**
@@ -235,7 +251,8 @@ function transposeBracketContent(
   // Try Nashville first (Roman numeral with optional leading b/#)
   const nashvilleParsed = parseNashville(trimmed)
   if (nashvilleParsed) {
-    return transposeNashville(trimmed, semitones)
+    // Convert Nashville numerals to actual chords in the target key
+    return nashvilleToChord(trimmed, targetKeyRoot)
   }
 
   // Otherwise treat as a regular chord

@@ -342,7 +342,7 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
                 console.warn(`Attempt ${retries + 1}: Failed to sync ${tableName}/${record.id}:`, error)
                 retries++
                 if (retries < maxRetries) {
-                  await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+                  await Promise.resolve()
                 }
               } else {
                 await execute(`UPDATE ${tableName} SET _synced = 1 WHERE id = ?`, [record.id])
@@ -352,7 +352,7 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
               console.error(`Error syncing ${tableName}/${record.id}:`, err)
               retries++
               if (retries < maxRetries) {
-                await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+                await Promise.resolve()
               }
             }
           }
@@ -392,13 +392,13 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
               { onConflict: conflictColumn }
             )
 
-            if (error) {
-              console.warn(`Attempt ${retries + 1}: Failed to sync ${tableName}/${record.id}:`, error)
-              retries++
-              if (retries < maxRetries) {
-                await new Promise(resolve => setTimeout(resolve, 1000 * retries))
-              }
-            } else {
+              if (error) {
+                console.warn(`Attempt ${retries + 1}: Failed to sync ${tableName}/${record.id}:`, error)
+                retries++
+                if (retries < maxRetries) {
+                  await Promise.resolve()
+                }
+              } else {
               await execute(
                 `UPDATE ${tableName} SET _synced = 1 WHERE id = ?`,
                 [record.id]
@@ -409,7 +409,7 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
             console.error(`Error syncing ${tableName}/${record.id}:`, err)
             retries++
             if (retries < maxRetries) {
-              await new Promise(resolve => setTimeout(resolve, 1000 * retries))
+              await Promise.resolve()
             }
           }
         }

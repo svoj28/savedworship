@@ -3,6 +3,7 @@
     "name": "Saved Worship",
     "slug": "savedworshipmusictool",
     "version": "1.0.0",
+    "scheme": "savedworship",
     "orientation": "portrait",
     "icon": "./assets/SavedLOGO.png",
     "userInterfaceStyle": "automatic",

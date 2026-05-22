@@ -13,6 +13,7 @@ import {
   StatusBar,
   Linking,
   Animated,
+  RefreshControl,
 } from 'react-native'
 import { Picker } from '@react-native-picker/picker'
 import { useFocusEffect } from '@react-navigation/native'
@@ -33,6 +34,7 @@ import { useRole } from '../lib/useRole'
 import { supabase } from '../lib/supabase'
 import { onTableChange } from '../lib/sync'
 import YoutubePlayer from 'react-native-youtube-iframe'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 interface Props {
   route: any
@@ -291,13 +293,13 @@ export default function ChordListScreen({ route, navigation }: Props) {
         // ── AUTO-ADVANCE to next song when scroll reaches bottom ──
         const items   = browseItemsRef.current
         const curIdx  = currentItemIndexRef.current
-        if (curIdx < items.length - 1) {
+          if (curIdx < items.length - 1) {
           stopAutoScroll()
           const newIndex = curIdx + 1
           setCurrentItemIndex(newIndex)
           if (items[newIndex].songId) setSelectedSongId(items[newIndex].songId!)
-          // Brief delay then restart scroll for the new song
-          setTimeout(() => startAutoScroll(), 1200)
+          // Restart scroll for the new song immediately
+          startAutoScroll()
         } else {
           stopAutoScroll()
         }
@@ -367,6 +369,8 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setLoading(false)
   }
 }
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => loadChordList({ silent: true }))
 
   const loadArtistSongs = async () => {
     if (!artistId) return
@@ -611,8 +615,8 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
   const displayContent = useMemo(() => {
     if (!selectedSong) return ''
     let content = selectedSong.content || ''
-    const semitones = getTransposeDistance(selectedSong.key || 'C', transposeToKey)
-    if (semitones !== 0) content = transposeText(content, semitones)
+      const semitones = getTransposeDistance(selectedSong.key || 'C', transposeToKey)
+      if (semitones !== 0) content = transposeText(content, semitones, transposeToKey)
     return content
   }, [selectedSong, transposeToKey])
 
@@ -890,6 +894,7 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
               onScroll={handleContentScroll}
               onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
               onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
               {selectedSong && (
                 <View style={styles.songHeader}>

@@ -288,7 +288,7 @@ export default function AddSongScreen({ route, navigation }: Props) {
           {/* Chord shortcut chips */}
           <View style={styles.editorToolbar}>
             <Text style={styles.editorToolbarLabel}>CHORDS</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chordChips}>
+            <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chordChips}>
               {chordSet.map((chord) => (
                 <TouchableOpacity key={chord} style={styles.chordChip} onPress={() => handleInsertChord(chord)} activeOpacity={0.7}>
                   <Text style={styles.chordChipText}>{chord}</Text>
@@ -302,7 +302,7 @@ export default function AddSongScreen({ route, navigation }: Props) {
           {/* Section header chips */}
           <View style={styles.editorToolbar}>
             <Text style={styles.editorToolbarLabel}>SECTIONS</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chordChips}>
+            <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chordChips}>
               {SONG_SECTIONS.map((section) => (
                 <TouchableOpacity key={section} style={[styles.chordChip, styles.sectionChip]} onPress={() => handleInsertSection(section)} activeOpacity={0.7}>
                   <Text style={[styles.chordChipText, styles.sectionChipText]}>{section}</Text>

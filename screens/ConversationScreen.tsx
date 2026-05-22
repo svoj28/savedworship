@@ -11,6 +11,7 @@ import {
   Pressable,
   Image,
   FlatList,
+  RefreshControl,
 } from 'react-native'
 import { CameraView, Camera, BarcodeScanningResult } from 'expo-camera'
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -22,6 +23,7 @@ import UserProfileModal from './UserProfileModal'
 import { onTableChange } from '../lib/sync'
 import { execute } from '../db/index'
 import { supabase } from '../lib/supabase'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 export default function ConversationScreen() {
   const [userId, setUserId] = useState<string>('')
@@ -514,6 +516,19 @@ export default function ConversationScreen() {
     }
   }
 
+  const refreshConversationData = async () => {
+    const id = userIdRef.current || userId
+    if (!id) return
+    await Promise.all([
+      loadMessages(id),
+      loadOverallChat(id),
+      loadUsers(),
+      loadContactedUsers(id),
+    ])
+  }
+
+  const { refreshing, onRefresh } = usePullToRefresh(refreshConversationData)
+
   // useFocusEffect(
   //   React.useCallback(() => {
   //     if (userId) {
@@ -703,7 +718,11 @@ minute: '2-digit',
   }
 
     const renderDirectMessagesPanel = () => (
-    <ScrollView style={styles.dmPanel} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.dmPanel}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
       {/* Conversations Section */}
       <View style={[styles.sectionBlock, { marginTop: 24 }]}>
         <View style={styles.sectionHeaderRow}>
@@ -829,6 +848,7 @@ activeOpacity={0.7}
           showsVerticalScrollIndicator={false}
           ref={setScrollViewRef}
           onContentSizeChange={() => scrollViewRef?.scrollToEnd({ animated: true })}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
           {currentMessages.map(renderMessageBubble)}
 <View style={{ height: 12 }} />
@@ -931,6 +951,7 @@ activeOpacity={0.7}
               showsVerticalScrollIndicator={false}
               ref={setScrollViewRef}
               onContentSizeChange={() => scrollViewRef?.scrollToEnd({ animated: true })}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
               {overallChatMessages.map(renderMessageBubble)}
 <View style={{ height: 12 }} />
@@ -1061,7 +1082,11 @@ activeOpacity={0.85}
               <View style={{ width: 60 }} />
             </View>
 
-            <ScrollView style={styles.newConversationBody} showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={styles.newConversationBody}
+              showsVerticalScrollIndicator={false}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            >
               <View style={[styles.sectionHeaderRow, { marginTop: 16 }]}>
                 <View style={styles.sectionAccentLine} />
                 <Text style={styles.sectionHeader}>BY ID</Text>

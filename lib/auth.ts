@@ -231,8 +231,8 @@ export function onAuthStateChange(
 export async function resetPassword(email: string): Promise<{ error: AuthError | null }> {
   try {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: 'savedworshipmusictool://auth/reset-password',
-    })
+  redirectTo: 'savedworship://reset-password',
+})
 
     if (error) {
       return { error: { message: error.message } }

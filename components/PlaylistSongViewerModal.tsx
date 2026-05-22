@@ -190,7 +190,7 @@ function SongPage({
     if (!song?.content) return ''
     const originalKey = getEffectiveSongKey(song)
     const semitones = getTransposeDistance(originalKey, transposeKey)
-    let content = semitones !== 0 ? transposeText(song.content, semitones) : song.content
+    let content = semitones !== 0 ? transposeText(song.content, semitones, transposeKey) : song.content
     return content
   }, [song, transposeKey])
 

@@ -9,8 +9,9 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
-StatusBar,
-Linking
+  StatusBar,
+  Linking,
+  RefreshControl,
 } from 'react-native'
 import * as DocumentPicker from 'expo-document-picker'
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -40,6 +41,7 @@ import { notifyManagementChangeToAllUsers } from '../lib/notifications'
 import { onTableChange } from '../lib/sync'
 import { supabase } from '../lib/supabase'
 import { useNotifications } from '../lib/NotificationContext'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 
 type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
@@ -202,6 +204,8 @@ export default function ManagementScreen({ route }: any) {
       if (!options.silent) setLoading(false)
     }
   }, [])
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => refreshData({ silent: true }))
 
   useEffect(() => {
     const loadUser = async () => {
@@ -559,7 +563,11 @@ const getCount = (key?: string): number => {
   // ─── DASHBOARD ───
   if (!activeSection) {
       return (
-        <ScrollView style={styles.container} contentContainerStyle={styles.dashboardContent}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.dashboardContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
           <StatusBar barStyle="dark-content" backgroundColor="#FAFAFA" />
 
         <View style={styles.dashHeader}>
@@ -640,7 +648,11 @@ const getCount = (key?: string): number => {
           </Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.itemsContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.itemsContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
           <Text style={styles.itemsSectionLabel}>
             {items.length} {items.length === 1 ? 'ITEM' : 'ITEMS'}
           </Text>

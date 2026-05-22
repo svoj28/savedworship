@@ -13,11 +13,13 @@ import {
   Platform,
   StatusBar,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native'
 import { execute, query } from '../db/index'
 import { getCurrentUser } from '../lib/auth'
 import uuid from 'react-native-uuid'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 interface Props {
   route: any
@@ -69,12 +71,12 @@ export default function SongEditorScreen({ route, navigation }: Props) {
     if (isEditing) loadSong()
   }, [])
 
-  const loadSong = async () => {
+  const loadSong = async ({ silent = false }: { silent?: boolean } = {}) => {
     try {
-      setInitialLoading(true)
+      if (!silent) setInitialLoading(true)
       const rows: any[] = await query('SELECT * FROM songs WHERE id = ?', [songId])
       if (!rows || rows.length === 0) {
-        Alert.alert('Error', 'Song not found')
+        if (!silent) Alert.alert('Error', 'Song not found')
         navigation.goBack()
         return
       }
@@ -94,11 +96,13 @@ export default function SongEditorScreen({ route, navigation }: Props) {
       }
     } catch (err) {
       console.error('Error loading song:', err)
-      Alert.alert('Error', 'Failed to load song')
+      if (!silent) Alert.alert('Error', 'Failed to load song')
     } finally {
-      setInitialLoading(false)
+      if (!silent) setInitialLoading(false)
     }
   }
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => (isEditing ? loadSong({ silent: true }) : Promise.resolve()))
 
   // ── Insert chord at cursor ─────────────────────────────────────────────
   const handleInsertChord = (chord: string) => {
@@ -262,6 +266,7 @@ export default function SongEditorScreen({ route, navigation }: Props) {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        refreshControl={isEditing ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} /> : undefined}
       >
         {/* ─── SONG INFO ─── */}
         <Text style={styles.sectionLabel}>SONG INFO</Text>

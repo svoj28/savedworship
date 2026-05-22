@@ -82,9 +82,81 @@ export function transposeChord(chord: string, semitones: number): string {
  * Example:
  * transposeText("[G]Amazing [D]grace", 2) -> "[A]Amazing [E]grace"
  */
-export function transposeText(text: string, semitones: number): string {
-  // Match all chords in [chord] format
+// --- Nashville support ----------------------------------------------------
+const ROMAN_TO_SEMITONE: Record<string, number> = {
+  'I':   0,
+  'bII': 1,
+  'II':  2,
+  'bIII':3,
+  'III': 4,
+  'IV':  5,
+  'bV':  6,
+  '#IV': 6,
+  'V':   7,
+  'bVI': 8,
+  'VI':  9,
+  'bVII':10,
+  'VII': 11,
+}
+
+const ALL_ROMANS = Object.keys(ROMAN_TO_SEMITONE).sort((a, b) => b.length - a.length)
+const ROMAN_PATTERN = ALL_ROMANS.map(r => r.replace('#', '\\#')).join('|')
+const ROMAN_RE = new RegExp(`^(${ROMAN_PATTERN})(.*)$`, 'i')
+
+function parseNashville(token: string): { numeral: string; modifiers: string; lowerCase: boolean } | null {
+  const m = token.match(ROMAN_RE)
+  if (!m) return null
+  const rawNumeral = m[1]
+  let modifiers = m[2] ?? ''
+  const lowerCase = /[a-z]/.test(rawNumeral)
+
+  // Canonicalise numeral to uppercase with optional leading b/# preserved
+  const upper = rawNumeral.toUpperCase()
+  const finalNumeral = rawNumeral.startsWith('b') || rawNumeral.startsWith('B')
+    ? 'b' + upper.slice(1)
+    : rawNumeral.startsWith('#')
+    ? '#' + upper.slice(1)
+    : upper
+
+  if (!(finalNumeral in ROMAN_TO_SEMITONE)) return null
+
+  // If user used lowercase numerals (e.g. "ii"), imply minor if no explicit modifier
+  if (lowerCase && !/\bm(?![a-zA-Z])/.test(modifiers) && !/maj|dim|aug/.test(modifiers)) {
+    modifiers = 'm' + modifiers
+  }
+
+  return { numeral: finalNumeral, modifiers, lowerCase }
+}
+
+function nashvilleToChord(token: string, targetKey: string): string | null {
+  const parsed = parseNashville(token)
+  if (!parsed) return null
+  const semitone = ROMAN_TO_SEMITONE[parsed.numeral]
+  if (semitone === undefined) return null
+
+  // Determine target root canonical (use first note of targetKey)
+  const base = getBaseNote(normalizeChord(targetKey))
+  const rootIdx = NOTES.indexOf(base)
+  if (rootIdx === -1) return null
+  const note = NOTES[(rootIdx + semitone) % 12]
+
+  return note + parsed.modifiers
+}
+
+/**
+ * Transpose a block of text containing chords in [chord] format.
+ * Supports both standard chords and Nashville numerals. When `targetKey`
+ * is provided, Nashville numerals (e.g. [I], [ii]) are converted to actual
+ * chord names in that key.
+ */
+export function transposeText(text: string, semitones: number, targetKey?: string): string {
   return text.replace(/\[([^\]]+)\]/g, (match, chord) => {
+    // Try Nashville first (requires a targetKey to map to real chords)
+    if (targetKey) {
+      const maybe = nashvilleToChord(chord, targetKey)
+      if (maybe) return `[${maybe}]`
+    }
+
     const transposed = transposeChord(chord, semitones)
     return `[${transposed}]`
   })

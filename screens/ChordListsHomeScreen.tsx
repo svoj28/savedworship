@@ -12,6 +12,7 @@ import {
   TextInput,
   FlatList,
   StatusBar,
+  RefreshControl,
 } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import Ionicons from '@expo/vector-icons/Ionicons'
@@ -30,6 +31,7 @@ import {
 import { PlaylistSongViewerModal } from '../components/PlaylistSongViewerModal'
 import { useRole } from '../lib/useRole'
 import { onTableChange } from '../lib/sync'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 interface Props {
   navigation: any
@@ -122,6 +124,8 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
       if (!silent) setLoading(false)
     }
   }
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => loadData({ silent: true }))
 
   const loadArtists = async () => {
     try {
@@ -465,6 +469,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
               style={styles.list}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
               <Text style={styles.sectionLabel}>{visibleArtists.length} ARTISTS</Text>
               {visibleArtists.map((artist, artistIdx) => {
@@ -575,6 +580,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                   style={styles.list}
                   contentContainerStyle={styles.listContent}
                   showsVerticalScrollIndicator={false}
+                  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
                 >
                   <Text style={styles.sectionLabel}>{playlists.length} PLAYLISTS</Text>
                   {playlists.map((playlist, idx) => (
@@ -641,6 +647,8 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                   keyExtractor={item => item.id}
                   contentContainerStyle={styles.listContent}
                   showsVerticalScrollIndicator={false}
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
                   renderItem={({ item, index }) => {
                     const title = playlistItemTitles[item.id] ?? '…'
                     const isFirst = index === 0

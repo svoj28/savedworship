@@ -4,6 +4,7 @@ import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
+import * as Linking from 'expo-linking'
 import {
   ActivityIndicator,
   View,
@@ -55,6 +56,11 @@ import { navigationRef, navigateFromNotification } from './lib/notificationNavig
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
 import SongEditorScreen from './screens/SongEditorScreen'
+
+// ── ADDED: Reset Password ─────────────────────────────────────────────────────
+import ResetPasswordScreen from './screens/Resetpasswordscreen'
+import { supabase } from './lib/supabase'
+// ─────────────────────────────────────────────────────────────────────────────
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -212,7 +218,7 @@ function ChordListsStack() {
         component={ChordListScreen}
         options={{ title: 'Song', headerLeft: () => null, headerShown: false }}
       />
- {canManageChords && (
+      {canManageChords && (
         <>
           <Stack.Screen
             name="AddSong"
@@ -450,7 +456,7 @@ const loadStyles = StyleSheet.create({
   logo: {
     width: 80,
     height: 80,
-    borderRadius: 20,  // remove if your logo has its own shape
+    borderRadius: 20,
   },
 })
 
@@ -464,12 +470,15 @@ function AppContent() {
   const [dbError, setDbError] = useState<string | null>(null)
   const [drawerVisible, setDrawerVisible] = useState(false)
   const [dbReady, setDbReady] = useState(false)
+  // ── ADDED ─────────────────────────────────────────────────────────────────
+  const [showResetPassword, setShowResetPassword] = useState(false)
+  // ─────────────────────────────────────────────────────────────────────────
   const periodicSyncCleanupRef = useRef<(() => void) | null>(null)
   const realtimeCleanupRef = useRef<(() => void) | null>(null)
   const syncStartedRef = useRef(false)
   const pendingNotificationRef = useRef<any | null>(null)
 
-useEffect(() => {
+  useEffect(() => {
     const initializeApp = async () => {
       try {
         await initializeDatabase()
@@ -480,7 +489,7 @@ useEffect(() => {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error'
         setDbError(errorMsg)
       } finally {
-        setLoading(false)  // ← this is what dismisses the loading screen
+        setLoading(false)
       }
     }
     initializeApp()
@@ -488,60 +497,86 @@ useEffect(() => {
     return () => unsubscribe()
   }, [])
 
-useEffect(() => {
-  if (!user || !dbReady) {
-    periodicSyncCleanupRef.current?.()
-    periodicSyncCleanupRef.current = null
-    realtimeCleanupRef.current?.()
-    realtimeCleanupRef.current = null
-    stopNetworkSync()
-    syncStartedRef.current = false  
-    return
-  }
+  // ── ADDED: Deep link handler for password reset ───────────────────────────
+  useEffect(() => {
+    const handleDeepLink = (url: string) => {
+      if (url.includes('reset-password')) {
+        const parsed = Linking.parse(url)
+        const access_token = parsed.queryParams?.access_token as string
+        const refresh_token = parsed.queryParams?.refresh_token as string
 
-  // ← Prevent re-running if already started for this user
-  if (syncStartedRef.current) return
-  syncStartedRef.current = true
+        if (access_token && refresh_token) {
+          supabase.auth.setSession({ access_token, refresh_token })
+        }
 
-const startSync = async () => {
-  try {
-    await removeOrphanedUnsyncedRows(user.id)
-    await stampUserIdOnUnsyncedRows(user.id)
+        setShowResetPassword(true)
+      }
+    }
 
-    // Don't await — let it run in background, don't block app startup
-    fullSync(user.id).catch(err => console.error('Initial sync failed:', err))
-
-    await pingSupabaseOncePerDay(user.id)
-    await loadNotificationsFromSupabase(user.id)
-    startNetworkSync()
-
-    const syncInterval = setInterval(async () => {
-      await fullSync(user.id)
-    }, 10000)
-    periodicSyncCleanupRef.current = () => clearInterval(syncInterval)
-
-    realtimeCleanupRef.current?.()
-    realtimeCleanupRef.current = null
-    const unsubscribeRealtime = subscribeToChanges(user.id, async () => {
-      await loadNotificationsFromSupabase(user.id)
+    // App was closed and opened via the reset link
+    Linking.getInitialURL().then(url => {
+      if (url) handleDeepLink(url)
     })
-    realtimeCleanupRef.current = unsubscribeRealtime
-  } catch (err) {
-    console.error('Sync start failed:', err)
-    syncStartedRef.current = false
-  }
-}
 
-  startSync()
+    // App was already open when link was tapped
+    const sub = Linking.addEventListener('url', ({ url }) => handleDeepLink(url))
 
-  return () => {
-    periodicSyncCleanupRef.current?.()
-    periodicSyncCleanupRef.current = null
-    realtimeCleanupRef.current?.()
-    realtimeCleanupRef.current = null
-    stopNetworkSync()
-  }
-}, [user, dbReady])
+    return () => sub.remove()
+  }, [])
+  // ─────────────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!user || !dbReady) {
+      periodicSyncCleanupRef.current?.()
+      periodicSyncCleanupRef.current = null
+      realtimeCleanupRef.current?.()
+      realtimeCleanupRef.current = null
+      stopNetworkSync()
+      syncStartedRef.current = false  
+      return
+    }
+
+    if (syncStartedRef.current) return
+    syncStartedRef.current = true
+
+    const startSync = async () => {
+      try {
+        await removeOrphanedUnsyncedRows(user.id)
+        await stampUserIdOnUnsyncedRows(user.id)
+
+        fullSync(user.id).catch(err => console.error('Initial sync failed:', err))
+
+        await pingSupabaseOncePerDay(user.id)
+        await loadNotificationsFromSupabase(user.id)
+        startNetworkSync()
+
+        const syncInterval = setInterval(async () => {
+          await fullSync(user.id)
+        }, 10000)
+        periodicSyncCleanupRef.current = () => clearInterval(syncInterval)
+
+        realtimeCleanupRef.current?.()
+        realtimeCleanupRef.current = null
+        const unsubscribeRealtime = subscribeToChanges(user.id, async () => {
+          await loadNotificationsFromSupabase(user.id)
+        })
+        realtimeCleanupRef.current = unsubscribeRealtime
+      } catch (err) {
+        console.error('Sync start failed:', err)
+        syncStartedRef.current = false
+      }
+    }
+
+    startSync()
+
+    return () => {
+      periodicSyncCleanupRef.current?.()
+      periodicSyncCleanupRef.current = null
+      realtimeCleanupRef.current?.()
+      realtimeCleanupRef.current = null
+      stopNetworkSync()
+    }
+  }, [user, dbReady])
 
   useEffect(() => {
     const toNotification = (response: Notifications.NotificationResponse) => {
@@ -615,11 +650,17 @@ const startSync = async () => {
           }}
         >
           <StatusBar style={colors.statusBar} />
-          {user ? (
+          {/* ── ADDED: Reset password takes priority over everything ── */}
+          {showResetPassword ? (
+            <ResetPasswordScreen
+              onResetSuccess={() => setShowResetPassword(false)}
+            />
+          ) : user ? (
             <AppTabs drawerVisible={drawerVisible} setDrawerVisible={setDrawerVisible} />
           ) : (
             <AuthStack />
           )}
+          {/* ──────────────────────────────────────────────────────── */}
         </NavigationContainer>
       </View>
     </NotificationProvider>

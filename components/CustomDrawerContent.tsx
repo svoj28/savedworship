@@ -11,6 +11,7 @@ import {
   Image,
   Animated,
   Modal,
+  Dimensions
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import Svg, { Rect } from 'react-native-svg'
@@ -73,10 +74,70 @@ function buildRecipientQrValue(userId: string) {
   })
 }
 
+const guideSections = [
+  {
+    title: 'Getting Started',
+    items: [
+      'Sign in or create an account to unlock sync, private notes, chat, and profile settings.',
+      'Your drawer shows your profile, recipient ID, and QR code for sharing your account with other users.',
+      'Use the tabs at the bottom to move between Chords, Notes, Manage, and Chat.',
+    ],
+  },
+  {
+    title: 'Chord Lists',
+    items: [
+      'Browse shared chord lists from the Chords tab.',
+      'Open a song to view lyrics and chords together, or use transpose tools to shift the key.',
+      'If you have permissions, you can add or edit songs from the chord list flow.',
+    ],
+  },
+  {
+    title: 'Notes and Private Lists',
+    items: [
+      'Use the Notes tab for personal chord lists that stay private to your account.',
+      'Create, open, and manage note entries without exposing them to other users.',
+    ],
+  },
+  {
+    title: 'Tools',
+    items: [
+      'Metronome gives you BPM control and tap-tempo support for practice and rehearsal.',
+      'Manual Transpose helps you shift chords quickly without editing the original song.',
+      'Audio Tools groups extra playback and utility features in one place.',
+    ],
+  },
+  {
+    title: 'Chat and Management',
+    items: [
+      'Chat is for real-time messages and connection with other users.',
+      'Manage is where app-level settings, administration, or workflow controls live.',
+      'Edit Profile from the drawer to update your display name, bio, avatar, and instruments.',
+    ],
+  },
+  {
+    title: 'System Information',
+    items: [
+      'The app uses an offline-first local database so your content remains available even when the network is unavailable.',
+      'Supabase handles authentication, cloud sync, and realtime updates when you are signed in.',
+      'Changes are synchronized in the background so local edits can later reach the server and other devices.',
+      'Notifications and sync services help keep the app responsive and up to date.',
+    ],
+  },
+  {
+    title: 'Tips',
+    items: [
+      'If something does not update immediately, reopen the screen or wait for sync to complete.',
+      'Use the drawer QR code and recipient ID when connecting with other members.',
+      'Keep your profile information current so sharing and collaboration stay consistent.',
+    ],
+  },
+]
+
 interface Props {
   visible: boolean
   onClose: () => void
 }
+const { height: SCREEN_HEIGHT } = Dimensions.get('window')
 
 export default function CustomDrawerContent({ visible, onClose }: Props) {
   const [user, setUser] = useState<AuthUser | null>(null)
@@ -85,7 +146,10 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [expandFriends, setExpandFriends] = useState(true)
   const [showQRModal, setShowQRModal] = useState(false)
+  const [showGuideModal, setShowGuideModal] = useState(false)
   const navigation = useNavigation<any>()
+  
+  
 
   useEffect(() => {
     loadUser()
@@ -215,10 +279,22 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
         {/* Top accent line */}
         <View style={styles.accentLine} />
 
-        {/* App title */}
-        <View style={styles.appTitleRow}>
-          <Ionicons name="musical-notes" size={14} color="#999" />
-          <Text style={styles.appTitle}>SAVED WORSHIP</Text>
+        {/* App title + guide action */}
+        <View style={styles.titleBar}>
+          <View style={styles.appTitleRow}>
+            <Ionicons name="musical-notes" size={14} color="#999" />
+            <Text style={styles.appTitle}>SAVED WORSHIP</Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.guideButton}
+            onPress={() => setShowGuideModal(true)}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Open app guide"
+          >
+            <Ionicons name="information-circle-outline" size={20} color="#fff" />
+          </TouchableOpacity>
         </View>
 
         {/* Avatar & User Info */}
@@ -290,6 +366,71 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
           </>
         )}
       </View>
+
+      {/* Guide Modal */}
+      <Modal
+        visible={showGuideModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowGuideModal(false)}
+      >
+        <View style={styles.guideModalOverlay}>
+          <TouchableOpacity
+            style={styles.guideModalBackdrop}
+            onPress={() => setShowGuideModal(false)}
+            activeOpacity={1}
+          />
+
+          <View style={styles.guideModalContent}>
+            <View style={styles.guideModalHeader}>
+              <View style={styles.guideModalTitleWrap}>
+                <Text style={styles.guideModalEyebrow}>App Guide</Text>
+                <Text style={styles.guideModalTitle}>How Saved Worship Works</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowGuideModal(false)}
+                style={styles.guideModalCloseButton}
+                accessibilityRole="button"
+                accessibilityLabel="Close app guide"
+              >
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.guideModalBody}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.guideModalBodyContent}
+            >
+              <Text style={styles.guideIntroText}>
+                Saved Worship is a worship music workspace for chord lists, lyrics, notes, sync,
+                and communication. Use this guide to understand the main screens and the system
+                behind them.
+              </Text>
+
+              {guideSections.map((section) => (
+                <View key={section.title} style={styles.guideSectionCard}>
+                  <Text style={styles.guideSectionTitle}>{section.title}</Text>
+                  {section.items.map((item) => (
+                    <View key={item} style={styles.guideBulletRow}>
+                      <View style={styles.guideBulletDot} />
+                      <Text style={styles.guideBulletText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+
+              <View style={styles.guideFooterCard}>
+                <Ionicons name="shield-checkmark-outline" size={18} color="#fff" />
+                <Text style={styles.guideFooterText}>
+                  Your content is designed to work offline first, then sync when the connection is
+                  available.
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {/* Scrollable Menu */}
       <ScrollView
@@ -436,17 +577,32 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     opacity: 0.9,
   },
+  titleBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
   appTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 20,
   },
   appTitle: {
     fontSize: 10,
     letterSpacing: 2.5,
     color: '#888',
     fontWeight: '600',
+  },
+  guideButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   avatarRow: {
     flexDirection: 'row',
@@ -809,5 +965,127 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
     letterSpacing: 0.3,
+  },
+
+  // ── Guide Modal ─────────────────────────────────────────
+  guideModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 16,
+  },
+  guideModalBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  guideModalContent: {
+    width: '100%',
+    maxWidth: 420,
+    height: SCREEN_HEIGHT * 0.88,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  guideModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  guideModalTitleWrap: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  guideModalEyebrow: {
+    fontSize: 9,
+    letterSpacing: 2.2,
+    textTransform: 'uppercase',
+    color: '#888',
+    marginBottom: 4,
+    fontWeight: '700',
+  },
+  guideModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111',
+    letterSpacing: 0.2,
+  },
+  guideModalCloseButton: {
+    padding: 4,
+  },
+  guideModalBody: {
+    flexShrink: 1,
+  },
+  guideModalBodyContent: {
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    paddingBottom: 28,
+    flexGrow: 1,
+    gap: 12,
+  },
+  guideIntroText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: '#555',
+    marginBottom: 4,
+  },
+  guideSectionCard: {
+    backgroundColor: '#fafafa',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ececec',
+    padding: 16,
+    gap: 10,
+  },
+  guideSectionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#111',
+    letterSpacing: 0.15,
+  },
+  guideBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  guideBulletDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#111',
+    marginTop: 7,
+  },
+  guideBulletText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#444',
+  },
+  guideFooterCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#111',
+    borderRadius: 14,
+    padding: 16,
+  },
+  guideFooterText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#fff',
   },
 })

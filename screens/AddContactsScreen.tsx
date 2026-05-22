@@ -12,6 +12,7 @@ import {
   Image,
   Modal,
 Animated,
+  RefreshControl,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { CameraView, Camera, BarcodeScanningResult } from 'expo-camera'
@@ -35,6 +36,7 @@ notifyContactAccepted,
 notifyContactRejected,
 } from '../lib/notifications'
 import { onDataRefresh, onTableChange } from '../lib/sync'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 type TabType = 'share' | 'add' | 'contacts'
 
@@ -169,6 +171,8 @@ const fadeAnim = useRef(new Animated.Value(0)).current
     if (!silent) setLoading(false)
   }
 }
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => loadUserAndContacts({ silent: true }))
 
   const handleAddContact = async (recipientId?: string) => {
   let idToAdd = (recipientId ?? formData.recipientId).trim()
@@ -439,6 +443,7 @@ key={tab}
 style={[styles.scroll, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
 showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
 
         {/* ═══ SHARE TAB ═══ */}

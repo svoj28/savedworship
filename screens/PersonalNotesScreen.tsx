@@ -12,6 +12,7 @@ import {
   FlatList,
 Modal,
   StatusBar,
+  RefreshControl,
 } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import { ChordList, Artist } from '../db/models'
@@ -23,6 +24,7 @@ import { syncRowToSupabase } from '../lib/syncToSupabase'
 import { getChordListById } from '../db/queries'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { onTableChange } from '../lib/sync'
+import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 interface Props {
   navigation: any
@@ -135,6 +137,8 @@ const handleUploadToCloud = async (noteId: string) => {
       if (!silent) setLoading(false)
     }
   }
+
+  const { refreshing, onRefresh } = usePullToRefresh(() => loadPersonalNotes({ silent: true }))
 
   const handleSearch = (text: string) => {
     setSearchText(text)
@@ -290,6 +294,8 @@ style: 'destructive',
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
 renderItem={({ item, index }) => (
   <TouchableOpacity
     style={styles.noteCard}

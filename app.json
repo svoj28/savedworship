@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "scheme": "savedworship",
     "orientation": "portrait",
-    "icon": "./assets/SavedLOGO.png",
+    "icon": "./assets/SWLOGO.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -19,9 +19,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/SavedLOGO.png",
+        "foregroundImage": "./assets/SWLOGO.png",
         "backgroundColor": "#ffffff",
-        "monochromeImage": "./assets/SavedLOGO.png"
+        "monochromeImage": "./assets/SWLOGO.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,

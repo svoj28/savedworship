@@ -295,20 +295,34 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
 
   try {
     const unsyncedMessages: any[] = await query(
-      `SELECT * FROM messages WHERE _synced = 0 AND sender_id = ?`,
-      [userId]
-    )
-    for (const record of unsyncedMessages) {
-      const payload = toSupabasePayload(record)
-      const { error } = await supabase
-        .from('messages')
-        .upsert(convertToSnakeCase(payload), { onConflict: 'id' })
-      if (!error) {
-        await execute(`UPDATE messages SET _synced = 1 WHERE id = ?`, [record.id])
-      } else {
-        console.warn('Failed to push message:', error)
-      }
+  `SELECT * FROM messages WHERE _synced = 0 AND sender_id = ?`,
+  [userId]
+)
+for (const record of unsyncedMessages) {
+  try {
+    const payload = {
+      id: record.id,
+      sender_id: record.sender_id,
+      receiver_id: record.receiver_id,
+      text: record.text,
+      created_at: record.created_at,
+      updated_at: record.updated_at ?? Date.now(),
+      is_deleted: record.is_deleted ?? 0,
+      edited_at: record.edited_at ?? null,
+      user_id: record.sender_id,   // ← maps sender_id → user_id for Supabase NOT NULL constraint
     }
+    const { error } = await supabase
+      .from('messages')
+      .upsert(payload, { onConflict: 'id' })
+    if (!error) {
+      await execute(`UPDATE messages SET _synced = 1 WHERE id = ?`, [record.id])
+    } else {
+      console.warn(`Sync failed for messages/${record.id}:`, error)
+    }
+  } catch (err) {
+    console.error(`Error pushing message ${record.id}:`, err)
+  }
+}
 
     for (const tableName of TABLES) {
       if (isPublicManagementTable(tableName)) {
@@ -364,7 +378,7 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
 
         continue
       }
-
+      if (tableName === 'messages') continue
       const unsyncedRecords: any[] = await query(
         `SELECT * FROM ${tableName} WHERE _synced = 0 AND user_id = ?`,
         [userId]
@@ -425,6 +439,8 @@ export async function syncPushToSupabase(userId: string, options: SyncOptions = 
   }
 }
 
+
+
 export async function syncPullFromSupabase(userId: string, lastSyncTime: number = 0, options: SyncOptions = {}) {
   const { conflictResolution = 'server-wins' } = options
 
@@ -465,6 +481,8 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
             return true
           })
 
+          const serverIds = new Set<string>(data.map(row => row.id).filter(Boolean))
+
           if (data.length > 0) {
             for (const serverRecord of data) {
               try {
@@ -495,6 +513,17 @@ export async function syncPullFromSupabase(userId: string, lastSyncTime: number 
               } catch (err) {
                 console.error(`Error upserting messages/${serverRecord.id}:`, err)
               }
+            }
+          }
+
+          const localScopeRows: any[] = await query(
+            `SELECT id, _synced FROM messages WHERE sender_id = ? OR receiver_id = ? OR receiver_id = 'overall-chat'`,
+            [userId, userId]
+          )
+
+          for (const localRow of localScopeRows) {
+            if (localRow.id && !serverIds.has(localRow.id)) {
+              await execute(`DELETE FROM messages WHERE id = ?`, [localRow.id])
             }
           }
           continue
@@ -775,6 +804,11 @@ export async function fullSync(userId: string, options: SyncOptions = {}): Promi
 }
 
 export async function syncTable(tableName: string, userId: string, options: SyncOptions = {}): Promise<boolean> {
+  if (tableName === 'messages') {
+    await syncPushToSupabase(userId, options)
+    return true
+  }
+  
   if (!TABLES.includes(tableName)) {
     console.error(`Unknown table: ${tableName}`)
     return false
@@ -1089,6 +1123,8 @@ export async function setLastSyncTime(time: number) {
 
 export async function stampUserIdOnUnsyncedRows(userId: string) {
   for (const tableName of TABLES) {
+    // messages table uses sender_id, not user_id — handle separately
+    if (tableName === 'messages') continue   // ← add this skip
     try {
       await execute(
         `UPDATE ${tableName} SET user_id = ? WHERE user_id IS NULL OR user_id = ''`,

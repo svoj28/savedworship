@@ -243,7 +243,12 @@ export async function editMessage(id: string, newText: string): Promise<void> {
     [newText, editedAt, editedAt, id]
   )
   const updated = await queryOne('SELECT * FROM messages WHERE id = ?', [id])
-  if (updated) await syncRowToSupabase('messages', mapMessage(updated))
+  if (updated) {
+    await syncRowToSupabase('messages', {
+      ...mapMessage(updated),
+      userId: updated.user_id ?? updated.sender_id,
+    })
+  }
 }
 
 export async function deleteMessage(id: string): Promise<void> {
@@ -252,7 +257,12 @@ export async function deleteMessage(id: string): Promise<void> {
     [Date.now(), id]
   )
   const updated = await queryOne('SELECT * FROM messages WHERE id = ?', [id])
-  if (updated) await syncRowToSupabase('messages', mapMessage(updated))
+  if (updated) {
+    await syncRowToSupabase('messages', {
+      ...mapMessage(updated),
+      userId: updated.user_id ?? updated.sender_id,
+    })
+  }
 }
 
 // ─── FILE DROPPERS ────────────────────────────────────────────────────────────

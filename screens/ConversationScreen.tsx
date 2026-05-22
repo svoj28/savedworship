@@ -53,29 +53,45 @@ export default function ConversationScreen() {
   const userIdRef = React.useRef('')
   const userProfilesRef = React.useRef<Map<string, UserProfile>>(new Map())
 
- useEffect(() => {
-  const loadUser = async () => {
-    const user = await getCurrentUser()
-    if (user) {
-      setUserId(user.id)
-      userIdRef.current = user.id
-      const profile = await getUserProfileByUserId(user.id)
-      setUserProfile(profile)
-      // Load everything once on mount
-      await Promise.all([
-        loadMessages(user.id),
-        loadOverallChat(user.id),
-        loadUsers(),
-        loadContactedUsers(user.id),
-      ])
-    }
+  const getMessageTimestamp = (row: any) => {
+    const timestamp = row?.updated_at ?? row?.edited_at ?? row?.created_at ?? 0
+    return typeof timestamp === 'number' ? timestamp : Number(timestamp) || 0
   }
-  loadUser()
-}, [])
+
+  const mergeRowsById = (rows: any[]) => {
+    const merged = new Map<string, any>()
+    for (const row of rows) {
+      if (!row?.id) continue
+      const current = merged.get(row.id)
+      if (!current || getMessageTimestamp(row) >= getMessageTimestamp(current)) {
+        merged.set(row.id, row)
+      }
+    }
+    return [...merged.values()]
+  }
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const user = await getCurrentUser()
+      if (user) {
+        setUserId(user.id)
+        userIdRef.current = user.id
+        const profile = await getUserProfileByUserId(user.id)
+        setUserProfile(profile)
+        await Promise.all([
+          loadMessages(user.id),
+          loadOverallChat(user.id),
+          loadUsers(),
+          loadContactedUsers(user.id),
+        ])
+      }
+    }
+    loadUser()
+  }, [])
 
   const loadMessages = async (id: string) => {
     try {
-      const [{ data: sentMessages }, { data: receivedMessages }] = await Promise.all([
+      const [{ data: sentMessages }, { data: receivedMessages }, localSent, localReceived] = await Promise.all([
         supabase
           .from('messages')
           .select('*')
@@ -90,21 +106,22 @@ export default function ConversationScreen() {
           .neq('receiver_id', OVERALL_CHAT_ID)
           .eq('is_deleted', 0)
           .order('created_at', { ascending: true }),
-      ])
-
-      let rows = [...(sentMessages || []), ...(receivedMessages || [])]
-
-      if (rows.length === 0) {
-        const localSent = await dbQuery(
+        dbQuery(
           `SELECT * FROM messages WHERE sender_id = ? AND receiver_id != ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
           [id, OVERALL_CHAT_ID]
-        )
-        const localReceived = await dbQuery(
+        ),
+        dbQuery(
           `SELECT * FROM messages WHERE receiver_id = ? AND receiver_id != ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
           [id, OVERALL_CHAT_ID]
-        )
-        rows = [...localSent, ...localReceived]
-      }
+        ),
+      ])
+
+      const rows = mergeRowsById([
+        ...(sentMessages || []),
+        ...(receivedMessages || []),
+        ...(localSent || []),
+        ...(localReceived || []),
+      ])
 
       const mapMessage = (row: any): Message => ({
         id: row.id,
@@ -133,7 +150,6 @@ export default function ConversationScreen() {
         }
       }
 
-      
       setUserProfiles(profilesMap)
       userProfilesRef.current = profilesMap
       setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
@@ -144,21 +160,20 @@ export default function ConversationScreen() {
 
   const loadOverallChat = async (id: string) => {
     try {
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('receiver_id', OVERALL_CHAT_ID)
-        .eq('is_deleted', 0)
-        .order('created_at', { ascending: true })
-
-      let results = data || []
-      if (results.length === 0) {
-        results = await dbQuery(
+      const [{ data }, localResults] = await Promise.all([
+        supabase
+          .from('messages')
+          .select('*')
+          .eq('receiver_id', OVERALL_CHAT_ID)
+          .eq('is_deleted', 0)
+          .order('created_at', { ascending: true }),
+        dbQuery(
           `SELECT * FROM messages WHERE receiver_id = ? AND COALESCE(is_deleted, 0) = 0 ORDER BY created_at ASC`,
           [OVERALL_CHAT_ID]
-        )
-      }
-      console.log('[loadOverallChat] fetched', results.length, 'messages')
+        ),
+      ])
+
+      const results = mergeRowsById([...(data || []), ...(localResults || [])])
 
       const mapMessage = (row: any): Message => ({
         id: row.id,
@@ -175,7 +190,7 @@ export default function ConversationScreen() {
       const mapped = results.map(mapMessage)
       setOverallChatMessages([...mapped])
       await loadUsers()
-      
+
       const senderIds = new Set(mapped.map(m => m.senderId))
       const profilesMap = new Map<string, UserProfile>(userProfilesRef.current)
       for (const senderId of senderIds) {
@@ -257,7 +272,6 @@ export default function ConversationScreen() {
     } catch (err) {
       // Not JSON, fall through to raw value handling.
     }
-
     return data.trim()
   }
 
@@ -282,7 +296,6 @@ export default function ConversationScreen() {
       setScanned(false)
       return
     }
-
     handleStartConversation(recipientId)
   }
 
@@ -291,52 +304,96 @@ export default function ConversationScreen() {
     setScanned(false)
   }
 
-  const handleEditMessage = async () => {
-    if (!editingText.trim()) {
-      Alert.alert('Notice', 'Message cannot be empty')
-      return
-    }
-    try {
-      if (editingMessageId) {
-        await editMessage(editingMessageId, editingText)
-        setEditingMessageId(null)
-        setEditingText('')
-        setShowEditModal(false)
-        if (chatMode === 'overall') {
-          await loadOverallChat(userId)
-        } else {
-          await loadMessages(userId)
-        }
-      }
-    } catch (err) {
-      console.error('Error editing message:', err)
-      Alert.alert('Error', 'Failed to edit message')
-    }
+  // ─── FIX: capture ID before clearing state, search across all messages ────
+  const handleOpenEditModal = (msgId: string) => {
+    // Search across ALL messages (both overall + direct) so we never get undefined
+    const msg = [...messages, ...overallChatMessages].find(m => m.id === msgId)
+    if (!msg) return
+    setEditingMessageId(msgId)
+    setEditingText(msg.text)
+    setSelectedMessageId(null)   // close action menu first
+    setTimeout(() => setShowEditModal(true), 50) // open edit modal after menu closes
   }
 
-  const handleDeleteMessage = async (messageId: string) => {
-    Alert.alert('Delete Message', 'Are you sure you want to remove this message?', [
-      { text: 'Cancel' },
-      {
-        text: 'Delete',
-        onPress: async () => {
-          try {
-            await deleteMessage(messageId)
-            if (chatMode === 'overall') {
-              await loadOverallChat(userId)
-            } else {
-              await loadMessages(userId)
-            }
-            setSelectedMessageId(null)
-          } catch (err) {
-            console.error('Error deleting message:', err)
-            Alert.alert('Error', 'Failed to delete message')
-          }
-        },
-        style: 'destructive',
-      },
-    ])
+  const handleOpenDeleteConfirm = (msgId: string) => {
+    setSelectedMessageId(null) // close action menu first
+    setTimeout(() => handleDeleteMessage(msgId), 50) // delete after menu closes
   }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ✅ EDIT — optimistically update text, then persist
+const handleEditMessage = async () => {
+  if (!editingText.trim() || !editingMessageId) return
+
+  const msgId = editingMessageId
+  const newText = editingText.trim()
+
+  // Immediately update in both arrays
+  const applyEdit = (msgs: Message[]) =>
+    msgs.map(m => m.id === msgId
+      ? { ...m, text: newText, editedAt: Date.now() }
+      : m
+    )
+  setOverallChatMessages(prev => applyEdit(prev))
+  setMessages(prev => applyEdit(prev))
+
+  setEditingMessageId(null)
+  setEditingText('')
+  setShowEditModal(false)
+
+  try {
+    await editMessage(msgId, newText)
+    // Reload to sync with DB
+    if (chatMode === 'overall') {
+      await loadOverallChat(userId)
+    } else {
+      await loadMessages(userId)
+    }
+  } catch (err) {
+    Alert.alert('Error', 'Failed to edit message')
+    // Reload to revert
+    if (chatMode === 'overall') {
+      await loadOverallChat(userId)
+    } else {
+      await loadMessages(userId)
+    }
+  }
+}
+
+  // ✅ DELETE — optimistically mark deleted, then persist
+const handleDeleteMessage = async (messageId: string) => {
+  Alert.alert('Delete Message', 'Are you sure you want to remove this message?', [
+    { text: 'Cancel' },
+    {
+      text: 'Delete',
+      style: 'destructive',
+      onPress: async () => {
+        // Immediately mark as deleted in UI
+        const applyDelete = (msgs: Message[]) =>
+          msgs.map(m => m.id === messageId ? { ...m, isDeleted: true } : m)
+        setOverallChatMessages(prev => applyDelete(prev))
+        setMessages(prev => applyDelete(prev))
+
+        try {
+          await deleteMessage(messageId)
+          if (chatMode === 'overall') {
+            await loadOverallChat(userId)
+          } else {
+            await loadMessages(userId)
+          }
+        } catch (err) {
+          Alert.alert('Error', 'Failed to delete message')
+          // Reload to revert
+          if (chatMode === 'overall') {
+            await loadOverallChat(userId)
+          } else {
+            await loadMessages(userId)
+          }
+        }
+      },
+    },
+  ])
+}
 
   const handleDeleteConversation = (otherUserId: string, nickname: string) => {
     Alert.alert(
@@ -353,7 +410,7 @@ export default function ConversationScreen() {
                 execute(
                   `DELETE FROM messages WHERE 
                   (sender_id = ? AND receiver_id = ?) OR 
-                  (sender_id = ? AND receiver_id = ?)` ,
+                  (sender_id = ? AND receiver_id = ?)`,
                   [userId, otherUserId, otherUserId, userId]
                 ),
                 supabase
@@ -458,33 +515,44 @@ export default function ConversationScreen() {
 
   const loadContactedUsers = async (id: string) => {
     try {
-      const [sent, received] = await Promise.all([
+      const [sent, received, localSent, localReceived] = await Promise.all([
         supabase
           .from('messages')
-          .select('sender_id, receiver_id, text, created_at')
+          .select('id, sender_id, receiver_id, text, created_at, updated_at')
           .eq('sender_id', id)
           .neq('receiver_id', OVERALL_CHAT_ID)
           .eq('is_deleted', 0)
           .order('created_at', { ascending: false }),
         supabase
           .from('messages')
-          .select('sender_id, receiver_id, text, created_at')
+          .select('id, sender_id, receiver_id, text, created_at, updated_at')
           .eq('receiver_id', id)
           .neq('receiver_id', OVERALL_CHAT_ID)
           .eq('is_deleted', 0)
           .order('created_at', { ascending: false }),
-      ])
-      let results: any[] = [...(sent.data || []), ...(received.data || [])]
-      if (results.length === 0) {
-        results = await dbQuery(
-          `SELECT sender_id, receiver_id, text, created_at FROM messages 
-            WHERE receiver_id != ?
-            AND (sender_id = ? OR receiver_id = ?)
+        dbQuery(
+          `SELECT id, sender_id, receiver_id, text, created_at, updated_at FROM messages 
+            WHERE sender_id = ?
+            AND receiver_id != ?
             AND COALESCE(is_deleted, 0) = 0
             ORDER BY created_at DESC`,
-            [OVERALL_CHAT_ID, id, id]
-        )
-      }
+          [id, OVERALL_CHAT_ID]
+        ),
+        dbQuery(
+          `SELECT id, sender_id, receiver_id, text, created_at, updated_at FROM messages 
+            WHERE receiver_id = ?
+            AND receiver_id != ?
+            AND COALESCE(is_deleted, 0) = 0
+            ORDER BY created_at DESC`,
+          [id, OVERALL_CHAT_ID]
+        ),
+      ])
+      const results: any[] = mergeRowsById([
+        ...(sent.data || []),
+        ...(received.data || []),
+        ...(localSent || []),
+        ...(localReceived || []),
+      ])
       const userMap = new Map<string, { lastContacted: number; lastMessage: string }>()
       results.forEach((msg: any) => {
         const otherUserId = msg.sender_id === id ? msg.receiver_id : msg.sender_id
@@ -529,123 +597,110 @@ export default function ConversationScreen() {
 
   const { refreshing, onRefresh } = usePullToRefresh(refreshConversationData)
 
-  // useFocusEffect(
-  //   React.useCallback(() => {
-  //     if (userId) {
-  //       loadOverallChat(userId)
-  //       loadMessages(userId)
-  //       loadUsers()
-  //       loadContactedUsers(userId)
-  //       loadFriendsListForModal(userId)
-  //     }
-  //   }, [userId])
-  // )
-
-    const directConversationMessages = messages.filter(
+  const directConversationMessages = messages.filter(
     m =>
       (m.senderId === userId && m.receiverId === receiverId) ||
       (m.senderId === receiverId && m.receiverId === userId)
   )
 
   useEffect(() => {
-  if (!userId) return
+    if (!userId) return
 
-  const unsubMessages = onTableChange('messages', () => {
-    console.log('[table listener] userId is:', userIdRef.current)
-    const id = userIdRef.current  // ← use ref, not state
-    if (!id) return
-    loadOverallChat(id)
-    loadMessages(id)
-    loadContactedUsers(id)
-  })
-
-  const unsubProfiles = onTableChange('user_profiles', () => {
-    loadUsers()
-  })
-
-  const unsubContacts = onTableChange('contacts', () => {
-    const id = userIdRef.current
-    if (!id) return
-    loadContactedUsers(id)
-  })
-
-  const messageChannel = supabase
-    .channel(`conversation-messages-${userIdRef.current}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'messages',
-      filter: `sender_id=eq.${userIdRef.current}`,
-    }, () => {
+    const unsubMessages = onTableChange('messages', () => {
       const id = userIdRef.current
       if (!id) return
       loadOverallChat(id)
       loadMessages(id)
       loadContactedUsers(id)
     })
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'messages',
-      filter: `receiver_id=eq.${userIdRef.current}`,
-    }, () => {
-      const id = userIdRef.current
-      if (!id) return
-      loadOverallChat(id)
-      loadMessages(id)
-      loadContactedUsers(id)
-    })
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'messages',
-      filter: `receiver_id=eq.overall-chat`,
-    }, () => {
-      const id = userIdRef.current
-      if (!id) return
-      loadOverallChat(id)
-      loadMessages(id)
-      loadContactedUsers(id)
-    })
-    .subscribe()
 
-  const profileChannel = supabase
-    .channel(`conversation-profiles-${userIdRef.current}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'user_profiles',
-    }, () => {
-      const id = userIdRef.current
-      if (!id) return
+    const unsubProfiles = onTableChange('user_profiles', () => {
       loadUsers()
-      loadContactedUsers(id)
     })
-    .subscribe()
 
-  const contactsChannel = supabase
-    .channel(`conversation-contacts-${userIdRef.current}`)
-    .on('postgres_changes', {
-      event: '*',
-      schema: 'public',
-      table: 'contacts',
-      filter: `user_id=eq.${userIdRef.current}`,
-    }, () => {
+    const unsubContacts = onTableChange('contacts', () => {
       const id = userIdRef.current
       if (!id) return
       loadContactedUsers(id)
     })
-    .subscribe()
 
-  return () => {
-    unsubMessages()
-    unsubProfiles()
-    unsubContacts()
-    supabase.removeChannel(messageChannel)
-    supabase.removeChannel(profileChannel)
-    supabase.removeChannel(contactsChannel)
-  }
-}, [userId])
+    const messageChannel = supabase
+      .channel(`conversation-messages-${userIdRef.current}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: `sender_id=eq.${userIdRef.current}`,
+      }, () => {
+        const id = userIdRef.current
+        if (!id) return
+        loadOverallChat(id)
+        loadMessages(id)
+        loadContactedUsers(id)
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${userIdRef.current}`,
+      }, () => {
+        const id = userIdRef.current
+        if (!id) return
+        loadOverallChat(id)
+        loadMessages(id)
+        loadContactedUsers(id)
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.overall-chat`,
+      }, () => {
+        const id = userIdRef.current
+        if (!id) return
+        loadOverallChat(id)
+        loadMessages(id)
+        loadContactedUsers(id)
+      })
+      .subscribe()
+
+    const profileChannel = supabase
+      .channel(`conversation-profiles-${userIdRef.current}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'user_profiles',
+      }, () => {
+        const id = userIdRef.current
+        if (!id) return
+        loadUsers()
+        loadContactedUsers(id)
+      })
+      .subscribe()
+
+    const contactsChannel = supabase
+      .channel(`conversation-contacts-${userIdRef.current}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'contacts',
+        filter: `user_id=eq.${userIdRef.current}`,
+      }, () => {
+        const id = userIdRef.current
+        if (!id) return
+        loadContactedUsers(id)
+      })
+      .subscribe()
+
+    return () => {
+      unsubMessages()
+      unsubProfiles()
+      unsubContacts()
+      supabase.removeChannel(messageChannel)
+      supabase.removeChannel(profileChannel)
+      supabase.removeChannel(contactsChannel)
+    }
+  }, [userId])
 
   const currentMessages = chatMode === 'overall' ? overallChatMessages : directConversationMessages
   const isEmpty = currentMessages.length === 0
@@ -661,21 +716,21 @@ export default function ConversationScreen() {
     if (msg.isDeleted) {
       return (
         <View key={msg.id} style={styles.deletedWrapper}>
-                      <Text style={styles.deletedMessageText}>
-              — This message has been removed —
-            </Text>
-                  </View>
+          <Text style={styles.deletedMessageText}>
+            — This message has been removed —
+          </Text>
+        </View>
       )
     }
 
     const avatarContent =
-displayProfile?.avatarUrl && displayProfile.avatarUrl.trim() !== '' ? (
-      <Image source={{ uri: displayProfile.avatarUrl }} style={styles.messageSenderAvatar} />
-    ) : (
-      <View style={[styles.messageSenderAvatarPlaceholder, isOwn && styles.ownAvatarPlaceholder]}>
-        <Ionicons name="person" size={15} color={isOwn ? '#FFF' : '#888'} />
-      </View>
-    )
+      displayProfile?.avatarUrl && displayProfile.avatarUrl.trim() !== '' ? (
+        <Image source={{ uri: displayProfile.avatarUrl }} style={styles.messageSenderAvatar} />
+      ) : (
+        <View style={[styles.messageSenderAvatarPlaceholder, isOwn && styles.ownAvatarPlaceholder]}>
+          <Ionicons name="person" size={15} color={isOwn ? '#FFF' : '#888'} />
+        </View>
+      )
 
     const avatar = (
       <TouchableOpacity
@@ -689,41 +744,41 @@ displayProfile?.avatarUrl && displayProfile.avatarUrl.trim() !== '' ? (
     return (
       <Pressable
         key={msg.id}
-        onLongPress={() => isOwn && setSelectedMessageId(msg.id)}
+        // ─── FIX: allow long-press on own messages only ───────────────────
+        onLongPress={() => isOwn ? setSelectedMessageId(msg.id) : null}
         style={styles.messageWrapper}
       >
-                  <Text style={[styles.messageSenderNickname, isOwn && styles.messageSenderNicknameOwn]}>
-            {displayNickname}
-          </Text>
-          <View style={[styles.messageRow, isOwn && styles.messageRowOwn]}>
-            {!isOwn && avatar}
-            <View style={[styles.messageBubble, isOwn && styles.ownMessage]}>
-              <Text style={[styles.messageText, isOwn && styles.ownMessageText]}>{msg.text}</Text>
-              <View style={styles.messageFooter}>
-                <Text style={[styles.timestamp, isOwn && styles.ownTimestamp]}>
-                  {new Date(msg.createdAt).toLocaleTimeString([], {
-hour: '2-digit',
-minute: '2-digit',
-})}
-                </Text>
-                {msg.editedAt && (
-                  <Text style={[styles.editedBadge, isOwn && styles.ownEditedBadge]}>· edited</Text>
-                )}
-              </View>
+        <Text style={[styles.messageSenderNickname, isOwn && styles.messageSenderNicknameOwn]}>
+          {displayNickname}
+        </Text>
+        <View style={[styles.messageRow, isOwn && styles.messageRowOwn]}>
+          {!isOwn && avatar}
+          <View style={[styles.messageBubble, isOwn && styles.ownMessage]}>
+            <Text style={[styles.messageText, isOwn && styles.ownMessageText]}>{msg.text}</Text>
+            <View style={styles.messageFooter}>
+              <Text style={[styles.timestamp, isOwn && styles.ownTimestamp]}>
+                {new Date(msg.createdAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+              {msg.editedAt && (
+                <Text style={[styles.editedBadge, isOwn && styles.ownEditedBadge]}>· edited</Text>
+              )}
             </View>
-            {isOwn && avatar}
-                  </View>
+          </View>
+          {isOwn && avatar}
+        </View>
       </Pressable>
     )
   }
 
-    const renderDirectMessagesPanel = () => (
-      <ScrollView
-        style={styles.dmPanel}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
-      {/* Conversations Section */}
+  const renderDirectMessagesPanel = () => (
+    <ScrollView
+      style={styles.dmPanel}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+    >
       <View style={[styles.sectionBlock, { marginTop: 24 }]}>
         <View style={styles.sectionHeaderRow}>
           <View style={styles.sectionAccentLine} />
@@ -736,78 +791,77 @@ minute: '2-digit',
             <Text style={styles.emptySectionSub}>Start a conversation using recipient ID or QR code</Text>
           </View>
         ) : (
-<View style={{ paddingHorizontal: 16 }}>
+          <View style={{ paddingHorizontal: 16 }}>
             {contactedUsers.map((contact, index) => {
-            const isSelected = selectedConversationId === contact.id
-            return (
-              <View key={contact.id}>
-{index > 0 && <View style={styles.divider} />}
-                <Pressable
-                  style={[styles.conversationItem, isSelected && styles.conversationItemSelected]}
-                  onPress={() => {
-                    if (isSelected) {
-                      setSelectedConversationId(null)
-                    } else {
-                      handleStartConversation(contact.id)
-                    }
-                  }}
-                  onLongPress={() => setSelectedConversationId(contact.id)}
-                >
-                  <TouchableOpacity
-                    onPress={() => setProfileModalUserId(contact.id)}
-                    style={styles.convAvatarWrapper}
-                  >
-                    {contact.avatar ? (
-                      <Image source={{ uri: contact.avatar }} style={styles.convAvatar} />
-                    ) : (
-                      <View style={styles.convAvatarPlaceholder}>
-                        <Ionicons name="person" size={18} color="#888" />
-                      </View>
-                    )}
-                    {activeUserIds.has(contact.id) && <View style={styles.activeDotSmall} />}
-                  </TouchableOpacity>
-                  <View style={styles.convInfo}>
-                    <Text style={styles.convNickname}>{contact.nickname}</Text>
-                    <Text style={styles.convLastMessage} numberOfLines={1}>
-                      {contact.lastMessage || '—'}
-                    </Text>
-                  </View>
-<View style={styles.convRightCol}>
-                  <Text style={styles.convTime}>
-                    {new Date(contact.lastContacted).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </Text>
-                  {isSelected && (
-                    <TouchableOpacity
-                      style={styles.convDeleteBtn}
-                      onPress={() => {
+              const isSelected = selectedConversationId === contact.id
+              return (
+                <View key={contact.id}>
+                  {index > 0 && <View style={styles.divider} />}
+                  <Pressable
+                    style={[styles.conversationItem, isSelected && styles.conversationItemSelected]}
+                    onPress={() => {
+                      if (isSelected) {
                         setSelectedConversationId(null)
-                        handleDeleteConversation(contact.id, contact.nickname)
-                      }}
+                      } else {
+                        handleStartConversation(contact.id)
+                      }
+                    }}
+                    onLongPress={() => setSelectedConversationId(contact.id)}
+                  >
+                    <TouchableOpacity
+                      onPress={() => setProfileModalUserId(contact.id)}
+                      style={styles.convAvatarWrapper}
                     >
-                      <Ionicons name="trash-outline" size={16} color="#111" />
+                      {contact.avatar ? (
+                        <Image source={{ uri: contact.avatar }} style={styles.convAvatar} />
+                      ) : (
+                        <View style={styles.convAvatarPlaceholder}>
+                          <Ionicons name="person" size={18} color="#888" />
+                        </View>
+                      )}
+                      {activeUserIds.has(contact.id) && <View style={styles.activeDotSmall} />}
                     </TouchableOpacity>
-                  )}
-</View>
-                </Pressable>
-              </View>
-            )
-          })}
+                    <View style={styles.convInfo}>
+                      <Text style={styles.convNickname}>{contact.nickname}</Text>
+                      <Text style={styles.convLastMessage} numberOfLines={1}>
+                        {contact.lastMessage || '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.convRightCol}>
+                      <Text style={styles.convTime}>
+                        {new Date(contact.lastContacted).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </Text>
+                      {isSelected && (
+                        <TouchableOpacity
+                          style={styles.convDeleteBtn}
+                          onPress={() => {
+                            setSelectedConversationId(null)
+                            handleDeleteConversation(contact.id, contact.nickname)
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={16} color="#111" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </Pressable>
+                </View>
+              )
+            })}
           </View>
         )}
       </View>
-<View style={{ height: 100 }} />
+      <View style={{ height: 100 }} />
     </ScrollView>
   )
 
-    const activeConvProfile = receiverId ? userProfiles.get(receiverId) : null
+  const activeConvProfile = receiverId ? userProfiles.get(receiverId) : null
   const activeConvNickname = activeConvProfile?.nickname || 'Member'
 
   const renderActiveConversation = () => (
     <>
-      {/* Conversation sub-header */}
       <View style={styles.convHeader}>
         <TouchableOpacity style={styles.backBtn} onPress={() => setReceiverId('')} activeOpacity={0.7}>
           <Ionicons name="chevron-back" size={22} color="#111" />
@@ -815,7 +869,7 @@ minute: '2-digit',
         <TouchableOpacity
           style={styles.convHeaderTapArea}
           onPress={() => setProfileModalUserId(receiverId)}
-activeOpacity={0.7}
+          activeOpacity={0.7}
         >
           <View style={styles.convAvatarWrapper}>
             {activeConvProfile?.avatarUrl ? (
@@ -836,7 +890,7 @@ activeOpacity={0.7}
         </TouchableOpacity>
       </View>
 
-            {isEmpty ? (
+      {isEmpty ? (
         <View style={styles.centerContent}>
           <Ionicons name="chatbubble-ellipses-outline" size={44} color="#BDBDBD" />
           <Text style={styles.emptyText}>No messages yet</Text>
@@ -851,11 +905,11 @@ activeOpacity={0.7}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
           {currentMessages.map(renderMessageBubble)}
-<View style={{ height: 12 }} />
+          <View style={{ height: 12 }} />
         </ScrollView>
       )}
 
-            <View style={styles.inputArea}>
+      <View style={styles.inputArea}>
         <View style={styles.messageInputContainer}>
           <TextInput
             style={styles.textInput}
@@ -867,10 +921,10 @@ activeOpacity={0.7}
             placeholderTextColor="#AAA"
           />
           <TouchableOpacity
-style={[styles.sendButtonSmall, !messageText.trim() && styles.sendButtonDisabled]}
-onPress={handleSendMessage}
+            style={[styles.sendButtonSmall, !messageText.trim() && styles.sendButtonDisabled]}
+            onPress={handleSendMessage}
             activeOpacity={0.8}
->
+          >
             <Ionicons name="arrow-up" size={18} color="#FFF" />
           </TouchableOpacity>
         </View>
@@ -885,7 +939,7 @@ onPress={handleSendMessage}
         <TouchableOpacity
           style={[styles.tab, chatMode === 'overall' && styles.tabActive]}
           onPress={() => setChatMode('overall')}
-activeOpacity={0.7}
+          activeOpacity={0.7}
         >
           <Ionicons
             name={chatMode === 'overall' ? 'people' : 'people-outline'}
@@ -900,7 +954,7 @@ activeOpacity={0.7}
         <TouchableOpacity
           style={[styles.tab, chatMode === 'direct' && styles.tabActive]}
           onPress={() => setChatMode('direct')}
-activeOpacity={0.7}
+          activeOpacity={0.7}
         >
           <Ionicons
             name={chatMode === 'direct' ? 'chatbubble' : 'chatbubble-outline'}
@@ -917,15 +971,15 @@ activeOpacity={0.7}
       {(chatMode === 'overall' || (chatMode === 'direct' && !receiverId)) && (
         <View style={styles.header}>
           <View style={styles.headerContent}>
-<View style={styles.headerAvatarCol}>
-            {userProfile?.avatarUrl ? (
-              <Image source={{ uri: userProfile.avatarUrl }} style={styles.headerAvatar} />
-            ) : (
-              <View style={styles.headerAvatarPlaceholder}>
-                <Ionicons name="person" size={18} color="#888" />
-              </View>
-            )}
-</View>
+            <View style={styles.headerAvatarCol}>
+              {userProfile?.avatarUrl ? (
+                <Image source={{ uri: userProfile.avatarUrl }} style={styles.headerAvatar} />
+              ) : (
+                <View style={styles.headerAvatarPlaceholder}>
+                  <Ionicons name="person" size={18} color="#888" />
+                </View>
+              )}
+            </View>
             <View style={styles.headerInfo}>
               <Text style={styles.headerNickname}>{userProfile?.nickname || 'You'}</Text>
               <Text style={styles.headerTitle}>
@@ -943,7 +997,7 @@ activeOpacity={0.7}
             <View style={styles.centerContent}>
               <Ionicons name="people-outline" size={50} color="#BDBDBD" />
               <Text style={styles.emptyText}>No messages yet</Text>
-<Text style={styles.emptySubtext}>Begin the team conversation below</Text>
+              <Text style={styles.emptySubtext}>Begin the team conversation below</Text>
             </View>
           ) : (
             <ScrollView
@@ -954,7 +1008,7 @@ activeOpacity={0.7}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
               {overallChatMessages.map(renderMessageBubble)}
-<View style={{ height: 12 }} />
+              <View style={{ height: 12 }} />
             </ScrollView>
           )}
           <View style={styles.inputArea}>
@@ -969,10 +1023,10 @@ activeOpacity={0.7}
                 placeholderTextColor="#AAA"
               />
               <TouchableOpacity
-style={[styles.sendButtonSmall, !messageText.trim() && styles.sendButtonDisabled]}
-onPress={handleSendMessage}
+                style={[styles.sendButtonSmall, !messageText.trim() && styles.sendButtonDisabled]}
+                onPress={handleSendMessage}
                 activeOpacity={0.8}
->
+              >
                 <Ionicons name="arrow-up" size={18} color="#FFF" />
               </TouchableOpacity>
             </View>
@@ -988,7 +1042,7 @@ onPress={handleSendMessage}
             <TouchableOpacity
               style={styles.fab}
               onPress={() => setShowNewConversationModal(true)}
-activeOpacity={0.85}
+              activeOpacity={0.85}
             >
               <Ionicons name="create-outline" size={22} color="#FFF" />
             </TouchableOpacity>
@@ -1001,7 +1055,11 @@ activeOpacity={0.85}
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowEditModal(false)}>
+              <TouchableOpacity onPress={() => {
+                setShowEditModal(false)
+                setEditingMessageId(null)
+                setEditingText('')
+              }}>
                 <Text style={styles.cancelButton}>Cancel</Text>
               </TouchableOpacity>
               <Text style={styles.modalTitle}>Edit Message</Text>
@@ -1018,13 +1076,14 @@ activeOpacity={0.85}
                 multiline
                 numberOfLines={6}
                 placeholderTextColor="#AAA"
+                autoFocus
               />
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Message Action Menu */}
+      {/* ─── FIX: Message Action Menu ──────────────────────────────────────── */}
       <Modal
         visible={selectedMessageId !== null}
         transparent
@@ -1033,29 +1092,22 @@ activeOpacity={0.85}
       >
         <Pressable style={styles.menuOverlay} onPress={() => setSelectedMessageId(null)}>
           <View style={styles.actionMenuContainer}>
+            {/* Edit */}
             <TouchableOpacity
               style={styles.menuOption}
               onPress={() => {
-                if (selectedMessageId) {
-                  setEditingMessageId(selectedMessageId)
-                  const msg = currentMessages.find(m => m.id === selectedMessageId)
-                  if (msg) {
-                    setEditingText(msg.text)
-                    setShowEditModal(true)
-                  }
-                }
-                setSelectedMessageId(null)
+                if (selectedMessageId) handleOpenEditModal(selectedMessageId)
               }}
             >
               <Ionicons name="pencil-outline" size={18} color="#111" />
               <Text style={styles.menuOptionText}>Edit Message</Text>
             </TouchableOpacity>
-<View style={styles.menuDivider} />
+            <View style={styles.menuDivider} />
+            {/* Delete */}
             <TouchableOpacity
               style={styles.menuOption}
               onPress={() => {
-                if (selectedMessageId) handleDeleteMessage(selectedMessageId)
-                setSelectedMessageId(null)
+                if (selectedMessageId) handleOpenDeleteConfirm(selectedMessageId)
               }}
             >
               <Ionicons name="trash-outline" size={18} color="#111" />
@@ -1064,6 +1116,7 @@ activeOpacity={0.85}
           </View>
         </Pressable>
       </Modal>
+      {/* ─────────────────────────────────────────────────────────────────── */}
 
       {/* New Conversation Modal */}
       <Modal
@@ -1181,9 +1234,6 @@ activeOpacity={0.85}
 }
 
 // ─── PALETTE ────────────────────────────────────────────────────────────────
-// Pure monochrome: #000 (black), #111 (near-black), #333, #555, #888, #AAA, #CCC, #E8E8E8, #F2F2F2, #FFF
-// Active indicator: #111 (solid black dot for formality)
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F2F2F2' },
 
@@ -1206,12 +1256,12 @@ const styles = StyleSheet.create({
   },
   tabActive: { borderBottomColor: '#111' },
   tabText: {
-fontSize: 12,
-fontWeight: '600',
-color: '#AAA',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#AAA',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
-},
+  },
   tabTextActive: { color: '#111' },
 
   // ── Header ─────────────────────────────────────────────────────────────────
@@ -1223,32 +1273,32 @@ color: '#AAA',
     borderBottomColor: '#E8E8E8',
   },
   headerContent: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-headerAvatarCol: {},
+  headerAvatarCol: {},
   headerAvatar: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: '#E0E0E0' },
   headerAvatarPlaceholder: {
     width: 42,
-height: 42,
-borderRadius: 21,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#F2F2F2',
-justifyContent: 'center',
-alignItems: 'center',
-borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
     borderColor: '#E0E0E0',
   },
   headerInfo: { flex: 1 },
   headerNickname: {
-fontSize: 15,
-fontWeight: '700',
-color: '#111',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
     letterSpacing: 0.2,
-marginBottom: 2,
-},
+    marginBottom: 2,
+  },
   headerTitle: {
-fontSize: 12,
-fontWeight: '400',
-color: '#888',
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#888',
     letterSpacing: 0.3,
-},
+  },
 
   // ── DM Panel ───────────────────────────────────────────────────────────────
   dmPanel: { flex: 1, backgroundColor: '#FAFAFA' },
@@ -1265,69 +1315,69 @@ color: '#888',
     height: 16,
     backgroundColor: '#111',
     borderRadius: 1.5,
-},
+  },
   sectionHeader: {
     fontSize: 12,
     fontWeight: '800',
     color: '#111',
-        letterSpacing: 1.5,
+    letterSpacing: 1.5,
     textTransform: 'uppercase',
   },
 
-  // Friends horizontal scroll
+  // ── Friends / bubbles ──────────────────────────────────────────────────────
   friendsRow: { paddingBottom: 8 },
   friendBubble: { alignItems: 'center', marginRight: 22, width: 64 },
   friendAvatarWrapper: { position: 'relative', marginBottom: 8 },
   friendBubbleAvatar: {
-width: 56,
-height: 56,
-borderRadius: 28,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     borderWidth: 2,
     borderColor: '#E5E5E5',
-},
+  },
   friendBubbleAvatarPlaceholder: {
     width: 56,
-height: 56,
-borderRadius: 28,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: '#E8E8E8',
-justifyContent: 'center',
-alignItems: 'center',
-borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
     borderColor: '#E5E5E5',
   },
   activeDot: {
     position: 'absolute',
-bottom: 1,
-right: 1,
+    bottom: 1,
+    right: 1,
     width: 12,
-height: 12,
-borderRadius: 6,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: '#111',
-borderWidth: 2,
-borderColor: '#F2F2F2',
+    borderWidth: 2,
+    borderColor: '#F2F2F2',
   },
   activeDotSmall: {
     position: 'absolute',
-bottom: 0,
-right: 0,
+    bottom: 0,
+    right: 0,
     width: 9,
-height: 9,
-borderRadius: 5,
+    height: 9,
+    borderRadius: 5,
     backgroundColor: '#111',
-borderWidth: 2,
-borderColor: '#FFF',
+    borderWidth: 2,
+    borderColor: '#FFF',
   },
   friendBubbleName: {
-fontSize: 12,
-fontWeight: '600',
-color: '#222',
-textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#222',
+    textAlign: 'center',
     lineHeight: 15,
     letterSpacing: 0.2,
-},
+  },
 
-  // Conversations list
-divider: {
+  // ── Conversations list ─────────────────────────────────────────────────────
+  divider: {
     height: 1,
     backgroundColor: '#F0F0F0',
     marginVertical: 0,
@@ -1336,17 +1386,17 @@ divider: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFF',
-        paddingVertical: 14,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     gap: 12,
-borderRadius: 8,
+    borderRadius: 8,
     marginVertical: 4,
-      },
+  },
   conversationItemSelected: {
     backgroundColor: '#F8F8F8',
     borderWidth: 1.5,
     borderColor: '#111',
-},
+  },
   convAvatarWrapper: { position: 'relative' },
   convAvatar: {
     width: 46,
@@ -1391,20 +1441,20 @@ borderRadius: 8,
   },
   backBtn: { padding: 4 },
   convHeaderAvatar: {
-width: 36,
-height: 36,
-borderRadius: 18,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: '#E0E0E0',
-},
+  },
   convHeaderAvatarPlaceholder: {
     width: 36,
-height: 36,
-borderRadius: 18,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#F0F0F0',
-justifyContent: 'center',
-alignItems: 'center',
-borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
     borderColor: '#E0E0E0',
   },
   convHeaderName: { fontSize: 15, fontWeight: '700', color: '#111', letterSpacing: 0.1 },
@@ -1416,36 +1466,36 @@ borderWidth: 1,
   deletedWrapper: { alignItems: 'center', marginBottom: 14 },
   messageSenderNickname: {
     fontSize: 11,
-fontWeight: '600',
-color: '#888',
-marginBottom: 4,
-marginLeft: 42,
+    fontWeight: '600',
+    color: '#888',
+    marginBottom: 4,
+    marginLeft: 42,
     letterSpacing: 0.3,
     textTransform: 'uppercase',
   },
   messageSenderNicknameOwn: {
     marginLeft: 0,
-marginRight: 42,
-textAlign: 'right',
-color: '#555',
+    marginRight: 42,
+    textAlign: 'right',
+    color: '#555',
   },
   messageRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   messageRowOwn: { justifyContent: 'flex-end' },
   messageSenderAvatar: {
-width: 30,
-height: 30,
-borderRadius: 15,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     borderWidth: 1,
     borderColor: '#E0E0E0',
-},
+  },
   messageSenderAvatarPlaceholder: {
     width: 30,
-height: 30,
-borderRadius: 15,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#EBEBEB',
-justifyContent: 'center',
-alignItems: 'center',
-borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
     borderColor: '#DCDCDC',
   },
   ownAvatarPlaceholder: {
@@ -1463,11 +1513,11 @@ borderWidth: 1,
     borderColor: '#E8E8E8',
   },
   ownMessage: {
-backgroundColor: '#111',
+    backgroundColor: '#111',
     borderTopRightRadius: 4,
     borderTopLeftRadius: 14,
     borderColor: '#111',
-},
+  },
   messageText: { fontSize: 14, color: '#111', lineHeight: 20 },
   ownMessageText: { color: '#FFF' },
   messageFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
@@ -1476,43 +1526,43 @@ backgroundColor: '#111',
   editedBadge: { fontSize: 10, color: '#BDBDBD', fontStyle: 'italic' },
   ownEditedBadge: { color: 'rgba(255,255,255,0.4)' },
   deletedMessageText: {
-fontSize: 12,
-color: '#BDBDBD',
-fontStyle: 'italic',
+    fontSize: 12,
+    color: '#BDBDBD',
+    fontStyle: 'italic',
     letterSpacing: 0.3,
-},
+  },
 
   // ── Input ──────────────────────────────────────────────────────────────────
   inputArea: {
     backgroundColor: '#FFF',
-borderTopWidth: 1,
-borderTopColor: '#E8E8E8',
+    borderTopWidth: 1,
+    borderTopColor: '#E8E8E8',
     paddingHorizontal: 12,
-paddingVertical: 10,
+    paddingVertical: 10,
   },
   messageInputContainer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   textInput: {
     flex: 1,
-backgroundColor: '#F5F5F5',
-borderRadius: 22,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: '#E0E0E0',
     paddingHorizontal: 16,
-paddingVertical: 10,
-fontSize: 14,
-color: '#111',
-maxHeight: 100,
-lineHeight: 20,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#111',
+    maxHeight: 100,
+    lineHeight: 20,
   },
   sendButtonSmall: {
     backgroundColor: '#111',
-borderRadius: 20,
+    borderRadius: 20,
     width: 40,
-height: 40,
-justifyContent: 'center',
-alignItems: 'center',
-marginBottom: 2,
-},
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
   sendButtonDisabled: {
     backgroundColor: '#BDBDBD',
   },
@@ -1528,199 +1578,199 @@ marginBottom: 2,
   // ── FAB ────────────────────────────────────────────────────────────────────
   fab: {
     position: 'absolute',
-bottom: 24,
-right: 20,
+    bottom: 24,
+    right: 20,
     width: 52,
-height: 52,
-borderRadius: 26,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: '#111',
     justifyContent: 'center',
-alignItems: 'center',
+    alignItems: 'center',
     shadowColor: '#000',
-shadowOffset: { width: 0, height: 4 },
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
-shadowRadius: 8,
-elevation: 6,
+    shadowRadius: 8,
+    elevation: 6,
   },
 
   // ── Modals ─────────────────────────────────────────────────────────────────
   modalContainer: {
     flex: 1,
-backgroundColor: 'rgba(0,0,0,0.45)',
-justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: '#FFF',
-borderTopLeftRadius: 20,
-borderTopRightRadius: 20,
-maxHeight: '90%',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
-justifyContent: 'space-between',
-alignItems: 'center',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 16,
-paddingVertical: 14,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-borderBottomColor: '#E8E8E8',
+    borderBottomColor: '#E8E8E8',
   },
   modalTitle: {
-fontSize: 15,
-fontWeight: '700',
-color: '#111',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
     letterSpacing: 0.2,
-},
+  },
   cancelButton: { color: '#888', fontSize: 14, fontWeight: '500' },
   confirmButton: { color: '#111', fontSize: 14, fontWeight: '700' },
   modalBody: { paddingHorizontal: 16, paddingVertical: 16 },
   label: {
-fontSize: 11,
-fontWeight: '700',
-color: '#888',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#888',
     letterSpacing: 1,
     textTransform: 'uppercase',
-marginBottom: 10,
-},
+    marginBottom: 10,
+  },
   messageInput: {
     borderWidth: 1,
-borderColor: '#E0E0E0',
-borderRadius: 10,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
     paddingHorizontal: 14,
-paddingVertical: 12,
-fontSize: 14,
+    paddingVertical: 12,
+    fontSize: 14,
     color: '#111',
-textAlignVertical: 'top',
-lineHeight: 20,
+    textAlignVertical: 'top',
+    lineHeight: 20,
     backgroundColor: '#FAFAFA',
   },
   menuOverlay: {
     flex: 1,
-backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'center',
-alignItems: 'center',
+    alignItems: 'center',
   },
   actionMenuContainer: {
     backgroundColor: '#FFF',
-borderRadius: 14,
-overflow: 'hidden',
-minWidth: 200,
+    borderRadius: 14,
+    overflow: 'hidden',
+    minWidth: 200,
     shadowColor: '#000',
-shadowOffset: { width: 0, height: 6 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.15,
-shadowRadius: 12,
-elevation: 10,
+    shadowRadius: 12,
+    elevation: 10,
   },
   menuOption: {
     flexDirection: 'row',
-alignItems: 'center',
+    alignItems: 'center',
     paddingHorizontal: 18,
-paddingVertical: 15,
-gap: 12,
-    },
+    paddingVertical: 15,
+    gap: 12,
+  },
   menuDivider: {
     height: 1,
     backgroundColor: '#F0F0F0',
-  marginHorizontal: 16,
-},
+    marginHorizontal: 16,
+  },
   menuOptionText: {
-fontSize: 14,
-fontWeight: '500',
-color: '#111',
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#111',
     letterSpacing: 0.1,
-},
+  },
   deleteOptionText: { color: '#333' },
   newConversationContent: {
     backgroundColor: '#FFF',
-borderTopLeftRadius: 20,
-borderTopRightRadius: 20,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     maxHeight: '90%',
     flex: 1,
   },
   newConversationBody: {
-flex: 1,
-paddingHorizontal: 16,
+    flex: 1,
+    paddingHorizontal: 16,
     paddingTop: 8,
   },
   friendsGrid: {
-flexDirection: 'row',
-flexWrap: 'wrap',
-marginBottom: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 8,
     marginTop: 4,
-},
+  },
   friendCard: {
     width: '33.33%',
-alignItems: 'center',
-marginBottom: 18,
-paddingHorizontal: 4,
+    alignItems: 'center',
+    marginBottom: 18,
+    paddingHorizontal: 4,
   },
   friendAvatar: {
-width: 58,
-height: 58,
-borderRadius: 29,
-marginBottom: 8,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: '#E0E0E0',
-},
+  },
   friendAvatarPlaceholder: {
     width: 58,
-height: 58,
-borderRadius: 29,
+    height: 58,
+    borderRadius: 29,
     backgroundColor: '#EBEBEB',
-justifyContent: 'center',
-alignItems: 'center',
-marginBottom: 8,
-borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    borderWidth: 1,
     borderColor: '#DCDCDC',
   },
   friendName: {
-fontSize: 12,
-fontWeight: '500',
-color: '#333',
-textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#333',
+    textAlign: 'center',
     lineHeight: 15,
-},
+  },
   recipientInputSection: { marginBottom: 4 },
   recipientIdInput: {
     borderWidth: 1,
-borderColor: '#E0E0E0',
-borderRadius: 10,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
     paddingHorizontal: 14,
-paddingVertical: 13,
+    paddingVertical: 13,
     fontSize: 14,
-color: '#111',
-marginBottom: 10,
+    color: '#111',
+    marginBottom: 10,
     backgroundColor: '#FAFAFA',
   },
   startButton: {
     backgroundColor: '#111',
-borderRadius: 10,
-paddingVertical: 14,
-alignItems: 'center',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
   },
   startButtonDisabled: { backgroundColor: '#DCDCDC' },
   startButtonText: {
-color: '#FFF',
-fontSize: 14,
-fontWeight: '600',
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
     letterSpacing: 0.3,
-},
+  },
   qrButton: {
     backgroundColor: '#F5F5F5',
-borderRadius: 12,
-paddingVertical: 22,
+    borderRadius: 12,
+    paddingVertical: 22,
     alignItems: 'center',
-justifyContent: 'center',
-borderWidth: 1,
+    justifyContent: 'center',
+    borderWidth: 1,
     borderColor: '#E8E8E8',
     marginTop: 8,
   },
   qrButtonText: {
-fontSize: 13,
-fontWeight: '600',
-color: '#333',
-marginTop: 8,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 8,
     letterSpacing: 0.3,
-},
+  },
 
   // ── QR Scanner ────────────────────────────────────────────────────────────
   scannerContainer: {

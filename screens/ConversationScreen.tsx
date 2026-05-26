@@ -58,6 +58,12 @@ export default function ConversationScreen() {
     return typeof timestamp === 'number' ? timestamp : Number(timestamp) || 0
   }
 
+  const loadCurrentUserProfile = async (id: string) => {
+    const profile = await getUserProfileByUserId(id)
+    setUserProfile(profile)
+    return profile
+  }
+
   const mergeRowsById = (rows: any[]) => {
     const merged = new Map<string, any>()
     for (const row of rows) {
@@ -76,8 +82,7 @@ export default function ConversationScreen() {
       if (user) {
         setUserId(user.id)
         userIdRef.current = user.id
-        const profile = await getUserProfileByUserId(user.id)
-        setUserProfile(profile)
+        await loadCurrentUserProfile(user.id)
         await Promise.all([
           loadMessages(user.id),
           loadOverallChat(user.id),
@@ -138,11 +143,11 @@ export default function ConversationScreen() {
       const allMessages = rows.map(mapMessage).sort((a, b) => a.createdAt - b.createdAt)
 
       setMessages([...allMessages])
-      await loadUsers()
+      const loadedProfiles = await loadUsers()
       setTimeout(() => scrollViewRef?.scrollToEnd({ animated: true }), 100)
 
       const senderIds = new Set(allMessages.map(m => m.senderId))
-      const profilesMap = new Map<string, UserProfile>(userProfiles)
+      const profilesMap = new Map<string, UserProfile>(loadedProfiles)
       for (const senderId of senderIds) {
         if (!profilesMap.has(senderId)) {
           const profile = await getProfileWithFallback(senderId)
@@ -189,10 +194,10 @@ export default function ConversationScreen() {
 
       const mapped = results.map(mapMessage)
       setOverallChatMessages([...mapped])
-      await loadUsers()
+      const loadedProfiles = await loadUsers()
 
       const senderIds = new Set(mapped.map(m => m.senderId))
-      const profilesMap = new Map<string, UserProfile>(userProfilesRef.current)
+      const profilesMap = new Map<string, UserProfile>(loadedProfiles)
       for (const senderId of senderIds) {
         if (!profilesMap.has(senderId)) {
           const profile = await getProfileWithFallback(senderId)
@@ -441,7 +446,7 @@ const handleDeleteMessage = async (messageId: string) => {
 
   const getProfileWithFallback = async (targetUserId: string): Promise<UserProfile | null> => {
     const local = await getUserProfileByUserId(targetUserId)
-    if (local?.nickname) return local
+    if (local && (local.nickname || local.avatarUrl || local.bio || local.instruments)) return local
     try {
       const { supabase } = await import('../lib/supabase')
       const { data } = await supabase
@@ -488,7 +493,7 @@ const handleDeleteMessage = async (messageId: string) => {
     return null
   }
 
-  const loadUsers = async () => {
+  const loadUsers = async (): Promise<Map<string, UserProfile>> => {
     try {
       const { data } = await supabase.from('user_profiles').select('*')
       const allProfiles: any[] = data && data.length > 0 ? data : await dbQuery(`SELECT * FROM user_profiles`)
@@ -508,8 +513,11 @@ const handleDeleteMessage = async (messageId: string) => {
         })
       }
       setUserProfiles(profilesMap)
+      userProfilesRef.current = profilesMap
+      return profilesMap
     } catch (err) {
       console.error('Error loading users:', err)
+      return new Map<string, UserProfile>()
     }
   }
 
@@ -588,6 +596,7 @@ const handleDeleteMessage = async (messageId: string) => {
     const id = userIdRef.current || userId
     if (!id) return
     await Promise.all([
+      loadCurrentUserProfile(id),
       loadMessages(id),
       loadOverallChat(id),
       loadUsers(),
@@ -615,6 +624,11 @@ const handleDeleteMessage = async (messageId: string) => {
     })
 
     const unsubProfiles = onTableChange('user_profiles', () => {
+      const id = userIdRef.current
+      if (id) {
+        void loadCurrentUserProfile(id)
+        loadContactedUsers(id)
+      }
       loadUsers()
     })
 
@@ -701,6 +715,14 @@ const handleDeleteMessage = async (messageId: string) => {
       supabase.removeChannel(contactsChannel)
     }
   }, [userId])
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const id = userIdRef.current || userId
+      if (!id) return
+      void refreshConversationData()
+    }, [userId])
+  )
 
   const currentMessages = chatMode === 'overall' ? overallChatMessages : directConversationMessages
   const isEmpty = currentMessages.length === 0

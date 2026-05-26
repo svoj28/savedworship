@@ -14,7 +14,7 @@ import {
 import { ScrollView as HorizontalScroll } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { Picker } from '@react-native-picker/picker'
-import { getAllKeys, getTransposeDistance, transposeText } from '../lib/transpose'
+import { getAllKeys, getTransposeDistance, transposeText, hasNashville, transposeTextToNashville } from '../lib/transpose'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
 
@@ -158,6 +158,7 @@ interface SongPageProps {
   song: any
   index: number
   transposeKey: string
+  notationMode: 'chords' | 'nashville'
   viewMode: 'lyrics' | 'chords' | 'both'
   fontSize: number
   isActive: boolean
@@ -171,6 +172,7 @@ function SongPage({
   song,
   index,
   transposeKey,
+  notationMode,
   viewMode,
   fontSize,
   isActive,
@@ -189,10 +191,17 @@ function SongPage({
   const displayContent = useMemo(() => {
     if (!song?.content) return ''
     const originalKey = getEffectiveSongKey(song)
-    const semitones = getTransposeDistance(originalKey, transposeKey)
-    let content = semitones !== 0 ? transposeText(song.content, semitones, transposeKey) : song.content
+    let content = song.content || ''
+    if (notationMode === 'nashville') {
+      content = transposeTextToNashville(content, originalKey)
+    } else {
+      const semitones = getTransposeDistance(originalKey, transposeKey)
+      if (semitones !== 0 || hasNashville(content)) {
+        content = transposeText(song.content, semitones, transposeKey)
+      }
+    }
     return content
-  }, [song, transposeKey])
+  }, [song, transposeKey, notationMode])
 
   const parsedSections = useMemo(() => parseSongSections(displayContent), [displayContent])
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
@@ -351,6 +360,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   const scrollRef = useRef<any>(null)
   const [currentIndex, setCurrentIndex]     = useState(0)
   const [transposeKeys, setTransposeKeys]   = useState<string[]>([])
+  const [notationMode, setNotationMode]     = useState<'chords' | 'nashville'>('chords')
   const [viewMode, setViewMode]             = useState<'lyrics' | 'chords' | 'both'>('both')
   const [fontSize, setFontSize]             = useState(15)
   const [showTransposePicker, setShowTransposePicker] = useState(false)
@@ -366,6 +376,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
     if (visible && songs.length > 0) {
       setTransposeKeys(songs.map(getEffectiveSongKey))
       setCurrentIndex(startIndex)
+      setNotationMode('chords')
       setViewMode('both')
       setIsAutoScrolling(false)
       setTimeout(() => {
@@ -375,7 +386,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   }, [visible, songs, startIndex])
 
   // Stop auto-scroll on song/mode change
-  useEffect(() => { setIsAutoScrolling(false) }, [currentIndex, viewMode])
+  useEffect(() => { setIsAutoScrolling(false) }, [currentIndex, viewMode, notationMode])
 
   const handleScroll = (e: any) => {
     const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH)
@@ -486,18 +497,39 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
               </TouchableOpacity>
             ))}
           </View>
-          {/* Transpose chip */}
-          <TouchableOpacity
-            style={s.transposeChip}
-            onPress={() => setShowTransposePicker(true)}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="musical-notes" size={11} color="rgba(255,255,255,0.5)" style={{ marginRight: 5 }} />
-            <Text style={s.transposeChipText}>
-              {originalKey}{isTransposed ? ` → ${targetKey}` : ''}
-            </Text>
-            <Ionicons name="chevron-down" size={10} color="rgba(255,255,255,0.3)" style={{ marginLeft: 3 }} />
-          </TouchableOpacity>
+          {notationMode === 'chords' ? (
+            <TouchableOpacity
+              style={s.transposeChip}
+              onPress={() => setShowTransposePicker(true)}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="musical-notes" size={11} color="rgba(255,255,255,0.5)" style={{ marginRight: 5 }} />
+              <Text style={s.transposeChipText}>
+                {originalKey}{isTransposed ? ` → ${targetKey}` : ''}
+              </Text>
+              <Ionicons name="chevron-down" size={10} color="rgba(255,255,255,0.3)" style={{ marginLeft: 3 }} />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 120 }} />
+          )}
+        </View>
+
+        <View style={s.notationRow}>
+          <Text style={s.notationLabel}>Notation</Text>
+          <View style={s.notationBar}>
+            {(['chords', 'nashville'] as const).map(mode => (
+              <TouchableOpacity
+                key={mode}
+                style={[s.modeTab, notationMode === mode && s.modeTabActive]}
+                onPress={() => setNotationMode(mode)}
+                activeOpacity={0.7}
+              >
+                <Text style={[s.modeTabText, notationMode === mode && s.modeTabTextActive]}>
+                  {mode === 'chords' ? 'Chords' : 'Nashville'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         {/* Speed pills — only shown when auto-scrolling or recently toggled */}
@@ -534,6 +566,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
               song={song}
               index={index}
               transposeKey={transposeKeys[index] || song.key || 'C'}
+              notationMode={notationMode}
               viewMode={viewMode}
               fontSize={fontSize}
               isActive={index === currentIndex}
@@ -665,6 +698,16 @@ const s = StyleSheet.create({
   controlsRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingVertical: 10, gap: 8,
+  },
+  notationRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingBottom: 10, gap: 8,
+  },
+  notationLabel: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  notationBar: {
+    flex: 1, flexDirection: 'row',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 6, overflow: 'hidden',
   },
   modeBar: {
     flex: 1, flexDirection: 'row',

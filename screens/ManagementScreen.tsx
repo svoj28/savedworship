@@ -98,7 +98,7 @@ export default function ManagementScreen({ route }: any) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const { isAdmin } = useRole()
+  const { isAdmin, canManageContent } = useRole()
   const { notifications } = useNotifications()
   const lastManagementNotificationIdRef = React.useRef<string | null>(null)
 
@@ -341,7 +341,7 @@ const getCount = (key?: string): number => {
   }
 
   const handleSaveConfirm = () => {
-    if (!isAdmin) {
+    if (!canManageContent) {
       Alert.alert('Access denied', 'Only admins can add or edit management items.')
       return
     }
@@ -397,8 +397,8 @@ const getCount = (key?: string): number => {
   }
 
   const handleSubmit = async () => {
-    if (!isAdmin) {
-      Alert.alert('Access denied', 'Only admins can add or edit management items.')
+    if (!canManageContent) {
+      Alert.alert('Access denied', 'Only admins or managers can add or edit management items.')
       return
     }
     if (saving || deletingId) return
@@ -533,8 +533,8 @@ const getCount = (key?: string): number => {
   }
 
   const handleDelete = async (item: any) => {
-    if (!isAdmin) {
-      Alert.alert('Access denied', 'Only admins can delete management items.')
+    if (!canManageContent) {
+      Alert.alert('Access denied', 'Only admins or managers can delete management items.')
       return
     }
     if (saving || deletingId) return
@@ -626,7 +626,7 @@ const getCount = (key?: string): number => {
           <Text style={styles.sectionHeaderEyebrow}>MANAGEMENT</Text>
           <Text style={styles.sectionHeaderTitle}>{sectionTitle}</Text>
         </View>
-        {isAdmin ? (
+        {canManageContent ? (
           <TouchableOpacity style={styles.addBtn} onPress={handleAddNew} activeOpacity={0.8}>
             <Ionicons name="add" size={18} color="#FAFAFA" />
           </TouchableOpacity>
@@ -644,7 +644,7 @@ const getCount = (key?: string): number => {
           </View>
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptySubtitle}>
-            {isAdmin ? 'Tap + to add your first item' : 'No items have been added'}
+            {canManageContent ? 'Tap + to add your first item' : 'No items have been added'}
           </Text>
         </View>
       ) : (
@@ -680,7 +680,7 @@ const getCount = (key?: string): number => {
                 ) : null}
                 <Text style={styles.itemViewMore}>Tap to view full content</Text>
               </View>
-            {isAdmin && (
+                {canManageContent && (
             <View style={styles.itemActions}>
               <TouchableOpacity style={styles.itemActionBtn} onPress={() => handleEdit(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
                 <Ionicons name="pencil-outline" size={15} color="#0A0A0A" />
@@ -689,11 +689,11 @@ const getCount = (key?: string): number => {
                 <Ionicons name="trash-outline" size={15} color="#C0C0C0" />
               </TouchableOpacity>
             </View>
-            )}
+                )}
           </TouchableOpacity>
         ))}
 
-         {isAdmin && (
+         {canManageContent && (
         <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddNew} activeOpacity={0.7}>
           <Ionicons name="add" size={17} color="#0A0A0A" />
           <Text style={styles.addMoreText}>Add Another</Text>
@@ -898,7 +898,7 @@ const getCount = (key?: string): number => {
               ) : null}
             </ScrollView>
 
-            {isAdmin && selectedItem && (
+            {canManageContent && selectedItem && (
               <View style={styles.detailActions}>
                 <TouchableOpacity style={[styles.detailActionBtn, styles.detailActionBtnSecondary]} onPress={() => { const item = selectedItem; setSelectedItem(null); handleEdit(item) }}>
                   <Ionicons name="pencil-outline" size={16} color="#0A0A0A" />

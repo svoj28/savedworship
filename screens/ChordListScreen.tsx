@@ -18,8 +18,9 @@ import {
 import { Picker } from '@react-native-picker/picker'
 import { useFocusEffect } from '@react-navigation/native'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import * as Clipboard from 'expo-clipboard'
 import { Song, ChordList, Playlist, PlaylistItem } from '../db/models'
-import { transposeText, getAllKeys, getTransposeDistance } from '../lib/transpose'
+import { transposeText, getAllKeys, getTransposeDistance, hasNashville, transposeTextToNashville } from '../lib/transpose'
 import { execute, query } from '../db/index'
 import { subscribeToChanges } from '../lib/sync'  
 import {
@@ -28,6 +29,9 @@ import {
   updatePlaylistItemPosition,
   getChordListById,
   getSongsByChordListId,
+  removeFromPlaylist,
+  deleteSong,
+  deleteChordListRecord,
 } from '../db/queries'
 import { getCurrentUser } from '../lib/auth'
 import { useRole } from '../lib/useRole'
@@ -35,6 +39,7 @@ import { supabase } from '../lib/supabase'
 import { onTableChange } from '../lib/sync'
 import YoutubePlayer from 'react-native-youtube-iframe'
 import { usePullToRefresh } from '../lib/usePullToRefresh'
+import { isChordListPublic } from '../lib/chordListPrivacy'
 
 interface Props {
   route: any
@@ -42,6 +47,7 @@ interface Props {
 }
 
 type ViewMode  = 'lyrics' | 'chords' | 'both'
+type NotationMode = 'chords' | 'nashville'
 type BrowseMode = 'single' | 'artist' | 'playlist'
 type SongTab   = 'sheet' | 'video'
 
@@ -208,6 +214,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const [songs, setSongs]                       = useState<Song[]>([])
   const [selectedSongId, setSelectedSongId]     = useState<string | null>(null)
   const [viewMode, setViewMode]                 = useState<ViewMode>('both')
+  const [notationMode, setNotationMode]         = useState<NotationMode>('chords')
   const [transposeToKey, setTransposeToKey]     = useState<string>('C')
   const [loading, setLoading]                   = useState(true)
   const { canManageChords }                     = useRole()
@@ -277,7 +284,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
   //   return () => { u1(); u2(); u3(); u4() }
   // }, [chordListId])
 
-  useEffect(() => { stopAutoScroll() }, [selectedSongId, viewMode, transposeToKey])
+  useEffect(() => { stopAutoScroll() }, [selectedSongId, viewMode, notationMode, transposeToKey])
 
   // ── Auto-scroll ────────────────────────────────────────────────────────
   const startAutoScroll = useCallback(() => {
@@ -358,7 +365,10 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
     const stillValid = currentId && mapped.find(s => s.id === currentId)
     if (!stillValid && mapped.length > 0) {
       setSelectedSongId(mapped[0].id)
-      setTransposeToKey(mapped[0].key || 'C')
+      // If the song content uses Nashville numerals, do not auto-set the target key
+      if (!hasNashville(mapped[0].content || '')) {
+        setTransposeToKey(mapped[0].key || 'C')
+      }
       setCurrentItemIndex(0)
     }
   } catch (err) {
@@ -376,9 +386,8 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!artistId) return
     try {
       const { data: clRows } = await supabase
-        .from('chord_lists').select('id').eq('artist_id', artistId)
-        .or('is_private.eq.0,is_private.is.null')
-      const clIds = (clRows || []).map(r => r.id)
+        .from('chord_lists').select('id, is_private').eq('artist_id', artistId)
+      const clIds = (clRows || []).filter(isChordListPublic).map(r => r.id)
       let songRows: any[] = []
       if (clIds.length > 0) {
         const { data } = await supabase
@@ -520,7 +529,9 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
         if (items[0].songId) {
           setSelectedSongId(items[0].songId)
           const firstSong = fetchedSongs[0]
-          if (firstSong) setTransposeToKey(firstSong.key || 'C')
+          if (firstSong && !hasNashville(firstSong.content || '')) {
+            setTransposeToKey(firstSong.key || 'C')
+          }
         }
       }
       setShowPlaylistModal(false)
@@ -555,6 +566,28 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
       const newIndex = currentItemIndex + 1
       setCurrentItemIndex(newIndex)
       if (browseItems[newIndex].songId) setSelectedSongId(browseItems[newIndex].songId!)
+    }
+  }
+
+  const getCopyTextForSection = (section: SongSection) => {
+    if (viewMode === 'chords') return extractChordsOnlyFromContent(section.content)
+    if (viewMode === 'lyrics') return section.content.replace(/\[([^\]]+)\]/g, '').trim()
+    // both
+    return section.content.replace(/\[([^\]]+)\]/g, '$1').trim()
+  }
+
+  const handleCopy = async () => {
+    if (!selectedSong) {
+      Alert.alert('Nothing to copy', 'No song selected')
+      return
+    }
+    try {
+      const text = parsedSections.map(s => `${s.label}\n\n${getCopyTextForSection(s)}`).join('\n\n')
+      await Clipboard.setStringAsync(text)
+      Alert.alert('Copied', 'Chord list copied to clipboard')
+    } catch (err) {
+      console.error('Copy failed', err)
+      Alert.alert('Error', 'Failed to copy to clipboard')
     }
   }
 
@@ -594,16 +627,50 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
   const handleDeleteSong = async () => {
     if (!selectedSong) return
     setShowOptionsModal(false)
-    Alert.alert('Delete Song', 'Are you sure you want to delete this song?', [
+    // If we are viewing a playlist, remove the song from that playlist only.
+    // If after removal the song is not present in any playlist, delete the song record itself.
+    Alert.alert('Delete Song', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
           try {
-            await execute('DELETE FROM songs WHERE id = ?', [selectedSong.id])
+            if (selectedPlaylistId) {
+              // remove from current playlist only
+              const items = await getPlaylistItems(selectedPlaylistId)
+              const item = items.find(i => i.songId === selectedSong.id)
+              if (item) {
+                await removeFromPlaylist(item.id)
+                // reload playlist view
+                await loadPlaylistSongs(selectedPlaylistId)
+                // check if song exists in any other playlist
+                const referencing = await query('SELECT id FROM playlist_items WHERE song_id = ?', [selectedSong.id])
+                if (!referencing || referencing.length === 0) {
+                  // no longer referenced: delete song record
+                  await deleteSong(selectedSong.id)
+                  navigation.navigate('ChordListsTab', { screen: 'ChordListsHome' })
+                } else {
+                  Alert.alert('Removed', 'Song removed from playlist')
+                }
+                return
+              }
+            }
+
+            // No playlist context or not found in current playlist: delete the song itself
+            await deleteSong(selectedSong.id)
+
+            // If this was the last song in the chord list, remove the chord list row too.
+            const remainingSongs = await getSongsByChordListId(selectedSong.chordListId)
+            if (!remainingSongs || remainingSongs.length === 0) {
+              await deleteChordListRecord(selectedSong.chordListId)
+            }
+
             navigation.navigate('ChordListsTab', { screen: 'ChordListsHome' })
-          } catch { Alert.alert('Error', 'Failed to delete song') }
+          } catch (err) {
+            console.error('Failed to delete song:', err)
+            Alert.alert('Error', 'Failed to delete song')
+          }
         },
       },
     ])
@@ -614,11 +681,19 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
 
   const displayContent = useMemo(() => {
     if (!selectedSong) return ''
+    const sourceKey = selectedSong.key || 'C'
     let content = selectedSong.content || ''
-      const semitones = getTransposeDistance(selectedSong.key || 'C', transposeToKey)
-      if (semitones !== 0) content = transposeText(content, semitones, transposeToKey)
+    if (notationMode === 'nashville') {
+      content = transposeTextToNashville(content, sourceKey)
+    } else {
+      const semitones = getTransposeDistance(sourceKey, transposeToKey)
+      // Always convert Nashville numerals to real chords for the selected target key
+      // even when semitones == 0 (i.e., target == original). This makes Nashville
+      // content transposable in all keys and visible when in Nashville form.
+      if (semitones !== 0 || hasNashville(content)) content = transposeText(content, semitones, transposeToKey)
+    }
     return content
-  }, [selectedSong, transposeToKey])
+  }, [selectedSong, transposeToKey, notationMode])
 
   const parsedSections = useMemo(() => parseSongSections(displayContent), [displayContent])
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null)
@@ -694,6 +769,13 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
             </Text>
           </View>
         )}
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={handleCopy}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="copy-outline" size={16} color="#0A0A0A" />
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => setShowOptionsModal(true)}
@@ -802,16 +884,36 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
                 </TouchableOpacity>
               ))}
             </View>
-            <TouchableOpacity
-              style={styles.transposeChip}
-              onPress={() => setShowTransposePicker(true)} activeOpacity={0.75}
-            >
-              <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
-              <Text style={styles.transposeChipText}>
-                {selectedSong?.key || 'C'}{' → '}{transposeToKey}
-              </Text>
-              <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
-            </TouchableOpacity>
+          </View>
+
+          <View style={styles.notationRow}>
+            <Text style={styles.notationLabel}>Notation</Text>
+            <View style={styles.notationPills}>
+              {(['chords', 'nashville'] as const).map(mode => (
+                <TouchableOpacity
+                  key={mode}
+                  style={[styles.pill, notationMode === mode && styles.pillActive]}
+                  onPress={() => setNotationMode(mode)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.pillText, notationMode === mode && styles.pillTextActive]}>
+                    {mode === 'chords' ? 'Chords' : 'Nashville'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {notationMode === 'chords' ? (
+              <TouchableOpacity
+                style={styles.transposeChip}
+                onPress={() => setShowTransposePicker(true)} activeOpacity={0.75}
+              >
+                <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
+                <Text style={styles.transposeChipText}>
+                  {selectedSong?.key || 'C'}{' → '}{transposeToKey}
+                </Text>
+                <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
+              </TouchableOpacity>
+            ) : <View style={{ width: 120 }} />}
             <TouchableOpacity
               style={[styles.scrollIconBtn, isAutoScrolling && styles.scrollIconBtnActive]}
               onPress={toggleAutoScroll}
@@ -872,7 +974,9 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
                 onValueChange={value => {
                   setSelectedSongId(value)
                   const song = songs.find(s => s.id === value)
-                  if (song) setTransposeToKey(song.key || 'C')
+                  if (song && !hasNashville(song.content || '')) {
+                    setTransposeToKey(song.key || 'C')
+                  }
                 }}
                 dropdownIconColor="#ADADAD"
               >
@@ -1164,6 +1268,9 @@ const styles = StyleSheet.create({
 
   controlsRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8 },
   viewModePills: { flexDirection: 'row', flex: 1, backgroundColor: '#F2F2F2', borderRadius: 10, padding: 3, gap: 2 },
+  notationRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingBottom: 10, gap: 8, borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
+  notationLabel: { fontSize: 11, fontWeight: '800', color: '#ADADAD', letterSpacing: 0.9, textTransform: 'uppercase' },
+  notationPills: { flexDirection: 'row', flex: 1, backgroundColor: '#F2F2F2', borderRadius: 10, padding: 3, gap: 2 },
   pill: { flex: 1, paddingVertical: 7, alignItems: 'center', borderRadius: 8 },
   pillActive: { backgroundColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3, elevation: 2 },
   pillText: { fontSize: 12, fontWeight: '600', color: '#ADADAD' },

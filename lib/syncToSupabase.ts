@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { execute, query } from '../db/index'
 import NetInfo from '@react-native-community/netinfo'
+import { isChordListPublic } from './chordListPrivacy'
 
 type TableName =
   | 'artists'
@@ -127,9 +128,13 @@ export async function syncAllUnsyncedRows() {
       }
 
       // 2. Push unsynced upserts — skip orphaned rows from other users
-      const unsynced: any[] = table === 'chord_lists'
-  ? await query(`SELECT * FROM ${table} WHERE _synced = 0 AND (is_private = 0 OR is_private IS NULL) AND (deleted_at IS NULL OR deleted_at = '')`)
-  : await query(`SELECT * FROM ${table} WHERE _synced = 0 AND (deleted_at IS NULL OR deleted_at = '')`)
+      let unsynced: any[] = await query(
+        `SELECT * FROM ${table} WHERE _synced = 0 AND (deleted_at IS NULL OR deleted_at = '')`
+      )
+
+      if (table === 'chord_lists') {
+        unsynced = unsynced.filter(isChordListPublic)
+      }
 
 
       for (const row of unsynced) {

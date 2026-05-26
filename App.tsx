@@ -21,7 +21,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { initializeDatabase } from './db/index'
 
 // Auth
-import { onAuthStateChange, getCurrentUser, AuthUser } from './lib/auth'
+import { onAuthStateChange, getCurrentUser, AuthUser, OFFLINE_GUEST_USER_ID } from './lib/auth'
 
 // Sync
 import { stampUserIdOnUnsyncedRows, removeOrphanedUnsyncedRows, subscribeToChanges, fullSync } from './lib/sync'
@@ -52,6 +52,7 @@ import { StatusBar as RNStatusBar } from 'react-native'
 import { loadNotificationsFromSupabase } from './lib/notifications'
 import * as Notifications from 'expo-notifications'
 import { navigationRef, navigateFromNotification } from './lib/notificationNavigation'
+import { isOnline } from './lib/networkStatus'
 
 // Components
 import CustomDrawerContent from './components/CustomDrawerContent'
@@ -479,22 +480,41 @@ function AppContent() {
   const pendingNotificationRef = useRef<any | null>(null)
 
   useEffect(() => {
-    const initializeApp = async () => {
+    let isMounted = true
+
+    const splashTimeout = setTimeout(() => {
+      if (isMounted) setLoading(false)
+    }, 1200)
+
+    void initializeDatabase()
+      .then(() => {
+        if (isMounted) setDbReady(true)
+      })
+      .catch((err) => {
+        if (!isMounted) return
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error'
+        setDbError(errorMsg)
+      })
+
+    void (async () => {
       try {
-        await initializeDatabase()
-        setDbReady(true)
         const authUser = await getCurrentUser()
-        setUser(authUser)
+        if (isMounted) setUser(authUser)
       } catch (err) {
+        if (!isMounted) return
         const errorMsg = err instanceof Error ? err.message : 'Unknown error'
         setDbError(errorMsg)
       } finally {
-        setLoading(false)
+        if (isMounted) setLoading(false)
       }
-    }
-    initializeApp()
+    })()
+
     const unsubscribe = onAuthStateChange(setUser)
-    return () => unsubscribe()
+    return () => {
+      isMounted = false
+      clearTimeout(splashTimeout)
+      unsubscribe()
+    }
   }, [])
 
   // ── ADDED: Deep link handler for password reset ───────────────────────────
@@ -526,7 +546,7 @@ function AppContent() {
   // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!user || !dbReady) {
+    if (!user || !dbReady || user.id === OFFLINE_GUEST_USER_ID) {
       periodicSyncCleanupRef.current?.()
       periodicSyncCleanupRef.current = null
       realtimeCleanupRef.current?.()
@@ -544,13 +564,17 @@ function AppContent() {
         await removeOrphanedUnsyncedRows(user.id)
         await stampUserIdOnUnsyncedRows(user.id)
 
-        fullSync(user.id).catch(err => console.error('Initial sync failed:', err))
+        const online = await isOnline()
+        if (online) {
+          fullSync(user.id).catch(err => console.error('Initial sync failed:', err))
+          await pingSupabaseOncePerDay(user.id)
+          await loadNotificationsFromSupabase(user.id)
+        }
 
-        await pingSupabaseOncePerDay(user.id)
-        await loadNotificationsFromSupabase(user.id)
         startNetworkSync()
 
         const syncInterval = setInterval(async () => {
+          if (!(await isOnline())) return
           await fullSync(user.id)
         }, 10000)
         periodicSyncCleanupRef.current = () => clearInterval(syncInterval)
@@ -558,7 +582,9 @@ function AppContent() {
         realtimeCleanupRef.current?.()
         realtimeCleanupRef.current = null
         const unsubscribeRealtime = subscribeToChanges(user.id, async () => {
-          await loadNotificationsFromSupabase(user.id)
+          if (await isOnline()) {
+            await loadNotificationsFromSupabase(user.id)
+          }
         })
         realtimeCleanupRef.current = unsubscribeRealtime
       } catch (err) {

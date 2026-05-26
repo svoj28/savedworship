@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { getCurrentUser } from './auth'
 import { getUserProfileByUserId } from '../db/queries'
 import { supabase } from './supabase'
+import { isOnline } from './networkStatus'
 
-export type UserRole = 'superadmin' | 'admin' | 'user' | 'guest'
+export type UserRole = 'superadmin' | 'admin' | 'manager' | 'user' | 'guest'
 
 export function useRole() {
   const [role, setRole] = useState<UserRole>('guest')
@@ -22,6 +23,13 @@ export function useRole() {
         if (localRole && localRole !== 'user') {
           // Has a specific role set locally
           setRole(localRole)
+          setLoading(false)
+          return
+        }
+
+        const online = await isOnline()
+        if (!online) {
+          setRole(localRole ?? 'user')
           setLoading(false)
           return
         }
@@ -60,10 +68,12 @@ export function useRole() {
     role,
     loading,
     isSuperAdmin: role === 'superadmin',
+    isManager: role === 'manager',
     isAdmin: role === 'admin',
     isUser: role === 'user',
-    canManageChords: role === 'superadmin',
-    canManageContent: role === 'superadmin' || role === 'admin',
+    // 'manager' can perform full CRUD like superadmin
+    canManageChords: role === 'superadmin' || role === 'manager',
+    canManageContent: role === 'superadmin' || role === 'admin' || role === 'manager',
     canMessage: role !== 'guest',
     canEditProfile: role !== 'guest',
     canAddContacts: role !== 'guest',

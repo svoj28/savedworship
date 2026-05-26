@@ -137,7 +137,7 @@ export default function AddSongScreen({ route, navigation }: Props) {
       )
     }
 
-    await createSong({
+    const songPayload = {
       chordListId: finalChordListId,
       title,
       content: content.trim(),
@@ -147,8 +147,11 @@ export default function AddSongScreen({ route, navigation }: Props) {
       createdAt: now,
       updatedAt: now,
       synced: false,
-    })
+    }
 
+    console.log('[AddSongScreen] creating song with payload:', { ...songPayload })
+    await createSong(songPayload)
+    console.log('[AddSongScreen] createSong returned, navigating back')
     navigation.goBack()
   } catch (err) {
     console.error('Error adding song:', err)

@@ -102,6 +102,20 @@ const ROMAN_TO_SEMITONE: Record<string, number> = {
 const ALL_ROMANS = Object.keys(ROMAN_TO_SEMITONE).sort((a, b) => b.length - a.length)
 const ROMAN_PATTERN = ALL_ROMANS.map(r => r.replace('#', '\\#')).join('|')
 const ROMAN_RE = new RegExp(`^(${ROMAN_PATTERN})(.*)$`, 'i')
+const SEMITONE_TO_ROMAN: Record<number, string> = {
+  0: 'I',
+  1: 'bII',
+  2: 'II',
+  3: 'bIII',
+  4: 'III',
+  5: 'IV',
+  6: 'bV',
+  7: 'V',
+  8: 'bVI',
+  9: 'VI',
+  10: 'bVII',
+  11: 'VII',
+}
 
 function parseNashville(token: string): { numeral: string; modifiers: string; lowerCase: boolean } | null {
   const m = token.match(ROMAN_RE)
@@ -159,6 +173,49 @@ export function transposeText(text: string, semitones: number, targetKey?: strin
 
     const transposed = transposeChord(chord, semitones)
     return `[${transposed}]`
+  })
+}
+
+/**
+ * Detect whether a text block contains any Nashville numerals inside brackets
+ */
+export function hasNashville(text: string): boolean {
+  if (!text) return false
+  const matches = [...text.matchAll(/\[([^\]]+)\]/g)].map(m => m[1])
+  for (const token of matches) {
+    if (parseNashville(token)) return true
+  }
+  return false
+}
+
+export function chordToNashville(token: string, sourceKey: string): string | null {
+  if (parseNashville(token)) return token
+
+  const sourceBase = getBaseNote(normalizeChord(sourceKey))
+  const sourceIndex = NOTES.indexOf(sourceBase)
+  const chord = normalizeChord(token)
+  const chordBase = getBaseNote(chord)
+  const chordIndex = NOTES.indexOf(chordBase)
+
+  if (sourceIndex === -1 || chordIndex === -1) return null
+
+  const semitone = (chordIndex - sourceIndex + 12) % 12
+  const numeral = SEMITONE_TO_ROMAN[semitone]
+  if (!numeral) return null
+
+  const remainder = getChordRemainder(chord)
+  const isMinor = /^m(?!aj)/i.test(remainder) || /^min/i.test(remainder)
+  const strippedRemainder = isMinor
+    ? remainder.replace(/^min/i, '').replace(/^m(?!aj)/i, '')
+    : remainder
+
+  return (isMinor ? numeral.toLowerCase() : numeral) + strippedRemainder
+}
+
+export function transposeTextToNashville(text: string, sourceKey: string): string {
+  return text.replace(/\[([^\]]+)\]/g, (match, chord) => {
+    const converted = chordToNashville(chord, sourceKey)
+    return converted ? `[${converted}]` : match
   })
 }
 

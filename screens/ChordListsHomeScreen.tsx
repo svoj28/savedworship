@@ -19,6 +19,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import { getCurrentUser } from '../lib/auth'
 import { supabase } from '../lib/supabase'
 import { query, execute } from '../db/index'
+import { isOnline } from '../lib/networkStatus'
 import {
   getPlaylistsByUserId,
   createPlaylist,
@@ -32,6 +33,7 @@ import { PlaylistSongViewerModal } from '../components/PlaylistSongViewerModal'
 import { useRole } from '../lib/useRole'
 import { onTableChange } from '../lib/sync'
 import { usePullToRefresh } from '../lib/usePullToRefresh'
+import { isChordListPublic } from '../lib/chordListPrivacy'
 
 interface Props {
   navigation: any
@@ -129,37 +131,73 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
 
   const loadArtists = async () => {
     try {
-      const [{ data: artistRows, error: artistError }, { data: chordListRows, error: clError }] =
-        await Promise.all([
-          supabase.from('artists').select('id, name').order('name'),
-          supabase
-            .from('chord_lists')
-            .select('id, title, artist_id')
-            .or('is_private.eq.0,is_private.is.null')
-            .order('title'),
-        ])
+      const online = await isOnline()
 
-      if (artistError || clError) throw artistError || clError
+      if (online) {
+        const [{ data: artistRows, error: artistError }, { data: chordListRows, error: clError }] =
+          await Promise.all([
+            supabase.from('artists').select('id, name').order('name'),
+            supabase
+              .from('chord_lists')
+              .select('id, title, artist_id, is_private')
+              .order('title'),
+          ])
 
-      const normalizedArtists = artistRows || []
-      const publicChordLists = chordListRows || []
-      const itemMap: { [key: string]: ArtistBrowseItem[] } = {}
+        if (artistError || clError) throw artistError || clError
 
-      for (const artist of normalizedArtists) {
-        const artistChordLists = publicChordLists.filter(r => r.artist_id === artist.id)
-        const chordListIds = artistChordLists.map(r => r.id)
+        const normalizedArtists = artistRows || []
+        const publicChordLists = (chordListRows || []).filter(isChordListPublic)
+        const itemMap: { [key: string]: ArtistBrowseItem[] } = {}
 
-        let songRows: any[] = []
-        if (chordListIds.length > 0) {
-          const { data } = await supabase
-            .from('songs')
-            .select('id, title, chord_list_id')
-            .in('chord_list_id', chordListIds)
-            .order('title')
-          songRows = data || []
+        for (const artist of normalizedArtists) {
+          const artistChordLists = publicChordLists.filter(r => r.artist_id === artist.id)
+          const chordListIds = artistChordLists.map(r => r.id)
+
+          let songRows: any[] = []
+          if (chordListIds.length > 0) {
+            const { data } = await supabase
+              .from('songs')
+              .select('id, title, chord_list_id')
+              .in('chord_list_id', chordListIds)
+              .order('title')
+            songRows = data || []
+          }
+
+          if (songRows.length > 0) {
+            itemMap[artist.id] = songRows.map(row => ({
+              id: row.id,
+              title: row.title,
+              kind: 'song',
+              chordListId: row.chord_list_id,
+              songId: row.id,
+            }))
+          } else {
+            itemMap[artist.id] = artistChordLists.map(row => ({
+              id: row.id,
+              title: row.title,
+              kind: 'chord_list',
+              chordListId: row.id,
+            }))
+          }
         }
 
-        if (songRows.length > 0) {
+        setArtists(normalizedArtists)
+        setArtistItems(itemMap)
+        return
+      }
+
+      const rows: any[] = await query('SELECT DISTINCT id, name FROM artists ORDER BY name')
+      setArtists(rows || [])
+      const itemMap: { [key: string]: ArtistBrowseItem[] } = {}
+      for (const artist of rows || []) {
+        const songRows: any[] = await query(
+          `SELECT s.id, s.title, s.chord_list_id FROM songs s
+           JOIN chord_lists cl ON s.chord_list_id = cl.id
+           WHERE cl.artist_id = ? AND cl.is_private = 0
+           ORDER BY s.title`,
+          [artist.id]
+        )
+        if (songRows && songRows.length > 0) {
           itemMap[artist.id] = songRows.map(row => ({
             id: row.id,
             title: row.title,
@@ -168,7 +206,11 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
             songId: row.id,
           }))
         } else {
-          itemMap[artist.id] = artistChordLists.map(row => ({
+          const clRows: any[] = await query(
+            `SELECT * FROM chord_lists WHERE artist_id = ? AND is_private = 0 ORDER BY title`,
+            [artist.id]
+          )
+          itemMap[artist.id] = clRows.map(row => ({
             id: row.id,
             title: row.title,
             kind: 'chord_list',
@@ -176,12 +218,9 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
           }))
         }
       }
-
-      setArtists(normalizedArtists)
       setArtistItems(itemMap)
     } catch (err) {
-      console.error('Error loading artists from Supabase:', err)
-      // Local fallback
+      console.error('Error loading artists:', err)
       const rows: any[] = await query('SELECT DISTINCT id, name FROM artists ORDER BY name')
       setArtists(rows || [])
       const itemMap: { [key: string]: ArtistBrowseItem[] } = {}

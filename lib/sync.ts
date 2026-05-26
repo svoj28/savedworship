@@ -2,6 +2,7 @@
 import { supabase } from './supabase'
 import { query, execute, transaction } from '../db/index'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { isChordListPublic } from './chordListPrivacy'
 
 const TABLES = [
   'user_profiles',
@@ -164,8 +165,7 @@ async function upsertPulledRows(tableName: string, serverRecords: any[]) {
 async function fetchPublicChordListRefs(lastSyncTime: number = 0) {
   let queryBuilder = supabase
     .from('chord_lists')
-    .select('id, artist_id')
-    .or('is_private.eq.0,is_private.is.null')
+    .select('id, artist_id, is_private')
 
   if (lastSyncTime > 0) {
     queryBuilder = queryBuilder.gt('updated_at_iso', new Date(lastSyncTime).toISOString())
@@ -178,8 +178,9 @@ async function fetchPublicChordListRefs(lastSyncTime: number = 0) {
     return { chordListIds: [] as string[], artistIds: [] as string[] }
   }
 
-  const chordListIds = [...new Set((data || []).map(row => row.id).filter(Boolean))]
-  const artistIds = [...new Set((data || []).map(row => row.artist_id).filter(Boolean))]
+  const publicRows = (data || []).filter(isChordListPublic)
+  const chordListIds = [...new Set(publicRows.map(row => row.id).filter(Boolean))]
+  const artistIds = [...new Set(publicRows.map(row => row.artist_id).filter(Boolean))]
 
   return { chordListIds, artistIds }
 }
@@ -210,20 +211,21 @@ async function syncSharedChordLibraryTable(tableName: string, userId: string, la
   }
 
   if (tableName === 'chord_lists') {
-    const [{ data: ownChordLists }, { data: publicChordLists }] = await Promise.all([
+    const [{ data: ownChordLists }, { data: allChordLists }] = await Promise.all([
       (() => {
         let builder = supabase.from('chord_lists').select('*').eq('user_id', userId)
         if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
         return builder
       })(),
       (() => {
-        let builder = supabase.from('chord_lists').select('*').or('is_private.eq.0,is_private.is.null')
+        let builder = supabase.from('chord_lists').select('*')
         if (lastSyncIso) builder = builder.gt('updated_at_iso', lastSyncIso)
         return builder
       })(),
     ])
 
-    await upsertPulledRows(tableName, dedupeRowsById([...(ownChordLists || []), ...(publicChordLists || [])]))
+    const publicChordLists = (allChordLists || []).filter(isChordListPublic)
+    await upsertPulledRows(tableName, dedupeRowsById([...(ownChordLists || []), ...publicChordLists]))
     return true
   }
 

@@ -1,6 +1,17 @@
 // lib/auth.ts
 import { supabase } from './supabase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { isOnline } from './networkStatus'
+
+export const OFFLINE_GUEST_USER_ID = 'offline-guest'
+
+function createOfflineGuestUser(): AuthUser {
+  return {
+    id: OFFLINE_GUEST_USER_ID,
+    email: 'offline@local',
+    user_metadata: { offline: true },
+  }
+}
 
 export interface AuthUser {
   id: string
@@ -170,16 +181,19 @@ export async function signOut(): Promise<{ error: AuthError | null }> {
  */
 export async function getCurrentUser(): Promise<AuthUser | null> {
   try {
-    const { data, error } = await supabase.auth.getUser()
+    const { data, error } = await supabase.auth.getSession()
 
-    if (error || !data.user) {
+    if (error || !data.session?.user) {
+      if (!(await isOnline())) {
+        return createOfflineGuestUser()
+      }
       return null
     }
 
     return {
-      id: data.user.id,
-      email: data.user.email || '',
-      user_metadata: data.user.user_metadata,
+      id: data.session.user.id,
+      email: data.session.user.email || '',
+      user_metadata: data.session.user.user_metadata,
     }
   } catch (err) {
     console.error('Error getting current user:', err)
@@ -213,7 +227,7 @@ export function onAuthStateChange(
         user_metadata: session.user.user_metadata,
       })
     } else {
-      callback(null)
+      callback((await isOnline()) ? null : createOfflineGuestUser())
     }
   })
 

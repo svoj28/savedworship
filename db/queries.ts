@@ -16,6 +16,7 @@ import { execute, query, queryOne, transaction } from './index'
 import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, Contact, UserProfile, Playlist, PlaylistItem } from './models'
 import { syncRowToSupabase, deleteRowFromSupabase } from '../lib/syncToSupabase'
 import { supabase } from '../lib/supabase'
+import { isOnline } from '../lib/networkStatus'
 import uuid from 'react-native-uuid'
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -36,16 +37,20 @@ export async function createArtist(data: Omit<Artist, 'id'>): Promise<Artist> {
 }
 
 export async function getArtistById(id: string): Promise<Artist | null> {
-  const { data } = await supabase.from('artists').select('*').eq('id', id).limit(1)
-  if (data && data.length > 0) return mapArtist(data[0])
+  if (await isOnline()) {
+    const { data } = await supabase.from('artists').select('*').eq('id', id).limit(1)
+    if (data && data.length > 0) return mapArtist(data[0])
+  }
 
   const result = await queryOne('SELECT * FROM artists WHERE id = ?', [id])
   return result ? mapArtist(result) : null
 }
 
 export async function getArtistsByUserId(userId: string): Promise<Artist[]> {
-  const { data } = await supabase.from('artists').select('*').eq('user_id', userId).order('name')
-  if (data && data.length > 0) return data.map(mapArtist)
+  if (await isOnline()) {
+    const { data } = await supabase.from('artists').select('*').eq('user_id', userId).order('name')
+    if (data && data.length > 0) return data.map(mapArtist)
+  }
 
   const results = await query('SELECT * FROM artists WHERE user_id = ? ORDER BY name', [userId])
   return results.map(mapArtist)
@@ -56,9 +61,25 @@ export async function updateArtist(id: string, data: Partial<Artist>): Promise<v
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
   const values = filtered.map(([, val]) => val)
   if (!updates) return
-  await execute(`UPDATE artists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
-  const updated = await getArtistById(id)
-  if (updated) await syncRowToSupabase('artists', updated)
+
+  // Try to update via Supabase first so remote tables are authoritative for edits.
+  const payload: any = {}
+  for (const [k, v] of filtered) payload[camelToSnake(k)] = v
+  try {
+    const { data: supData, error } = await supabase.from('artists').update(payload).eq('id', id).select()
+    if (error) throw error
+    const row = Array.isArray(supData) ? supData[0] : supData
+    if (row) {
+      // persist authoritative row locally and mark synced
+      await execute('UPDATE artists SET name = ?, user_id = ?, updated_at = ?, _synced = 1 WHERE id = ?', [row.name, row.user_id || '', Date.now(), id])
+    }
+    return
+  } catch (err) {
+    // fallback: update locally and schedule sync
+    await execute(`UPDATE artists SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
+    const updated = await getArtistById(id)
+    if (updated) await syncRowToSupabase('artists', updated)
+  }
 }
 
 export async function deleteArtist(id: string): Promise<void> {
@@ -82,16 +103,20 @@ export async function createChordList(data: Omit<ChordList, 'id'>): Promise<Chor
 }
 
 export async function getChordListById(id: string): Promise<ChordList | null> {
-  const { data } = await supabase.from('chord_lists').select('*').eq('id', id).limit(1)
-  if (data && data.length > 0) return mapChordList(data[0])
+  if (await isOnline()) {
+    const { data } = await supabase.from('chord_lists').select('*').eq('id', id).limit(1)
+    if (data && data.length > 0) return mapChordList(data[0])
+  }
 
   const result = await queryOne('SELECT * FROM chord_lists WHERE id = ?', [id])
   return result ? mapChordList(result) : null
 }
 
 export async function getChordListsByUserId(userId: string): Promise<ChordList[]> {
-  const { data } = await supabase.from('chord_lists').select('*').eq('user_id', userId).order('title')
-  if (data && data.length > 0) return data.map(mapChordList)
+  if (await isOnline()) {
+    const { data } = await supabase.from('chord_lists').select('*').eq('user_id', userId).order('title')
+    if (data && data.length > 0) return data.map(mapChordList)
+  }
 
   const results = await query('SELECT * FROM chord_lists WHERE user_id = ? ORDER BY title', [userId])
   return results.map(mapChordList)
@@ -129,6 +154,11 @@ export async function deleteChordList(id: string): Promise<void> {
   await execute('DELETE FROM chord_lists WHERE id = ?', [id])
 }
 
+export async function deleteChordListRecord(id: string): Promise<void> {
+  await execute('DELETE FROM chord_lists WHERE id = ?', [id])
+  await deleteRowFromSupabase('chord_lists', id)
+}
+
 // ─── SONGS ────────────────────────────────────────────────────────────────────
 export async function createSong(data: Omit<Song, 'id'>): Promise<Song> {
   const id = uuid.v4() as string
@@ -137,22 +167,31 @@ export async function createSong(data: Omit<Song, 'id'>): Promise<Song> {
     'INSERT INTO songs (id, chord_list_id, user_id, title, content, key, youtube_url, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [song.id, song.chordListId, song.userId || '', song.title, song.content, song.key, song.youtubeUrl || '', song.createdAt, song.updatedAt, 0]
   )
-  await syncRowToSupabase('songs', song)
+  try {
+    await syncRowToSupabase('songs', song)
+    console.log('[createSong] synced to Supabase:', song.id)
+  } catch (err) {
+    console.warn('[createSong] sync to Supabase failed (will retry):', err)
+  }
   return song
 }
 
 export async function getSongById(id: string): Promise<Song | null> {
-  const { data } = await supabase.from('songs').select('*').eq('id', id).limit(1)
-  if (data && data.length > 0) return mapSong(data[0])
+  if (await isOnline()) {
+    const { data } = await supabase.from('songs').select('*').eq('id', id).limit(1)
+    if (data && data.length > 0) return mapSong(data[0])
+  }
 
   const result = await queryOne('SELECT * FROM songs WHERE id = ?', [id])
   return result ? mapSong(result) : null
 }
 
 export async function getSongsByChordListId(chordListId: string): Promise<Song[]> {
-  const { data, error } = await supabase.from('songs').select('*').eq('chord_list_id', chordListId).order('title')
-  console.log('[getSongsByChordListId] supabase data:', data?.length, 'error:', error)
-  if (data && data.length > 0) return data.map(mapSong)
+  if (await isOnline()) {
+    const { data, error } = await supabase.from('songs').select('*').eq('chord_list_id', chordListId).order('title')
+    console.log('[getSongsByChordListId] supabase data:', data?.length, 'error:', error)
+    if (data && data.length > 0) return data.map(mapSong)
+  }
 
   const results = await query('SELECT * FROM songs WHERE chord_list_id = ? ORDER BY title', [chordListId])
   console.log('[getSongsByChordListId] sqlite results:', results?.length)
@@ -164,14 +203,43 @@ export async function updateSong(id: string, data: Partial<Song>): Promise<void>
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
   const values = filtered.map(([, val]) => val)
   if (!updates) return
-  await execute(`UPDATE songs SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
-  const updated = await getSongById(id)
-  if (updated) await syncRowToSupabase('songs', updated)
+
+  // Try to update via Supabase first so edits use the remote songs table.
+  const payload: any = {}
+  for (const [k, v] of filtered) payload[camelToSnake(k)] = v
+  try {
+    const { data: supData, error } = await supabase.from('songs').update(payload).eq('id', id).select()
+    if (error) throw error
+    const row = Array.isArray(supData) ? supData[0] : supData
+    if (row) {
+      // update local DB to reflect authoritative remote row and mark synced
+      await execute('UPDATE songs SET title = ?, content = ?, key = ?, youtube_url = ?, updated_at = ?, _synced = 1 WHERE id = ?', [row.title || '', row.content || '', row.key || '', row.youtube_url || '', Date.now(), id])
+    }
+    return
+  } catch (err) {
+    // fallback: update locally and schedule sync
+    await execute(`UPDATE songs SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
+    const updated = await getSongById(id)
+    if (updated) await syncRowToSupabase('songs', updated)
+  }
 }
 
 export async function deleteSong(id: string): Promise<void> {
-  await execute('DELETE FROM songs WHERE id = ?', [id])
-  await deleteRowFromSupabase('songs', id)
+  // delete locally first
+  try {
+    await execute('DELETE FROM songs WHERE id = ?', [id])
+    console.log('[deleteSong] deleted locally:', id)
+  } catch (err) {
+    console.error('[deleteSong] failed local delete:', err)
+    throw err
+  }
+
+  try {
+    await deleteRowFromSupabase('songs', id)
+    console.log('[deleteSong] deleteRowFromSupabase completed for:', id)
+  } catch (err) {
+    console.warn('[deleteSong] deleteRowFromSupabase failed (queued):', err)
+  }
 }
 
 // ─── LINEUPS ──────────────────────────────────────────────────────────────────
@@ -413,29 +481,35 @@ export async function addContact(data: Omit<Contact, 'id'>): Promise<Contact> {
 }
 
 export async function getContactById(id: string): Promise<Contact | null> {
-  const { data } = await supabase.from('contacts').select('*').eq('id', id).limit(1)
-  if (data && data.length > 0) return mapContact(data[0])
+  if (await isOnline()) {
+    const { data } = await supabase.from('contacts').select('*').eq('id', id).limit(1)
+    if (data && data.length > 0) return mapContact(data[0])
+  }
 
   const result = await queryOne('SELECT * FROM contacts WHERE id = ?', [id])
   return result ? mapContact(result) : null
 }
 
 export async function getContactsByUserId(userId: string): Promise<Contact[]> {
-  const { data } = await supabase.from('contacts').select('*').eq('user_id', userId).order('created_at', { ascending: false })
-  if (data && data.length > 0) return data.map(mapContact)
+  if (await isOnline()) {
+    const { data } = await supabase.from('contacts').select('*').eq('user_id', userId).order('created_at', { ascending: false })
+    if (data && data.length > 0) return data.map(mapContact)
+  }
 
   const results = await query('SELECT * FROM contacts WHERE user_id = ? ORDER BY created_at DESC', [userId])
   return results.map(mapContact)
 }
 
 export async function getContactByUserIdAndContactUserId(userId: string, contactUserId: string): Promise<Contact | null> {
-  const { data } = await supabase
-    .from('contacts')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('contact_user_id', contactUserId)
-    .limit(1)
-  if (data && data.length > 0) return mapContact(data[0])
+  if (await isOnline()) {
+    const { data } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('contact_user_id', contactUserId)
+      .limit(1)
+    if (data && data.length > 0) return mapContact(data[0])
+  }
 
   const result = await queryOne(
     'SELECT * FROM contacts WHERE user_id = ? AND contact_user_id = ?',
@@ -507,16 +581,20 @@ export async function createPlaylist(data: Omit<Playlist, 'id'>): Promise<Playli
 }
 
 export async function getPlaylistById(id: string): Promise<Playlist | null> {
-  const { data } = await supabase.from('playlists').select('*').eq('id', id).limit(1)
-  if (data && data.length > 0) return mapPlaylist(data[0])
+  if (await isOnline()) {
+    const { data } = await supabase.from('playlists').select('*').eq('id', id).limit(1)
+    if (data && data.length > 0) return mapPlaylist(data[0])
+  }
 
   const result = await queryOne('SELECT * FROM playlists WHERE id = ?', [id])
   return result ? mapPlaylist(result) : null
 }
 
 export async function getPlaylistsByUserId(userId: string): Promise<Playlist[]> {
-  const { data } = await supabase.from('playlists').select('*').eq('user_id', userId).order('created_at', { ascending: false })
-  if (data && data.length > 0) return data.map(mapPlaylist)
+  if (await isOnline()) {
+    const { data } = await supabase.from('playlists').select('*').eq('user_id', userId).order('created_at', { ascending: false })
+    if (data && data.length > 0) return data.map(mapPlaylist)
+  }
 
   const results = await query('SELECT * FROM playlists WHERE user_id = ? ORDER BY created_at DESC', [userId])
   return results.map(mapPlaylist)
@@ -555,8 +633,10 @@ export async function addToPlaylist(data: Omit<PlaylistItem, 'id'>): Promise<Pla
 }
 
 export async function getPlaylistItems(playlistId: string): Promise<PlaylistItem[]> {
-  const { data } = await supabase.from('playlist_items').select('*').eq('playlist_id', playlistId).order('position', { ascending: true })
-  if (data && data.length > 0) return data.map(mapPlaylistItem)
+  if (await isOnline()) {
+    const { data } = await supabase.from('playlist_items').select('*').eq('playlist_id', playlistId).order('position', { ascending: true })
+    if (data && data.length > 0) return data.map(mapPlaylistItem)
+  }
 
   const results = await query('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC', [playlistId])
   return results.map(mapPlaylistItem)

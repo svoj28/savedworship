@@ -282,14 +282,14 @@ function SongPage({
         onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
         onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
       >
-        <View style={s.songHeaderBlock}>
+        {/* <View style={s.songHeaderBlock}>
           <Text style={[s.songHeaderTitle, { fontSize: fontSize + 4 }]} numberOfLines={2}>
             {song?.title}
           </Text>
           <View style={s.keyBadgeInline}>
             <Text style={s.keyBadgeInlineText}>Key of {transposeKey}</Text>
           </View>
-        </View>
+        </View> */}
 
         {parsedSections.length > 1 && (
           <View style={s.sectionNavBar}>
@@ -701,7 +701,7 @@ const s = StyleSheet.create({
   },
   notationRow: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingBottom: 10, gap: 8,
+    paddingHorizontal: 14, gap: 8, 
   },
   notationLabel: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
   notationBar: {
@@ -779,7 +779,7 @@ const s = StyleSheet.create({
 
   // Content
   contentScroll: { flex: 1 },
-  contentPad: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 48 },
+  contentPad: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 48 },
   songBody: { paddingTop: 4 },
   content: {
     color: '#f5f5f5',

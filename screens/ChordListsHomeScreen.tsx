@@ -1,5 +1,5 @@
 // screens/ChordListsHomeScreen.tsx
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   View,
   ScrollView,
@@ -86,6 +86,8 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
   const [showSongViewer, setShowSongViewer] = useState(false)
   const [viewerStartIndex, setViewerStartIndex] = useState(0)
   const [viewerSongs, setViewerSongs] = useState<any[]>([])
+  const [searchText, setSearchText] = useState('')
+  const [gridView, setGridView] = useState(false)
   // artistItems holds songs (or chord lists) per artist, used for both browsing and Add Song modal
   const [artistItems, setArtistItems] = useState<{ [key: string]: ArtistBrowseItem[] }>({})
   const { canManageChords } = useRole()
@@ -449,12 +451,54 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
       const cur = playlistItems[index]
       const next = playlistItems[index + 1]
       await updatePlaylistItemPosition(cur.id, next.position)
-      await updatePlaylistItemPosition(next.id, cur.position)
       await loadPlaylistItems(selectedPlaylist.id)
     } catch {
       Alert.alert('Error', 'Failed to reorder')
     }
   }
+
+  const visibleArtists = artists.filter(a => (artistItems[a.id] || []).length > 0)
+  const normalizedSearch = searchText.trim().toLowerCase()
+
+  const filteredArtists = useMemo(() => {
+    if (!normalizedSearch) return visibleArtists
+
+    return visibleArtists
+      .map(artist => {
+        const items = artistItems[artist.id] || []
+        const matchesArtist = artist.name.toLowerCase().includes(normalizedSearch)
+        const matchingItems = items.filter(item => item.title.toLowerCase().includes(normalizedSearch))
+
+        if (!matchesArtist && matchingItems.length === 0) {
+          return null
+        }
+
+        return {
+          ...artist,
+          filteredItems: matchesArtist ? items : matchingItems,
+        }
+      })
+      .filter(Boolean) as any[]
+  }, [artistItems, normalizedSearch, visibleArtists])
+
+  const filteredPlaylists = useMemo(() => {
+    if (!normalizedSearch) return playlists
+
+    return playlists.filter(playlist => {
+      const titleMatch = playlist.title.toLowerCase().includes(normalizedSearch)
+      const descMatch = (playlist.description || '').toLowerCase().includes(normalizedSearch)
+      return titleMatch || descMatch
+    })
+  }, [normalizedSearch, playlists])
+
+  const filteredPlaylistItems = useMemo(() => {
+    if (!normalizedSearch) return playlistItems
+
+    return playlistItems.filter(item => {
+      const title = playlistItemTitles[item.id] || ''
+      return title.toLowerCase().includes(normalizedSearch)
+    })
+  }, [normalizedSearch, playlistItemTitles, playlistItems])
 
   if (loading) {
     return (
@@ -464,8 +508,6 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
       </View>
     )
   }
-
-  const visibleArtists = artists.filter(a => (artistItems[a.id] || []).length > 0)
 
   return (
     <View style={styles.container}>
@@ -494,14 +536,52 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
         ))}
       </View>
 
+      <View style={styles.controlsRow}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search-outline" size={16} color="#C0C0C0" style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder={
+              activeTab === 'artists'
+                ? 'Search artists or items…'
+                : selectedPlaylist
+                  ? 'Search playlist items…'
+                  : 'Search playlists…'
+            }
+            placeholderTextColor="#C0C0C0"
+            value={searchText}
+            onChangeText={setSearchText}
+            returnKeyType="search"
+          />
+          {searchText.length > 0 && (
+            <TouchableOpacity
+              onPress={() => setSearchText('')}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="close-circle" size={16} color="#C0C0C0" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <TouchableOpacity
+          style={styles.viewModeBtn}
+          onPress={() => setGridView(prev => !prev)}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel={gridView ? 'Switch to list view' : 'Switch to grid view'}
+        >
+          <Ionicons name={gridView ? 'list-outline' : 'grid-outline'} size={18} color="#0A0A0A" />
+        </TouchableOpacity>
+      </View>
+
       {/* ─── ARTISTS TAB ─── */}
       {activeTab === 'artists' && (
         <>
-          {visibleArtists.length === 0 ? (
+          {filteredArtists.length === 0 ? (
             <EmptyState
               icon="people-outline"
-              title="No artists yet"
-              subtitle="Create a public chord list to get started"
+              title={normalizedSearch ? 'No matches found' : 'No artists yet'}
+              subtitle={normalizedSearch ? 'Try a different search term' : 'Create a public chord list to get started'}
             />
           ) : (
             <ScrollView
@@ -510,14 +590,15 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
               showsVerticalScrollIndicator={false}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
-              <Text style={styles.sectionLabel}>{visibleArtists.length} ARTISTS</Text>
-              {visibleArtists.map((artist, artistIdx) => {
+              <Text style={styles.sectionLabel}>{filteredArtists.length} ARTISTS</Text>
+              <View style={gridView ? styles.artistGrid : undefined}>
+              {filteredArtists.map((artist, artistIdx) => {
                 const isExpanded = expandedArtists.has(artist.id)
-                const items = artistItems[artist.id] || []
+                const items = artist.filteredItems || artistItems[artist.id] || []
                 return (
-                  <View key={artist.id} style={[styles.artistBlock, artistIdx === 0 && { marginTop: 0 }]}>
+                  <View key={artist.id} style={[styles.artistBlock, gridView && styles.artistBlockGrid, artistIdx === 0 && !gridView && { marginTop: 0 }]}>
                     <TouchableOpacity
-                      style={styles.artistRow}
+                      style={[styles.artistRow, gridView && styles.artistRowGrid]}
                       onPress={() => toggleArtistExpand(artist.id)}
                       activeOpacity={0.75}
                     >
@@ -526,13 +607,13 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                           {artist.name.charAt(0).toUpperCase()}
                         </Text>
                       </View>
-                      <View style={styles.artistMeta}>
+                      <View style={[styles.artistMeta, gridView && styles.artistMetaGrid]}>
                         <Text style={styles.artistName}>{artist.name}</Text>
-                        <Text style={styles.artistSongCount}>
+                        <Text style={[styles.artistSongCount, gridView && styles.artistSongCountGrid]}>
                           {items.length} {items.length === 1 ? 'item' : 'items'}
                         </Text>
                       </View>
-                      <View style={styles.chevronWrap}>
+                      <View style={[styles.chevronWrap, gridView && styles.chevronWrapGrid]}>
                         <Ionicons
                           name={isExpanded ? 'chevron-up' : 'chevron-down'}
                           size={15}
@@ -597,6 +678,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                   </View>
                 )
               })}
+              </View>
             </ScrollView>
           )}
           {canManageChords && <FAB onPress={() => navigation.navigate('AddSong', {})} icon="add" />}
@@ -608,11 +690,11 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
         <>
           {!selectedPlaylist ? (
             <>
-              {playlists.length === 0 ? (
+              {filteredPlaylists.length === 0 ? (
                 <EmptyState
                   icon="musical-note-outline"
-                  title="No playlists yet"
-                  subtitle="Tap + to create your first playlist"
+                  title={normalizedSearch ? 'No matches found' : 'No playlists yet'}
+                  subtitle={normalizedSearch ? 'Try a different search term' : 'Tap + to create your first playlist'}
                 />
               ) : (
                 <ScrollView
@@ -621,35 +703,75 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                   showsVerticalScrollIndicator={false}
                   refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
                 >
-                  <Text style={styles.sectionLabel}>{playlists.length} PLAYLISTS</Text>
-                  {playlists.map((playlist, idx) => (
-                    <TouchableOpacity
-                      key={playlist.id}
-                      style={styles.playlistCard}
-                      onPress={() => handleSelectPlaylist(playlist)}
-                      activeOpacity={0.72}
-                    >
-                      <View style={styles.playlistNumberBox}>
-                        <Text style={styles.playlistNumber}>{idx + 1}</Text>
-                      </View>
-                      <View style={styles.playlistCardContent}>
-                        <Text style={styles.playlistTitle}>{playlist.title}</Text>
-                        {playlist.description ? (
-                          <Text style={styles.playlistDesc} numberOfLines={1}>
-                            {playlist.description}
-                          </Text>
-                        ) : null}
-                      </View>
+                  <Text style={styles.sectionLabel}>{filteredPlaylists.length} PLAYLISTS</Text>
+                  <View style={gridView ? styles.playlistGrid : undefined}>
+                    {filteredPlaylists.map((playlist, idx) => (
                       <TouchableOpacity
-                        onPress={() => handleDeletePlaylist(playlist.id)}
-                        style={styles.deleteBtn}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        key={playlist.id}
+                        style={[styles.playlistCard, gridView && styles.playlistCardGrid]}
+                        onPress={() => handleSelectPlaylist(playlist)}
+                        activeOpacity={0.72}
                       >
-                        <Ionicons name="trash-outline" size={16} color="#C4C4C4" />
+                        {gridView ? (
+                          <View style={styles.playlistCardGridBody}>
+                            <View style={styles.playlistGridMonogram}>
+                              <Text style={styles.playlistGridMonogramText}>
+                                {playlist.title.charAt(0).toUpperCase()}
+                              </Text>
+                            </View>
+
+                            <View style={styles.playlistCardContentGridMatch}>
+                              <Text style={styles.playlistTitle} numberOfLines={2}>
+                                {playlist.title}
+                              </Text>
+                              <Text style={styles.playlistDescGrid} numberOfLines={2}>
+                                {playlist.description || `Playlist ${idx + 1}`}
+                              </Text>
+                            </View>
+
+                            <View style={styles.playlistCardActionsGrid}>
+                              <TouchableOpacity
+                                onPress={() => handleDeletePlaylist(playlist.id)}
+                                style={styles.deleteBtn}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              >
+                                <Ionicons name="trash-outline" size={16} color="#C4C4C4" />
+                              </TouchableOpacity>
+                              <View style={styles.chevronWrap}>
+                                <Ionicons name="chevron-forward" size={13} color="#C4C4C4" />
+                              </View>
+                            </View>
+                          </View>
+                        ) : (
+                          <>
+                            <View style={styles.playlistNumberBox}>
+                              <Text style={styles.playlistNumber}>{idx + 1}</Text>
+                            </View>
+                            <View style={styles.playlistCardContent}>
+                              <Text style={styles.playlistTitle} numberOfLines={1}>
+                                {playlist.title}
+                              </Text>
+                              {playlist.description ? (
+                                <Text style={styles.playlistDesc} numberOfLines={1}>
+                                  {playlist.description}
+                                </Text>
+                              ) : null}
+                            </View>
+                            <View style={styles.playlistCardActions}>
+                              <TouchableOpacity
+                                onPress={() => handleDeletePlaylist(playlist.id)}
+                                style={styles.deleteBtn}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              >
+                                <Ionicons name="trash-outline" size={16} color="#C4C4C4" />
+                              </TouchableOpacity>
+                              <Ionicons name="chevron-forward" size={15} color="#D4D4D4" />
+                            </View>
+                          </>
+                        )}
                       </TouchableOpacity>
-                      <Ionicons name="chevron-forward" size={15} color="#D4D4D4" />
-                    </TouchableOpacity>
-                  ))}
+                    ))}
+                  </View>
                 </ScrollView>
               )}
               <FAB onPress={() => setShowCreatePlaylistModal(true)} icon="add" />
@@ -674,15 +796,15 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                 </View>
               </TouchableOpacity>
 
-              {playlistItems.length === 0 ? (
+              {filteredPlaylistItems.length === 0 ? (
                 <EmptyState
                   icon="musical-notes-outline"
-                  title="No songs yet"
-                  subtitle="Tap + to add songs to this playlist"
+                  title={normalizedSearch ? 'No matches found' : 'No songs yet'}
+                  subtitle={normalizedSearch ? 'Try a different search term' : 'Tap + to add songs to this playlist'}
                 />
               ) : (
                 <FlatList
-                  data={playlistItems}
+                  data={filteredPlaylistItems}
                   keyExtractor={item => item.id}
                   contentContainerStyle={styles.listContent}
                   showsVerticalScrollIndicator={false}
@@ -690,22 +812,23 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                   onRefresh={onRefresh}
                   renderItem={({ item, index }) => {
                     const title = playlistItemTitles[item.id] ?? '…'
-                    const isFirst = index === 0
-                    const isLast = index === playlistItems.length - 1
+                    const actualIndex = playlistItems.findIndex(playlistItem => playlistItem.id === item.id)
+                    const isFirst = actualIndex === 0
+                    const isLast = actualIndex === playlistItems.length - 1
                     return (
                       <TouchableOpacity
                         style={styles.playlistItemRow}
-                        onPress={() => handleOpenSongViewer(index)}
+                        onPress={() => handleOpenSongViewer(actualIndex)}
                         activeOpacity={0.65}
                       >
-                        <Text style={styles.itemIndex}>{index + 1}</Text>
+                        <Text style={styles.itemIndex}>{actualIndex + 1}</Text>
                         <Text style={styles.itemTitle}>{title}</Text>
 
                         {/* Reorder buttons */}
                         <View style={styles.reorderBtns}>
                           <TouchableOpacity
                             style={[styles.reorderBtn, isFirst && styles.reorderBtnDisabled]}
-                            onPress={() => handleMoveItemUp(index)}
+                            onPress={() => handleMoveItemUp(actualIndex)}
                             disabled={isFirst}
                             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                           >
@@ -713,7 +836,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={[styles.reorderBtn, isLast && styles.reorderBtnDisabled]}
-                            onPress={() => handleMoveItemDown(index)}
+                            onPress={() => handleMoveItemDown(actualIndex)}
                             disabled={isLast}
                             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                           >
@@ -748,10 +871,9 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
       )}
 
       {/* ─── CREATE PLAYLIST MODAL ─── */}
-      <Modal visible={showCreatePlaylistModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
+      <Modal visible={showCreatePlaylistModal} transparent animationType="slide" onRequestClose={() => setShowCreatePlaylistModal(false)}>
+        <View style={[styles.modalOverlay, { justifyContent: 'flex-start' }]}>
+          <View style={[styles.modalSheet, { flex: 1, borderTopLeftRadius: 0, borderTopRightRadius: 0, paddingBottom: 18 }]}> 
             <View style={styles.modalHead}>
               <TouchableOpacity onPress={() => setShowCreatePlaylistModal(false)}>
                 <Text style={styles.modalCancel}>Cancel</Text>
@@ -761,7 +883,7 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                 <Text style={styles.modalAction}>Create</Text>
               </TouchableOpacity>
             </View>
-            <View style={styles.modalBody}>
+            <View style={[styles.modalBody, { flex: 1 }]}>
               <Text style={styles.fieldLabel}>NAME</Text>
               <TextInput
                 style={styles.textInput}
@@ -931,6 +1053,43 @@ const styles = StyleSheet.create({
   tabLabelActive: { color: '#0A0A0A' },
   tabUnderline: { position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, backgroundColor: '#0A0A0A', borderRadius: 1 },
 
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 4,
+  },
+  searchBar: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0A0A0A',
+    fontWeight: '500',
+    padding: 0,
+  },
+  viewModeBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1.5,
+    borderColor: '#EBEBEB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
   sectionLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 1.8, marginBottom: 12, marginTop: 4 },
 
   list: { flex: 1 },
@@ -942,15 +1101,21 @@ const styles = StyleSheet.create({
   emptySubtitle: { fontSize: 13, color: '#B0B0B0', letterSpacing: 0.1 },
 
   artistBlock: { marginTop: 10, borderRadius: 16, overflow: 'hidden', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#EBEBEB' },
+  artistBlockGrid: { width: '48%', minHeight: 122 },
+  artistGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   artistRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 13, gap: 12 },
+  artistRowGrid: { flexDirection: 'column', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 15, gap: 10, minHeight: 122 },
   artistMonogram: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E8E8E8' },
   artistMonogramActive: { backgroundColor: '#0A0A0A', borderColor: '#0A0A0A' },
   artistMonogramText: { fontSize: 15, fontWeight: '800', color: '#666', letterSpacing: -0.3 },
   artistMonogramTextActive: { color: '#FAFAFA' },
   artistMeta: { flex: 1, gap: 2 },
+  artistMetaGrid: { flex: 0, width: '100%', gap: 4 },
   artistName: { fontSize: 15, fontWeight: '700', color: '#0A0A0A', letterSpacing: -0.2 },
   artistSongCount: { fontSize: 11, color: '#B8B8B8', fontWeight: '500', letterSpacing: 0.2 },
+  artistSongCountGrid: { color: '#7E7E7E', fontSize: 12 },
   chevronWrap: { width: 28, height: 28, borderRadius: 8, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
+  chevronWrapGrid: { marginTop: 'auto', alignSelf: 'flex-end' },
 
   songList: { borderTopWidth: 1, borderTopColor: '#F2F2F2', backgroundColor: '#FCFCFC' },
   songRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14 },
@@ -961,11 +1126,20 @@ const styles = StyleSheet.create({
   addBtn: { width: 32, height: 32, borderRadius: 9, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
 
   playlistCard: { flexDirection: 'row', alignItems: 'center', marginTop: 10, backgroundColor: '#FFF', borderRadius: 16, borderWidth: 1, borderColor: '#EBEBEB', paddingHorizontal: 14, paddingVertical: 14, gap: 12 },
+  playlistCardGrid: { width: '48%', minHeight: 122, paddingHorizontal: 14, paddingVertical: 15 },
+  playlistGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  playlistCardGridBody: { width: '100%', minHeight: 122, gap: 10 },
+  playlistGridMonogram: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E8E8E8' },
+  playlistGridMonogramText: { fontSize: 15, fontWeight: '800', color: '#666', letterSpacing: -0.3 },
   playlistNumberBox: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E8E8E8' },
   playlistNumber: { fontSize: 14, fontWeight: '800', color: '#888' },
   playlistCardContent: { flex: 1, gap: 3 },
+  playlistCardContentGridMatch: { width: '100%', gap: 4 },
   playlistTitle: { fontSize: 15, fontWeight: '700', color: '#0A0A0A', letterSpacing: -0.2 },
   playlistDesc: { fontSize: 12, color: '#B8B8B8', fontWeight: '400' },
+  playlistDescGrid: { fontSize: 12, color: '#7E7E7E', fontWeight: '500' },
+  playlistCardActions: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: 'auto', marginTop: 'auto' },
+  playlistCardActionsGrid: { marginTop: 'auto', marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-end' },
   deleteBtn: { width: 30, height: 30, justifyContent: 'center', alignItems: 'center' },
 
   detailHeader: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 12 },

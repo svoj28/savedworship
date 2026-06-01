@@ -13,6 +13,7 @@ type TableName =
   | 'file_droppers'
   | 'important_announcements'
   | 'version_droppers'
+  | 'team_calendar_events'
   | 'contacts'
   | 'user_profiles'
   | 'playlists'
@@ -21,7 +22,7 @@ type TableName =
 const ALL_TABLES: TableName[] = [
   'user_profiles', 'artists', 'chord_lists', 'songs', 'lineups',
   'lineup_items', 'messages', 'file_droppers', 'important_announcements',
-  'version_droppers', 'contacts', 'playlists', 'playlist_items'
+  'version_droppers', 'team_calendar_events', 'contacts', 'playlists', 'playlist_items'
 ]
 
 function convertToSnakeCase(obj: any): any {
@@ -35,7 +36,21 @@ function convertToSnakeCase(obj: any): any {
 
 function toSupabaseRow(row: any) {
   const { _synced, synced, deleted_at, deletedAt, ...rest } = row
-  return convertToSnakeCase(rest)
+  const payload = convertToSnakeCase(rest)
+  if (Array.isArray(payload.assignments)) {
+    payload.assignments = JSON.stringify(payload.assignments)
+  }
+  const createdAt = row.createdAt ?? row.created_at
+  const updatedAt = row.updatedAt ?? row.updated_at
+
+  if (typeof createdAt === 'number' && !payload.created_at_iso) {
+    payload.created_at_iso = new Date(createdAt).toISOString()
+  }
+  if (typeof updatedAt === 'number' && !payload.updated_at_iso) {
+    payload.updated_at_iso = new Date(updatedAt).toISOString()
+  }
+
+  return payload
 }
 
 async function isOnline(): Promise<boolean> {

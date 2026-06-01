@@ -13,7 +13,7 @@ export async function getUserProfileByShortId(shortId: string): Promise<UserProf
 }
 // db/queries.ts
 import { execute, query, queryOne, transaction } from './index'
-import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, Contact, UserProfile, Playlist, PlaylistItem } from './models'
+import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, CalendarEvent, CalendarAssignment, Contact, UserProfile, Playlist, PlaylistItem } from './models'
 import { syncRowToSupabase, deleteRowFromSupabase } from '../lib/syncToSupabase'
 import { supabase } from '../lib/supabase'
 import { isOnline } from '../lib/networkStatus'
@@ -243,7 +243,7 @@ export async function deleteSong(id: string): Promise<void> {
 }
 
 // ─── LINEUPS ──────────────────────────────────────────────────────────────────
-export async function createLineup(data: Omit<Lineup, 'id'>): Promise<Lineup> {
+export async function createLineup(data: Omit<Lineup, 'id' | 'items'>): Promise<Lineup> {
   const id = uuid.v4() as string
   const lineup = { id, ...data }
   await execute(
@@ -270,6 +270,63 @@ export async function getAllLineups(): Promise<Lineup[]> {
 
   const results = await query('SELECT * FROM lineups ORDER BY created_at DESC')
   return results.map(mapLineup)
+}
+
+// ─── LINEUP ITEMS ────────────────────────────────────────────────────────────
+export async function createLineupItem(data: Omit<LineupItem, 'id'>): Promise<LineupItem> {
+  const id = uuid.v4() as string
+  const item = { id, songId: '', ...data }
+  await execute(
+    'INSERT INTO lineup_items (id, lineup_id, song_id, user_id, position, created_at, updated_at, artist, song_title, song_key, version_url, category, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      item.id,
+      item.lineupId,
+      item.songId || '',
+      item.userId || '',
+      item.position,
+      item.createdAt,
+      item.updatedAt,
+      item.artist || '',
+      item.songTitle || '',
+      item.key || '',
+      item.versionUrl || '',
+      item.category || 'any',
+      0,
+    ]
+  )
+  void syncRowToSupabase('lineup_items', item).catch(err => console.warn('Background sync failed for lineup items:', err))
+  return item
+}
+
+export async function getLineupItemsByLineupId(lineupId: string): Promise<LineupItem[]> {
+  const { data } = await supabase.from('lineup_items').select('*').eq('lineup_id', lineupId).order('position', { ascending: true })
+  if (data && data.length > 0) return data.map(mapLineupItem)
+
+  const results = await query('SELECT * FROM lineup_items WHERE lineup_id = ? ORDER BY position ASC', [lineupId])
+  return results.map(mapLineupItem)
+}
+
+export async function getAllLineupItems(): Promise<LineupItem[]> {
+  const { data } = await supabase.from('lineup_items').select('*').order('position', { ascending: true })
+  if (data && data.length > 0) return data.map(mapLineupItem)
+
+  const results = await query('SELECT * FROM lineup_items ORDER BY position ASC')
+  return results.map(mapLineupItem)
+}
+
+export async function updateLineupItem(id: string, data: Partial<LineupItem>): Promise<void> {
+  const filtered = Object.entries(data).filter(([key]) => !['id', 'lineupId', 'userId', 'synced', 'createdAt'].includes(key))
+  const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
+  const values = filtered.map(([, val]) => val)
+  if (!updates) return
+  await execute(`UPDATE lineup_items SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
+  const updated = await queryOne('SELECT * FROM lineup_items WHERE id = ?', [id])
+  if (updated) void syncRowToSupabase('lineup_items', mapLineupItem(updated)).catch(err => console.warn('Background sync failed for lineup item:', err))
+}
+
+export async function deleteLineupItem(id: string): Promise<void> {
+  await execute('DELETE FROM lineup_items WHERE id = ?', [id])
+  void deleteRowFromSupabase('lineup_items', id).catch(err => console.warn('Background delete sync failed for lineup item:', err))
 }
 
 export async function updateLineup(id: string, data: Partial<Lineup>): Promise<void> {
@@ -466,6 +523,75 @@ export async function updateVersionDropper(id: string, data: Partial<VersionDrop
 export async function deleteVersionDropper(id: string): Promise<void> {
   await execute('DELETE FROM version_droppers WHERE id = ?', [id])
   void deleteRowFromSupabase('version_droppers', id).catch(err => console.warn('Background delete sync failed for version_droppers:', err))
+}
+
+// ─── TEAM CALENDAR EVENTS ────────────────────────────────────────────────────
+function serializeCalendarAssignments(assignments: CalendarAssignment[] | undefined): string {
+  return JSON.stringify(Array.isArray(assignments) ? assignments : [])
+}
+
+function parseCalendarAssignments(value: any): CalendarAssignment[] {
+  if (!value) return []
+  if (Array.isArray(value)) return value as CalendarAssignment[]
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function mapCalendarEvent(row: any): CalendarEvent {
+  return {
+    id: row.id,
+    eventDate: row.event_date,
+    title: row.title,
+    assignments: parseCalendarAssignments(row.assignments),
+    notes: row.notes || '',
+    userId: row.user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
+export async function createCalendarEvent(data: Omit<CalendarEvent, 'id'>): Promise<CalendarEvent> {
+  const id = uuid.v4() as string
+  const event = { id, ...data }
+  await execute(
+    'INSERT INTO team_calendar_events (id, event_date, title, assignments, notes, user_id, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [event.id, event.eventDate, event.title, serializeCalendarAssignments(event.assignments), event.notes || '', event.userId, event.createdAt, event.updatedAt, 0]
+  )
+  void syncRowToSupabase('team_calendar_events', event).catch(err => console.warn('Background sync failed for team_calendar_events:', err))
+  return event
+}
+
+export async function getCalendarEventById(id: string): Promise<CalendarEvent | null> {
+  const result = await queryOne('SELECT * FROM team_calendar_events WHERE id = ?', [id])
+  return result ? mapCalendarEvent(result) : null
+}
+
+export async function getAllCalendarEvents(): Promise<CalendarEvent[]> {
+  const { data } = await supabase.from('team_calendar_events').select('*').order('event_date', { ascending: true }).order('created_at', { ascending: true })
+  if (data && data.length > 0) return data.map(mapCalendarEvent)
+
+  const results = await query('SELECT * FROM team_calendar_events ORDER BY event_date ASC, created_at ASC')
+  return results.map(mapCalendarEvent)
+}
+
+export async function updateCalendarEvent(id: string, data: Partial<CalendarEvent>): Promise<void> {
+  const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'synced', 'createdAt'].includes(key))
+  const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
+  const values = filtered.map(([key, val]) => key === 'assignments' ? serializeCalendarAssignments(val as CalendarAssignment[]) : val)
+  if (!updates) return
+  await execute(`UPDATE team_calendar_events SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
+  const updated = await getCalendarEventById(id)
+  if (updated) void syncRowToSupabase('team_calendar_events', updated).catch(err => console.warn('Background sync failed for team_calendar_events:', err))
+}
+
+export async function deleteCalendarEvent(id: string): Promise<void> {
+  await execute('DELETE FROM team_calendar_events WHERE id = ?', [id])
+  void deleteRowFromSupabase('team_calendar_events', id).catch(err => console.warn('Background delete sync failed for team_calendar_events:', err))
 }
 
 // ─── CONTACTS ─────────────────────────────────────────────────────────────────
@@ -714,10 +840,16 @@ function mapLineupItem(row: any): LineupItem {
   return {
     id: row.id,
     lineupId: row.lineup_id,
-    songId: row.song_id,
+    songId: row.song_id || '',
     userId: row.user_id,
     position: row.position,
+    artist: row.artist || '',
+    songTitle: row.song_title || '',
+    key: row.song_key || '',
+    versionUrl: row.version_url || row.youtube_url || '',
+    category: row.category || 'any',
     createdAt: row.created_at,
+    updatedAt: row.updated_at || row.created_at || Date.now(),
     synced: Boolean(row._synced),
   }
 }

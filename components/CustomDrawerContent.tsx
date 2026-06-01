@@ -102,6 +102,7 @@ const guideSections = [
     title: 'Tools',
     items: [
       'Metronome gives you BPM control and tap-tempo support for practice and rehearsal.',
+      'Calendar keeps the shared team schedule visible to everyone.',
       'Manual Transpose helps you shift chords quickly without editing the original song.',
       'Audio Tools groups extra playback and utility features in one place.',
     ],
@@ -145,6 +146,7 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [expandFriends, setExpandFriends] = useState(true)
+  const [showRecipientShare, setShowRecipientShare] = useState(false)
   const [showQRModal, setShowQRModal] = useState(false)
   const [showGuideModal, setShowGuideModal] = useState(false)
   const navigation = useNavigation<any>()
@@ -273,100 +275,122 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
 
   return (
     <View style={styles.container}>
+      <ScrollView
+        style={styles.drawerScroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.drawerContent}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          {/* Top accent line */}
+          <View style={styles.accentLine} />
 
-      {/* Header */}
-      <View style={styles.header}>
-        {/* Top accent line */}
-        <View style={styles.accentLine} />
+          {/* App title + guide action */}
+          <View style={styles.titleBar}>
+            <View style={styles.appTitleRow}>
+              <Ionicons name="musical-notes" size={14} color="#999" />
+              <Text style={styles.appTitle}>SAVED WORSHIP</Text>
+            </View>
 
-        {/* App title + guide action */}
-        <View style={styles.titleBar}>
-          <View style={styles.appTitleRow}>
-            <Ionicons name="musical-notes" size={14} color="#999" />
-            <Text style={styles.appTitle}>SAVED WORSHIP</Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.guideButton}
-            onPress={() => setShowGuideModal(true)}
-            activeOpacity={0.75}
-            accessibilityRole="button"
-            accessibilityLabel="Open app guide"
-          >
-            <Ionicons name="information-circle-outline" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Avatar & User Info */}
-        <View style={styles.avatarRow}>
-          <View style={styles.avatarWrapper}>
-            {profile?.avatarUrl ? (
-              <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Ionicons name="person" size={28} color="#000" />
-              </View>
-            )}
-          </View>
-
-          <View style={styles.userInfo}>
-            <Text style={styles.userName}>
-              {profile?.nickname || user?.email?.split('@')[0] || 'Member'}
-            </Text>
-            <Text style={styles.userEmail}>{user?.email || 'Not signed in'}</Text>
-            {profile?.instruments && (
-              <View style={styles.instrumentBadge}>
-                <Text style={styles.instrumentText}>{profile.instruments}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Bio */}
-        {profile?.bio && (
-          <View style={styles.bioContainer}>
-            <Text style={styles.bioText} numberOfLines={2}>
-              {profile.bio}
-            </Text>
-          </View>
-        )}
-
-        {/* Recipient ID */}
-        {user?.id && (
-          <>
             <TouchableOpacity
-              style={styles.idContainer}
-              onPress={() => copyToClipboard(generateShortId(user.id), 'Recipient ID')}
-              activeOpacity={0.7}
+              style={styles.guideButton}
+              onPress={() => setShowGuideModal(true)}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel="Open app guide"
             >
-              <View style={styles.idRow}>
-                <Text style={styles.idLabel}>RECIPIENT ID</Text>
-                <View style={styles.copyBadge}>
-                  <Ionicons name="copy-outline" size={11} color="#fff" />
-                  <Text style={styles.copyText}>COPY</Text>
+              <Ionicons name="information-circle-outline" size={20} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Avatar & User Info */}
+          <View style={styles.avatarRow}>
+            <View style={styles.avatarWrapper}>
+              {profile?.avatarUrl ? (
+                <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Ionicons name="person" size={28} color="#000" />
                 </View>
-              </View>
-              <Text style={styles.idValue}>{generateShortId(user.id)}</Text>
-            </TouchableOpacity>
+              )}
+            </View>
 
-            {/* QR Code */}
-            <TouchableOpacity
-              style={styles.qrCodeContainer}
-              onPress={() => setShowQRModal(true)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.qrCodeWrapper}>
-                <QRCodeGraphic value={buildRecipientQrValue(user.id)} size={80} />
-              </View>
-              <View style={styles.qrLabel}>
-                <Ionicons name="scan-circle-outline" size={12} color="#aaa" />
-                <Text style={styles.qrLabelText}>Tap to enlarge</Text>
-              </View>
-            </TouchableOpacity>
-          </>
-        )}
-      </View>
+            <View style={styles.userInfo}>
+              <Text style={styles.userName}>
+                {profile?.nickname || user?.email?.split('@')[0] || 'Member'}
+              </Text>
+              <Text style={styles.userEmail}>{user?.email || 'Not signed in'}</Text>
+              {profile?.instruments && (
+                <View style={styles.instrumentBadge}>
+                  <Text style={styles.instrumentText}>{profile.instruments}</Text>
+                </View>
+              )}
+            </View>
+          </View>
 
+          {/* Bio */}
+          {profile?.bio && (
+            <View style={styles.bioContainer}>
+              <Text style={styles.bioText} numberOfLines={2}>
+                {profile.bio}
+              </Text>
+            </View>
+          )}
+
+          {user?.id && (
+            <View style={styles.recipientShareSection}>
+              <TouchableOpacity
+                style={styles.recipientShareToggle}
+                onPress={() => setShowRecipientShare((current) => !current)}
+                activeOpacity={0.75}
+              >
+                <Ionicons
+                  name={showRecipientShare ? 'eye-off-outline' : 'eye-outline'}
+                  size={14}
+                  color="#fff"
+                />
+                <Text style={styles.recipientShareToggleText}>
+                  {showRecipientShare ? 'Hide Recipient Info' : 'Show Recipient Info'}
+                </Text>
+              </TouchableOpacity>
+
+              {showRecipientShare && (
+                <>
+                  <TouchableOpacity
+                    style={styles.idContainer}
+                    onPress={() => copyToClipboard(generateShortId(user.id), 'Recipient ID')}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.idRow}>
+                      <Text style={styles.idLabel}>RECIPIENT ID</Text>
+                      <View style={styles.copyBadge}>
+                        <Ionicons name="copy-outline" size={11} color="#fff" />
+                        <Text style={styles.copyText}>COPY</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.idValue}>{generateShortId(user.id)}</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.qrCodeContainer}
+                    onPress={() => setShowQRModal(true)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.qrCodeWrapper}>
+                      <QRCodeGraphic value={buildRecipientQrValue(user.id)} size={80} />
+                    </View>
+                    <View style={styles.qrLabel}>
+                      <Ionicons name="scan-circle-outline" size={12} color="#aaa" />
+                      <Text style={styles.qrLabelText}>Tap to enlarge</Text>
+                    </View>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
+        </View>
+
+        <View style={styles.drawerBody}>
       {/* Guide Modal */}
       <Modal
         visible={showGuideModal}
@@ -432,12 +456,7 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
         </View>
       </Modal>
 
-      {/* Scrollable Menu */}
-      <ScrollView
-        style={styles.menuScroll}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.menuContent}
-      >
+        {/* Scrollable Menu */}
         {/* Section: Account */}
         <Text style={styles.sectionLabel}>ACCOUNT</Text>
 
@@ -450,6 +469,21 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
             <Ionicons name="person-outline" size={18} color="#000" />
           </View>
           <Text style={styles.menuLabel}>Edit Profile</Text>
+          <Ionicons name="chevron-forward" size={16} color="#ccc" />
+        </TouchableOpacity>
+
+        {/* Section: Calendar */}
+         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>TEAM SCHEDULE CALENDAR</Text>
+              
+        <TouchableOpacity
+          style={styles.menuItem}
+          onPress={() => handleNavigate('Calendar')}
+          activeOpacity={0.6}
+        >
+          <View style={styles.menuIcon}>
+            <Ionicons name="calendar-outline" size={18} color="#000" />
+          </View>
+          <Text style={styles.menuLabel}>Team Calendar</Text>
           <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
 
@@ -467,6 +501,8 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
           <Text style={styles.menuLabel}>Metronome</Text>
           <Ionicons name="chevron-forward" size={16} color="#ccc" />
         </TouchableOpacity>
+
+        
 
         <TouchableOpacity
           style={styles.menuItem}
@@ -493,16 +529,17 @@ export default function CustomDrawerContent({ visible, onClose }: Props) {
         </TouchableOpacity>
 
         <View style={{ height: 24 }} />
-      </ScrollView>
 
-      {/* Footer: Sign Out */}
-      <View style={styles.footer}>
-        <View style={styles.footerDivider} />
-        <TouchableOpacity style={styles.signOutButton} onPress={handleLogout} activeOpacity={0.7}>
-          <Ionicons name="log-out-outline" size={17} color="#333" />
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
+        {/* Footer: Sign Out */}
+        <View style={styles.footer}>
+          <View style={styles.footerDivider} />
+          <TouchableOpacity style={styles.signOutButton} onPress={handleLogout} activeOpacity={0.7}>
+            <Ionicons name="log-out-outline" size={17} color="#333" />
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
+        </View>
+        </View>
+      </ScrollView>
 
       {/* QR Code Modal */}
       <Modal
@@ -669,6 +706,26 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontStyle: 'italic',
   },
+  recipientShareSection: {
+    gap: 10,
+  },
+  recipientShareToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    paddingVertical: 10,
+  },
+  recipientShareToggleText: {
+    fontSize: 11,
+    color: '#fff',
+    fontWeight: '600',
+    letterSpacing: 0.4,
+  },
   idContainer: {
     backgroundColor: 'rgba(255,255,255,0.06)',
     borderRadius: 8,
@@ -711,12 +768,14 @@ const styles = StyleSheet.create({
   },
 
   // ── Menu ────────────────────────────────────────────────
-  menuScroll: {
+  drawerScroll: {
     flex: 1,
   },
-  menuContent: {
+  drawerContent: {
+    paddingBottom: 24,
+  },
+  drawerBody: {
     paddingHorizontal: 20,
-    paddingTop: 24,
   },
   sectionLabel: {
     fontSize: 9,
@@ -724,7 +783,7 @@ const styles = StyleSheet.create({
     color: '#bbb',
     fontWeight: '700',
     marginBottom: 8,
-    marginTop: 4,
+    marginTop: 10,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -833,8 +892,9 @@ const styles = StyleSheet.create({
 
   // ── Footer ───────────────────────────────────────────────
   footer: {
-    paddingHorizontal: 20,
-    paddingBottom: 32,
+    paddingHorizontal: 0,
+    paddingTop: 8,
+    paddingBottom: 0,
   },
   footerDivider: {
     height: 1,

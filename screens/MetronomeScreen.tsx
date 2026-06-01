@@ -1,5 +1,5 @@
 // screens/MetronomeScreen.tsx
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   View,
   StyleSheet,
@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { getCurrentUser } from '../lib/auth'
 import { useRole } from '../lib/useRole'
-import { getPlaylistsByUserId } from '../db/queries'
+import { getPlaylistsByUserId, getPlaylistItems } from '../db/queries'
 import { Audio as ExpoAudio } from 'expo-av'
 
 // Monochrome palette - Formal & Professional
@@ -204,6 +204,10 @@ const TIME_SIGNATURE_OPTIONS: TimeSignatureOption[] = [
   },
 ]
 
+const DEFAULT_TIME_SIGNATURE = TIME_SIGNATURE_OPTIONS[2]
+const resolveTimeSignatureOption = (label?: string | null) =>
+  TIME_SIGNATURE_OPTIONS.find(option => option.label === label) ?? DEFAULT_TIME_SIGNATURE
+
 // ─── Web Audio scheduler constants ────────────────────────────────────────────
 const LOOKAHEAD_MS       = 25.0   // scheduler wake interval (ms)
 const SCHEDULE_AHEAD_SEC = 0.1    // how far ahead to pre-schedule beats
@@ -222,6 +226,8 @@ interface MetronomePreset {
   playlistNames?: string[]
   isOwnedByOther?: boolean
   ownerUserId?: string
+  useTimeSignatures?: boolean
+  timeSignatureLabel?: string | null
 }
 
 const DEFAULT_PRESETS = [
@@ -237,6 +243,9 @@ export default function MetronomeScreen() {
   const [bpm, setBpm] = useState(120)
   const [isPlaying, setIsPlaying] = useState(false)
   const [beatFlash, setBeatFlash] = useState(false)
+  const defaultTimeSignature = TIME_SIGNATURE_OPTIONS[2]
+  const resolveSelectedTimeSignature = (label?: string | null) =>
+    TIME_SIGNATURE_OPTIONS.find(option => option.label === label) ?? defaultTimeSignature
 
   // ── Audio context ─────────────────────────────────────────────────────────
   const audioCtxRef        = useRef<AudioContext | null>(null)
@@ -247,7 +256,7 @@ export default function MetronomeScreen() {
   const bpmRef             = useRef(120)
 
   // ── Time signature refs — read directly inside schedulerLoop (no stale closures) ──
-  const sigRef        = useRef<TimeSignatureOption>(TIME_SIGNATURE_OPTIONS[2]) // 4/4
+  const sigRef        = useRef<TimeSignatureOption>(defaultTimeSignature)
   const useTimeSigRef = useRef(false)
 
   // Fallback sounds
@@ -267,7 +276,7 @@ export default function MetronomeScreen() {
   const [showSaveBar, setShowSaveBar] = useState(false)
   const [showTimeSignatureModal, setShowTimeSignatureModal] = useState(false)
   const [useTimeSignatures, setUseTimeSignatures] = useState(false)
-  const [selectedTimeSignature, setSelectedTimeSignature] = useState<TimeSignatureOption>(TIME_SIGNATURE_OPTIONS[2]) // 4/4
+  const [selectedTimeSignature, setSelectedTimeSignature] = useState<TimeSignatureOption>(defaultTimeSignature)
   const [newPresetScope, setNewPresetScope] = useState<PresetScope>('personal')
   const [newPresetPlaylistName, setNewPresetPlaylistName] = useState('')
   const [newPresetIsPublic, setNewPresetIsPublic] = useState(true)
@@ -284,8 +293,12 @@ export default function MetronomeScreen() {
   const [openPlaylistNames, setOpenPlaylistNames] = useState<Record<string, boolean>>({})
   const [chordlistPlaylists, setChordlistPlaylists] = useState<string[]>([])
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [searchText, setSearchText] = useState('')
+  const [playlistOrder, setPlaylistOrder] = useState<Record<string, string[]>>({})
 
   const isManagerOrSuperadmin = role === 'manager' || role === 'superadmin'
+  const canUseOverallPlaylists = isManagerOrSuperadmin
+  const canCreateOverallPreset = isManagerOrSuperadmin
 
   const isPresetOwner = useCallback((preset: MetronomePreset) => {
     if (preset.ownerUserId && currentUserId) return preset.ownerUserId === currentUserId
@@ -528,16 +541,33 @@ export default function MetronomeScreen() {
 
   const getPresetsKey = (userId: string) => `metronome_presets_${userId}`
 
+  const getPlaylistOrderKey = (userId: string) => `metronome_playlist_order_${userId}`
+
+const loadPlaylistOrder = async (userId: string) => {
+  try {
+    const stored = await AsyncStorage.getItem(getPlaylistOrderKey(userId))
+    if (stored) setPlaylistOrder(JSON.parse(stored))
+  } catch {}
+}
+
+const savePlaylistOrder = async (order: Record<string, string[]>) => {
+  try {
+    const user = await getCurrentUser()
+    if (!user) return
+    await AsyncStorage.setItem(getPlaylistOrderKey(user.id), JSON.stringify(order))
+  } catch {}
+}
+
   const loadPresets = async () => {
     try {
       const user = await getCurrentUser()
       if (!user) return
       setCurrentUserId(user.id)
+      await loadPlaylistOrder(user.id)
 
       const PRESETS_KEY = getPresetsKey(user.id)
       const stored = await AsyncStorage.getItem(PRESETS_KEY)
       const allLocalPresets: MetronomePreset[] = stored ? JSON.parse(stored) : []
-      const localPresets = allLocalPresets.filter(p => !p.isOwnedByOther)
 
       let ownCloudPresets: MetronomePreset[] = []
       let fetchedPublicPresets: MetronomePreset[] = []
@@ -553,11 +583,19 @@ export default function MetronomeScreen() {
           name: row.name,
           bpm: row.bpm,
           inCloud: true,
-          scope: row.scope ?? 'personal',
-          isPublic: row.scope === 'overall' ? true : (row.is_public ?? false),
+          scope: getEffectivePresetScope({
+            scope: row.scope ?? 'personal',
+            playlistNames: (row.playlist_name || '').split(',').map((s: string) => s.trim()).filter(Boolean),
+          }),
+          isPublic: getEffectivePresetScope({
+            scope: row.scope ?? 'personal',
+            playlistNames: (row.playlist_name || '').split(',').map((s: string) => s.trim()).filter(Boolean),
+          }) === 'overall',
           playlistNames: (row.playlist_name || '').split(',').map((s: string) => s.trim()).filter(Boolean),
           isOwnedByOther: false,
           ownerUserId: row.user_id,
+          useTimeSignatures: !!row.use_time_signatures,
+          timeSignatureLabel: row.time_signature_label ?? null,
         }))
       }
 
@@ -579,24 +617,45 @@ export default function MetronomeScreen() {
           playlistNames: (row.playlist_name || '').split(',').map((s: string) => s.trim()).filter(Boolean),
           isOwnedByOther: true,
           ownerUserId: row.user_id,
+          useTimeSignatures: !!row.use_time_signatures,
+          timeSignatureLabel: row.time_signature_label ?? null,
         }))
       }
 
-      const cloudIds = new Set(ownCloudPresets.map(p => p.id))
-      const mergedLocal = localPresets.filter(p => !cloudIds.has(p.id))
-      const ownPresets = [...mergedLocal, ...ownCloudPresets]
+      const remoteCloudIds = new Set([...ownCloudPresets, ...fetchedPublicPresets].map(p => p.id))
+      const mergedLocal = allLocalPresets
+        .filter(p => !remoteCloudIds.has(p.id))
+        .map(normalizePresetVisibility)
+      const ownPresets = [...mergedLocal, ...ownCloudPresets].map(normalizePresetVisibility)
+      const uniqueOwnPresets = ownPresets.reduce<MetronomePreset[]>((items, preset) => {
+        if (!items.some(existing => existing.id === preset.id)) items.push(preset)
+        return items
+      }, [])
 
-      setPresets(ownPresets)
+      setPresets(uniqueOwnPresets)
       setPublicPresets(fetchedPublicPresets)
       try {
         const cls = await getPlaylistsByUserId(user.id)
-        const titles = (cls || []).map((r: any) => r.title).filter(Boolean)
+        const playlistsWithItems = await Promise.all(
+          (cls || []).map(async (playlist: any) => {
+            try {
+              const items = await getPlaylistItems(playlist.id)
+              return (items?.length || 0) > 0 ? playlist : null
+            } catch {
+              return null
+            }
+          })
+        )
+        const titles = playlistsWithItems
+          .filter(Boolean)
+          .map((r: any) => r.title)
+          .filter(Boolean)
         setChordlistPlaylists(titles)
       } catch (e) {
         console.warn('Failed to load chordlist playlists:', e)
         setChordlistPlaylists([])
       }
-      await savePresetsLocally(ownPresets)
+      await savePresetsLocally(uniqueOwnPresets)
     } catch (err) {
       console.error('Error loading presets:', err)
       setPresets([])
@@ -621,14 +680,17 @@ export default function MetronomeScreen() {
     setNewPresetScope(preset?.scope ?? (activeTab === 'overall' ? 'overall' : 'personal'))
     setNewPresetPlaylistName(preset?.playlistNames?.[0] ?? '')
     setNewPresetIsPublic(preset?.scope === 'overall' ? true : false)
+    setUseTimeSignatures(!!preset?.useTimeSignatures)
+    setSelectedTimeSignature(resolveSelectedTimeSignature(preset?.timeSignatureLabel))
     setShowAddModal(!preset)
     setShowEditModal(!!preset)
   }
 
   const openPlaylistPicker = (preset: MetronomePreset | null, mode: 'assign' | 'field' = 'assign') => {
+    const presetPlaylistNames = (preset?.playlistNames ?? []).filter(name => canUseOverallPlaylists || getPlaylistScope(name) === 'personal')
     setPlaylistPickerPreset(preset)
-    setPlaylistPickerNames(preset?.playlistNames ?? [])
-    setPlaylistPickerName(preset?.playlistNames?.[0] ?? '')
+    setPlaylistPickerNames(presetPlaylistNames)
+    setPlaylistPickerName(presetPlaylistNames[0] ?? '')
     setPlaylistPickerScope('personal')
     setPlaylistPickerMode(mode)
     setShowPlaylistPicker(true)
@@ -667,12 +729,29 @@ export default function MetronomeScreen() {
     return Array.from(new Set(displayNames.map(name => getCanonicalPlaylistName(name, scope))))
   }
 
+  const getEffectivePresetScope = (preset: Pick<MetronomePreset, 'scope' | 'playlistNames'>): PresetScope => {
+    const hasOverallPlaylist = (preset.playlistNames ?? []).some(name => getPlaylistScope(name) === 'overall')
+    return hasOverallPlaylist ? 'overall' : preset.scope
+  }
+
+  const normalizePresetVisibility = (preset: MetronomePreset): MetronomePreset => ({
+    ...preset,
+    isPublic: preset.scope === 'overall',
+  })
+
   const getPresetCopyFingerprint = (preset: MetronomePreset) =>
     [
       preset.scope,
       preset.name.trim().toLowerCase(),
       String(preset.bpm),
       getScopedPlaylistNamesForCopy(preset.playlistNames, preset.scope).sort().join('|'),
+    ].join('::')
+
+  const getPresetPairKey = (preset: Pick<MetronomePreset, 'name' | 'bpm' | 'playlistNames'>) =>
+    [
+      preset.name.trim().toLowerCase(),
+      String(preset.bpm),
+      getScopedPlaylistNamesForCopy(preset.playlistNames, 'personal').sort().join('|'),
     ].join('::')
 
   const makePresetCopy = (preset: MetronomePreset, scope: PresetScope): MetronomePreset => ({
@@ -686,21 +765,90 @@ export default function MetronomeScreen() {
     ownerUserId: currentUserId ?? preset.ownerUserId,
   })
 
-  const savePresetPlaylist = async (preset: MetronomePreset, playlistNames: string[] | string) => {
-    if (!ensureCanModifyPreset(preset, 'Update Playlist')) return false
+  const getCurrentTimeSignatureState = () => ({
+    useTimeSignatures,
+    timeSignatureLabel: useTimeSignatures ? selectedTimeSignature.label : null,
+  })
 
+  const savePresetPlaylist = async (preset: MetronomePreset, playlistNames: string[] | string) => {
     const incomingNames = Array.isArray(playlistNames) ? playlistNames : [playlistNames]
     const names = incomingNames.map(name => name.trim()).filter(Boolean)
-    const existing = preset.playlistNames ?? []
-    const nextPreset = { ...preset, playlistNames: Array.from(new Set([...existing, ...names])) }
+    if (names.some(name => getPlaylistScope(name) === 'overall') && !canUseOverallPlaylists) {
+      Alert.alert('Permission Denied', 'Only manager and superadmin can add presets to overall playlists.')
+      return false
+    }
 
-    const updated = presets.map(p => p.id === preset.id ? nextPreset : p)
+    const existing = preset.playlistNames ?? []
+    const nextPlaylistNames = Array.from(new Set([...existing, ...names]))
+    const nextScope = getEffectivePresetScope({ scope: preset.scope, playlistNames: nextPlaylistNames })
+    const forcePersonalCopy = preset.scope === 'overall'
+    const hasDirectEditPermission = canModifyPreset(preset) && !forcePersonalCopy
+    const existingPersonalCopy = presets.find(existingPreset =>
+      existingPreset.scope === 'personal' && getPresetPairKey(existingPreset) === getPresetPairKey(preset)
+    ) ?? null
+
+    const nextPreset = forcePersonalCopy
+      ? existingPersonalCopy
+        ? {
+            ...existingPersonalCopy,
+            name: preset.name,
+            bpm: preset.bpm,
+            scope: 'personal' as PresetScope,
+            isPublic: false,
+            playlistNames: nextPlaylistNames,
+          }
+        : {
+            ...makePresetCopy(preset, 'personal'),
+            name: preset.name,
+            bpm: preset.bpm,
+            scope: 'personal' as PresetScope,
+            isPublic: false,
+            playlistNames: nextPlaylistNames,
+          }
+      : hasDirectEditPermission
+        ? { ...preset, scope: nextScope, isPublic: nextScope === 'overall', playlistNames: nextPlaylistNames }
+        : existingPersonalCopy
+          ? {
+              ...existingPersonalCopy,
+              name: preset.name,
+              bpm: preset.bpm,
+              scope: 'personal' as PresetScope,
+              isPublic: false,
+              playlistNames: nextPlaylistNames,
+            }
+          : {
+              ...makePresetCopy(preset, 'personal'),
+              name: preset.name,
+              bpm: preset.bpm,
+              scope: 'personal' as PresetScope,
+              isPublic: false,
+              playlistNames: nextPlaylistNames,
+            }
+
+    const updated = forcePersonalCopy
+      ? existingPersonalCopy
+        ? presets.map(p => p.id === existingPersonalCopy.id ? nextPreset : p)
+        : [...presets, nextPreset]
+      : hasDirectEditPermission
+        ? presets.map(p => p.id === preset.id ? nextPreset : p)
+        : existingPersonalCopy
+          ? presets.map(p => p.id === existingPersonalCopy.id ? nextPreset : p)
+          : [...presets, nextPreset]
     setPresets(updated)
     await savePresetsLocally(updated)
 
-    const cloudRow = await persistPreset(nextPreset, preset.inCloud && isUuid(preset.id) ? preset.id : undefined)
+    const persistTargetId = hasDirectEditPermission
+      ? (preset.inCloud && isUuid(preset.id) ? preset.id : undefined)
+      : (forcePersonalCopy && existingPersonalCopy?.inCloud && isUuid(existingPersonalCopy.id) ? existingPersonalCopy.id : undefined)
+        || (!forcePersonalCopy && existingPersonalCopy?.inCloud && isUuid(existingPersonalCopy.id) ? existingPersonalCopy.id : undefined)
+
+    const cloudRow = await persistPreset(nextPreset, persistTargetId)
     if (cloudRow) {
-      const synced = updated.map(p => p.id === preset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true } : p)
+      const synced = hasDirectEditPermission
+        ? updated.map(p => p.id === preset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true } : p)
+        : existingPersonalCopy
+          ? updated.map(p => p.id === existingPersonalCopy.id ? { ...nextPreset, id: cloudRow.id, inCloud: true } : p)
+          : updated.map(p => p.id === nextPreset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true } : p)
       setPresets(synced)
       await savePresetsLocally(synced)
       await loadPresets()
@@ -716,6 +864,20 @@ export default function MetronomeScreen() {
     if (!playlistName) { await savePresetPlaylist(preset, ''); return }
     const existing = preset.playlistNames ?? []
     const next = existing.filter(n => n !== playlistName)
+    if (preset.scope === 'personal' && next.length === 0) {
+      try {
+        if (preset.inCloud && isUuid(preset.id)) {
+          await supabase.from('metronome_presets').delete().eq('id', preset.id)
+        }
+        const updated = presets.filter(p => p.id !== preset.id)
+        setPresets(updated)
+        await savePresetsLocally(updated)
+        if (activePreset?.id === preset.id) setActivePreset(null)
+      } catch (err) {
+        Alert.alert('Error', 'Failed to delete preset')
+      }
+      return
+    }
     const nextPreset = { ...preset, playlistNames: next }
     const updated = presets.map(p => p.id === preset.id ? nextPreset : p)
     setPresets(updated)
@@ -731,7 +893,8 @@ export default function MetronomeScreen() {
 
   const handleSavePlaylistFromPicker = async () => {
     const newName = playlistPickerName.trim()
-    const scopedNewName = newName ? getScopedPlaylistName(newName, playlistPickerScope) : ''
+    const effectivePickerScope = canUseOverallPlaylists ? playlistPickerScope : 'personal'
+    const scopedNewName = newName ? getScopedPlaylistName(newName, effectivePickerScope) : ''
     const selections = Array.from(new Set([...(playlistPickerNames || []), ...(scopedNewName ? [scopedNewName] : [])])).filter(Boolean)
     if (selections.length === 0) { Alert.alert('Error', 'Enter a playlist name or choose one from the list'); return }
 
@@ -752,6 +915,30 @@ export default function MetronomeScreen() {
 
   const togglePlaylistAccordion = (name: string) =>
     setOpenPlaylistNames(prev => ({ ...prev, [name]: !prev[name] }))
+
+  const handleReorderPlaylistPreset = async (playlistName: string, fromIndex: number, direction: 'up' | 'down') => {
+  const group = getOrderedPlaylistGroup(playlistName)
+  const toIndex = direction === 'up' ? fromIndex - 1 : fromIndex + 1
+  if (toIndex < 0 || toIndex >= group.length) return
+  const newGroup = [...group]
+  const [moved] = newGroup.splice(fromIndex, 1)
+  newGroup.splice(toIndex, 0, moved)
+  const newOrder = { ...playlistOrder, [playlistName]: newGroup.map(p => p.id) }
+  setPlaylistOrder(newOrder)
+  await savePlaylistOrder(newOrder)
+}
+
+const getOrderedPlaylistGroup = (playlistName: string): MetronomePreset[] => {
+  const group = playlistGroups[playlistName] || []
+  const order = playlistOrder[playlistName]
+  if (!order || order.length === 0) return group
+  const indexed = Object.fromEntries(group.map(p => [p.id, p]))
+  const ordered = order.map(id => indexed[id]).filter(Boolean)
+  // append any newly added presets not yet in order
+  const inOrder = new Set(order)
+  const extras = group.filter(p => !inOrder.has(p.id))
+  return [...ordered, ...extras]
+}
 
   const handleChangePlaylistScope = async (playlistName: string, targetScope: PresetScope) => {
     const currentScope = getPlaylistScope(playlistName)
@@ -815,25 +1002,30 @@ export default function MetronomeScreen() {
     Alert.alert('Playlist Updated', parts.join('. '))
   }
 
-  const persistPreset = async (preset: MetronomePreset, existingId?: string) => {
+  const persistPreset = async (preset: MetronomePreset, existingId?: string, forcedScope?: PresetScope) => {
     const user = await getCurrentUser()
     if (!user) return null
+    const effectiveScope = forcedScope ?? getEffectivePresetScope(preset)
 
     const payload: any = {
       user_id: user.id,
       name: preset.name,
       bpm: preset.bpm,
-      scope: preset.scope,
-      is_public: preset.scope === 'overall' ? true : preset.isPublic,
+      scope: effectiveScope,
+      is_public: effectiveScope === 'overall',
       playlist_name: (preset.playlistNames && preset.playlistNames.length) ? preset.playlistNames.join(',') : '',
+      use_time_signatures: !!preset.useTimeSignatures,
+      time_signature_label: preset.useTimeSignatures ? (preset.timeSignatureLabel ?? null) : null,
     }
     if (isUuid(preset.id)) payload.id = preset.id
 
     if (existingId && isUuid(existingId)) {
       const updatePayload: any = {
-        name: preset.name, bpm: preset.bpm, scope: preset.scope,
-        is_public: preset.scope === 'overall' ? true : preset.isPublic,
+        name: preset.name, bpm: preset.bpm, scope: effectiveScope,
+        is_public: effectiveScope === 'overall',
         playlist_name: (preset.playlistNames && preset.playlistNames.length) ? preset.playlistNames.join(',') : '',
+        use_time_signatures: !!preset.useTimeSignatures,
+        time_signature_label: preset.useTimeSignatures ? (preset.timeSignatureLabel ?? null) : null,
       }
       const { data, error } = await supabase.from('metronome_presets').update(updatePayload).eq('id', existingId).select()
       if (error) {
@@ -857,6 +1049,10 @@ export default function MetronomeScreen() {
 
   const handleAddPreset = async () => {
     if (!newPresetName.trim()) { Alert.alert('Error', 'Please enter a preset name'); return }
+    if (newPresetScope === 'overall' && !canCreateOverallPreset) {
+      Alert.alert('Permission Denied', 'Only manager and superadmin can create overall presets.')
+      return
+    }
 
     const newPreset: MetronomePreset = {
       id: `local-${Date.now()}`,
@@ -867,6 +1063,7 @@ export default function MetronomeScreen() {
       isPublic: newPresetScope === 'overall' ? true : false,
       playlistNames: newPresetPlaylistName.trim() ? [newPresetPlaylistName.trim()] : [],
       ownerUserId: currentUserId ?? undefined,
+      ...getCurrentTimeSignatureState(),
     }
 
     const updated = [...presets, newPreset]
@@ -898,27 +1095,74 @@ export default function MetronomeScreen() {
     if (!ensureCanModifyPreset(editingPreset, 'Edit')) return
     if (!newPresetName.trim()) { Alert.alert('Error', 'Please enter a preset name'); return }
 
-    const nextPreset: MetronomePreset = {
-      ...editingPreset,
-      name: newPresetName.trim(), bpm,
-      scope: newPresetScope,
-      isPublic: newPresetScope === 'overall' ? true : false,
-      playlistNames: newPresetPlaylistName.trim() ? [newPresetPlaylistName.trim()] : (editingPreset.playlistNames ?? []),
-    }
+    const scopeChanged = editingPreset.scope !== newPresetScope
+    const nextPlaylistNames = newPresetPlaylistName.trim()
+      ? [newPresetPlaylistName.trim()]
+      : (editingPreset.playlistNames ?? [])
 
-    const updated = presets.map(p => p.id === editingPreset.id ? nextPreset : p)
+    const nextPreset: MetronomePreset = scopeChanged
+      ? {
+          ...makePresetCopy(editingPreset, newPresetScope),
+          name: newPresetName.trim(),
+          bpm,
+          playlistNames: nextPlaylistNames,
+          ...getCurrentTimeSignatureState(),
+        }
+      : {
+          ...editingPreset,
+          name: newPresetName.trim(),
+          bpm,
+          scope: newPresetScope,
+          isPublic: newPresetScope === 'overall',
+          playlistNames: nextPlaylistNames,
+          ...getCurrentTimeSignatureState(),
+        }
+
+    const updated = scopeChanged
+      ? [...presets, nextPreset]
+      : presets.map(p => p.id === editingPreset.id ? nextPreset : p)
+    const pairKey = getPresetPairKey(editingPreset)
+    const linkedPresets = presets.filter(p => p.id !== editingPreset.id && getPresetPairKey(p) === pairKey)
+
     setPresets(updated); await savePresetsLocally(updated)
 
     try {
-      const cloudRow = await persistPreset(nextPreset, editingPreset.inCloud && isUuid(editingPreset.id) ? editingPreset.id : undefined)
+      const cloudRow = await persistPreset(
+        nextPreset,
+        scopeChanged && editingPreset.inCloud && isUuid(editingPreset.id) ? undefined : (editingPreset.inCloud && isUuid(editingPreset.id) ? editingPreset.id : undefined)
+      )
+      const syncLinkedPreset = async (linkedPreset: MetronomePreset) => {
+        const linkedNextPreset = {
+          ...linkedPreset,
+          name: newPresetName.trim(),
+          bpm,
+          playlistNames: nextPlaylistNames,
+        }
+        const linkedCloudRow = await persistPreset(
+          linkedNextPreset,
+          linkedPreset.inCloud && isUuid(linkedPreset.id) ? linkedPreset.id : undefined,
+          linkedPreset.scope
+        )
+        return linkedCloudRow
+          ? { ...linkedNextPreset, id: linkedCloudRow.id, inCloud: true, ownerUserId: linkedCloudRow.user_id ?? linkedNextPreset.ownerUserId }
+          : linkedNextPreset
+      }
+
       if (cloudRow) {
-        const synced = updated.map(p => p.id === editingPreset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true } : p)
-        setPresets(synced); await savePresetsLocally(synced); await loadPresets()
+        const synced = scopeChanged
+          ? updated.map(p => p.id === nextPreset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true, ownerUserId: cloudRow.user_id ?? nextPreset.ownerUserId } : p)
+          : updated.map(p => p.id === editingPreset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true } : p)
+        let finalPresets = synced
+        for (const linkedPreset of linkedPresets) {
+          const syncedLinkedPreset = await syncLinkedPreset(linkedPreset)
+          finalPresets = finalPresets.map(p => p.id === linkedPreset.id ? syncedLinkedPreset : p)
+        }
+        setPresets(finalPresets); await savePresetsLocally(finalPresets); await loadPresets()
       } else {
         console.warn('Preset edit saved locally but did not sync to Supabase.')
         await showCloudFailAlert(nextPreset, 'Save')
       }
-      Alert.alert('Saved', `"${nextPreset.name}" updated`)
+      Alert.alert('Saved', scopeChanged ? `"${nextPreset.name}" copied to ${newPresetScope}` : `"${nextPreset.name}" updated`)
     } catch (err) {
       console.error('Failed to save preset edit:', err)
       await showCloudFailAlert(nextPreset, 'Save')
@@ -962,10 +1206,13 @@ export default function MetronomeScreen() {
       setUploadingPresetId(preset.id)
       const user = await getCurrentUser()
       if (!user) { Alert.alert('Error', 'Not logged in'); return }
+      const effectiveScope = getEffectivePresetScope(preset)
       const payload: any = {
         user_id: user.id, name: preset.name, bpm: preset.bpm,
-        scope: preset.scope, is_public: preset.scope === 'overall' ? true : preset.isPublic,
+        scope: effectiveScope, is_public: effectiveScope === 'overall',
         playlist_name: (preset.playlistNames && preset.playlistNames.length) ? preset.playlistNames[0] : '',
+        use_time_signatures: !!preset.useTimeSignatures,
+        time_signature_label: preset.useTimeSignatures ? (preset.timeSignatureLabel ?? null) : null,
       }
       const { data, error } = await supabase.from('metronome_presets').insert(payload).select().single()
       if (error) throw error
@@ -1018,7 +1265,43 @@ export default function MetronomeScreen() {
       Alert.alert('Permission Denied', 'Only manager and superadmin can copy personal presets to overall.')
       return
     }
-    if (scope === 'personal' && preset.scope !== 'overall') return
+    if (scope === 'personal') {
+      if (preset.scope !== 'overall') return
+
+      const existingCopy = presets.find(existing =>
+        existing.scope === 'personal' && getPresetPairKey(existing) === getPresetPairKey(preset)
+      )
+
+      if (existingCopy) {
+        setActivePreset(existingCopy)
+        Alert.alert('Already Copied', `A personal copy of "${preset.name}" already exists.`)
+        return
+      }
+
+      const nextPreset = makePresetCopy(preset, 'personal')
+      const updated = [...presets, nextPreset]
+      setPresets(updated)
+      await savePresetsLocally(updated)
+
+      try {
+        const cloudRow = await persistPreset(nextPreset)
+        if (cloudRow) {
+          const synced = updated.map(p =>
+            p.id === nextPreset.id ? { ...nextPreset, id: cloudRow.id, inCloud: true, ownerUserId: cloudRow.user_id ?? nextPreset.ownerUserId } : p
+          )
+          setPresets(synced)
+          await savePresetsLocally(synced)
+          await loadPresets()
+          setActivePreset(synced.find(p => p.id === cloudRow.id) ?? nextPreset)
+          return
+        }
+        await showCloudFailAlert(nextPreset, 'Copy')
+      } catch (err) {
+        console.error('Failed to copy preset scope to personal:', err)
+        await showCloudFailAlert(nextPreset, 'Copy')
+      }
+      return
+    }
 
     const nextPreset = makePresetCopy(preset, scope)
     if (presets.some(existing => getPresetCopyFingerprint(existing) === getPresetCopyFingerprint(nextPreset))) {
@@ -1083,6 +1366,8 @@ export default function MetronomeScreen() {
     setEditingPreset(preset); setNewPresetName(preset.name)
     setNewPresetScope(preset.scope); setNewPresetPlaylistName(preset.playlistNames?.[0] ?? '')
     setNewPresetIsPublic(preset.scope === 'overall' ? true : preset.isPublic)
+    setUseTimeSignatures(!!preset.useTimeSignatures)
+    setSelectedTimeSignature(resolveSelectedTimeSignature(preset.timeSignatureLabel))
     setBpm(preset.bpm); setShowEditModal(true)
   }
 
@@ -1092,6 +1377,8 @@ export default function MetronomeScreen() {
   const handleSelectPreset = (preset: MetronomePreset) => {
     setBpm(preset.bpm)
     setActivePreset(preset)
+    setUseTimeSignatures(!!preset.useTimeSignatures)
+    setSelectedTimeSignature(resolveSelectedTimeSignature(preset.timeSignatureLabel))
     if (isPlayingRef.current) {
       bpmRef.current = preset.bpm
       if (!audioCtxRef.current) { stopScheduler(); startScheduler(preset.bpm) }
@@ -1126,7 +1413,11 @@ export default function MetronomeScreen() {
   const handleSaveBpmChangeForActivePreset = async () => {
     if (!activePreset) return
     if (!ensureCanModifyPreset(activePreset, 'Update BPM')) return
-    const updatedPreset: MetronomePreset = { ...activePreset, bpm }
+    const updatedPreset: MetronomePreset = {
+      ...activePreset,
+      bpm,
+      ...getCurrentTimeSignatureState(),
+    }
     const updated = presets.map(p => p.id === activePreset.id ? updatedPreset : p)
     setPresets(updated); await savePresetsLocally(updated)
     try {
@@ -1155,7 +1446,9 @@ export default function MetronomeScreen() {
   const personalPresets   = presets.filter(p => !p.scope || p.scope === 'personal')
   const ownOverallPresets = presets.filter(p => p.scope === 'overall')
   const overallPresets    = [...ownOverallPresets, ...publicPresets]
-  const playlistSource    = [...presets, ...publicPresets].reduce<MetronomePreset[]>((items, preset) => {
+  const playlistSource    = [...presets, ...publicPresets]
+    .filter(preset => preset.scope === 'overall' || isPresetOwner(preset))
+    .reduce<MetronomePreset[]>((items, preset) => {
     if (!items.some(existing => existing.id === preset.id)) items.push(preset)
     return items
   }, [])
@@ -1173,9 +1466,28 @@ export default function MetronomeScreen() {
   const combinedPlaylistNames = Array.from(new Set([...visiblePlaylistNames, ...chordlistPlaylists])).sort((a, b) => a.localeCompare(b))
   const personalPlaylistNames = combinedPlaylistNames.filter(name => getPlaylistScope(name) === 'personal')
   const overallPlaylistNames  = combinedPlaylistNames.filter(name => getPlaylistScope(name) === 'overall')
+  const playlistPickerExistingNames = canUseOverallPlaylists ? combinedPlaylistNames : personalPlaylistNames
   const scopedPlaylistNames   = playlistScopeTab === 'personal' ? personalPlaylistNames : overallPlaylistNames
   const tabPresets            = activeTab === 'personal' ? personalPresets
     : activeTab === 'overall' ? overallPresets : []
+  const normalizedSearch = searchText.trim().toLowerCase()
+
+  const presetMatchesSearch = useCallback((preset: MetronomePreset) => {
+    if (!normalizedSearch) return true
+    const playlistNameText = (preset.playlistNames || []).join(' ').toLowerCase()
+    return [preset.name, `${preset.bpm}`, playlistNameText]
+      .some(value => value.toLowerCase().includes(normalizedSearch))
+  }, [normalizedSearch])
+
+  const filteredTabPresets = useMemo(() => tabPresets.filter(presetMatchesSearch), [presetMatchesSearch, tabPresets])
+  const filteredScopedPlaylistNames = useMemo(() => {
+    if (!normalizedSearch) return scopedPlaylistNames
+
+    return scopedPlaylistNames.filter(name => {
+      if (name.toLowerCase().includes(normalizedSearch)) return true
+      return (playlistGroups[name] || []).some(presetMatchesSearch)
+    })
+  }, [normalizedSearch, playlistGroups, presetMatchesSearch, scopedPlaylistNames])
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -1266,18 +1578,40 @@ export default function MetronomeScreen() {
           <View style={styles.customPresetsHeader}>
             <Text style={styles.presetsLabel}>My Presets</Text>
             <View style={styles.headerActions}>
-              <TouchableOpacity
-                style={styles.addPresetButton}
-                onPress={() => {
-                  setEditingPreset(null); setNewPresetName('')
-                  setNewPresetScope(activeTab === 'overall' ? 'overall' : 'personal')
-                  setNewPresetPlaylistName(''); setNewPresetIsPublic(false)
-                  setShowAddModal(true)
-                }}
-              >
-                <Ionicons name="add-circle" size={28} color={COLORS.black} />
-              </TouchableOpacity>
+              {(activeTab !== 'overall' || canCreateOverallPreset) && (
+                <TouchableOpacity
+                  style={styles.addPresetButton}
+                  onPress={() => {
+                    setEditingPreset(null); setNewPresetName('')
+                    setNewPresetScope(activeTab === 'overall' ? 'overall' : 'personal')
+                    setNewPresetPlaylistName(''); setNewPresetIsPublic(false)
+                    setShowAddModal(true)
+                  }}
+                >
+                  <Ionicons name="add-circle" size={28} color={COLORS.black} />
+                </TouchableOpacity>
+              )}
             </View>
+          </View>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: COLORS.white, borderWidth: 1.5, borderColor: COLORS.veryLightGray }}>
+            <Ionicons name="search-outline" size={16} color={COLORS.mediumGray} />
+            <TextInput
+              style={{ flex: 1, fontSize: 14, color: COLORS.black, fontWeight: '600', padding: 0 }}
+              placeholder={activeTab === 'playlist' ? 'Search playlist names or presets…' : 'Search presets…'}
+              placeholderTextColor={COLORS.mediumGray}
+              value={searchText}
+              onChangeText={setSearchText}
+              returnKeyType="search"
+            />
+            {searchText.length > 0 && (
+              <TouchableOpacity
+                onPress={() => setSearchText('')}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={18} color={COLORS.mediumGray} />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Tab bar */}
@@ -1341,122 +1675,151 @@ export default function MetronomeScreen() {
                 </TouchableOpacity>
               </View>
 
-              {scopedPlaylistNames.length === 0 ? (
-                <View style={styles.emptyPlaylistState}>
-                  <Ionicons name="albums-outline" size={28} color={COLORS.mediumGray} />
-                  <Text style={styles.emptyPlaylistTitle}>No {playlistScopeTab} playlists yet</Text>
-                  <Text style={styles.emptyPlaylistText}>Add a playlist from the button above, or assign a preset to a playlist from its menu.</Text>
-                  <TouchableOpacity style={styles.emptyPlaylistButton} onPress={handleQuickAddPlaylist}>
-                    <Text style={styles.emptyPlaylistButtonText}>Add Playlist</Text>
+{scopedPlaylistNames.length === 0 ? (
+  <View style={styles.emptyPlaylistState}>
+    <Ionicons name="albums-outline" size={28} color={COLORS.mediumGray} />
+    <Text style={styles.emptyPlaylistTitle}>
+      {normalizedSearch ? 'No matches found' : `No ${playlistScopeTab} playlists yet`}
+    </Text>
+    <Text style={styles.emptyPlaylistText}>
+      {normalizedSearch
+        ? 'Try a different search term.'
+        : 'Add a playlist from the button above, or assign a preset to a playlist from its menu.'}
+    </Text>
+  </View>
+) : (
+  filteredScopedPlaylistNames.map(name => (
+    <View key={name} style={styles.playlistSection}>
+      {(() => {
+        const nameScope = getPlaylistScope(name)
+        return (
+          <TouchableOpacity style={styles.playlistAccordionHeader} onPress={() => togglePlaylistAccordion(name)}>
+            <View style={styles.playlistAccordionHeaderLeft}>
+              <Ionicons name={openPlaylistNames[name] ? 'chevron-down' : 'chevron-forward'} size={16} color={COLORS.mediumGray} />
+              <Text style={styles.playlistSectionTitle}>{getPlaylistDisplayName(name)}</Text>
+              <View style={[styles.playlistScopeBadge, getPlaylistScope(name) === 'overall' ? styles.playlistScopeBadgeOverall : styles.playlistScopeBadgePersonal]}>
+                <Text style={styles.playlistScopeBadgeText}>{getPlaylistScope(name) === 'overall' ? 'Overall' : 'Personal'}</Text>
+              </View>
+            </View>
+            <View style={styles.playlistAccordionHeaderRight}>
+              {nameScope === 'overall' && isManagerOrSuperadmin && (
+                <View style={styles.playlistHeaderScopeActions}>
+                  <TouchableOpacity style={styles.playlistHeaderScopeButton} onPress={(e) => { e.stopPropagation(); handleChangePlaylistScope(name, 'personal') }}>
+                    <Ionicons name="person-outline" size={12} color={COLORS.black} />
                   </TouchableOpacity>
                 </View>
-              ) : (
-                scopedPlaylistNames.map(name => (
-                  <View key={name} style={styles.playlistSection}>
-                    {(() => {
-                      const nameScope = getPlaylistScope(name)
-                      return (
-                        <TouchableOpacity style={styles.playlistAccordionHeader} onPress={() => togglePlaylistAccordion(name)}>
-                          <View style={styles.playlistAccordionHeaderLeft}>
-                            <Ionicons name={openPlaylistNames[name] ? 'chevron-down' : 'chevron-forward'} size={16} color={COLORS.mediumGray} />
-                            <Text style={styles.playlistSectionTitle}>{getPlaylistDisplayName(name)}</Text>
-                            <View style={[styles.playlistScopeBadge, getPlaylistScope(name) === 'overall' ? styles.playlistScopeBadgeOverall : styles.playlistScopeBadgePersonal]}>
-                              <Text style={styles.playlistScopeBadgeText}>{getPlaylistScope(name) === 'overall' ? 'Overall' : 'Personal'}</Text>
-                            </View>
-                          </View>
-                          <View style={styles.playlistAccordionHeaderRight}>
-                            {nameScope === 'overall' && (
-                              <View style={styles.playlistHeaderScopeActions}>
-                                <TouchableOpacity style={styles.playlistHeaderScopeButton} onPress={(e) => { e.stopPropagation(); handleChangePlaylistScope(name, 'personal') }}>
-                                  <Ionicons name="person-outline" size={12} color={COLORS.black} />
-                                </TouchableOpacity>
-                              </View>
-                            )}
-                            {nameScope === 'personal' && isManagerOrSuperadmin && (
-                              <View style={styles.playlistHeaderScopeActions}>
-                                <TouchableOpacity style={styles.playlistHeaderScopeButton} onPress={(e) => { e.stopPropagation(); handleChangePlaylistScope(name, 'overall') }}>
-                                  <Ionicons name="globe-outline" size={12} color={COLORS.black} />
-                                </TouchableOpacity>
-                              </View>
-                            )}
-                            <View style={styles.playlistAccordionCount}>
-                              <Text style={styles.playlistAccordionCountText}>{(playlistGroups[name] || []).length}</Text>
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      )
-                    })()}
-                    {openPlaylistNames[name] && (
-                      <View style={styles.playlistAccordionBody}>
-                        {(playlistGroups[name] || []).map((preset) => (
-                          <TouchableOpacity
-                            key={preset.id}
-                            style={[styles.playlistPresetCard, activePreset?.id === preset.id && styles.customPresetCardActive]}
-                            onPress={() => handleSelectPreset(preset)}
-                          >
-                            <View style={styles.playlistPresetBody}>
-                              <View style={styles.playlistPresetTopRow}>
-                                <Text style={[styles.playlistPresetName, activePreset?.id === preset.id && styles.playlistPresetNameActive]} numberOfLines={2}>
-                                  {preset.name}
-                                </Text>
-                                <View style={[styles.playlistPresetScopePill, preset.scope === 'overall' ? styles.playlistPresetScopeOverall : styles.playlistPresetScopePersonal]}>
-                                  <Ionicons name={preset.scope === 'overall' ? 'globe-outline' : 'person-outline'} size={11} color={preset.scope === 'overall' ? COLORS.black : COLORS.mediumGray} />
-                                  <Text style={styles.playlistPresetScopeText}>{preset.scope === 'overall' ? 'Overall' : 'Personal'}</Text>
-                                </View>
-                              </View>
-                              <View style={styles.playlistPresetMetaRow}>
-                                <Text style={[styles.playlistPresetBpm, activePreset?.id === preset.id && styles.playlistPresetBpmActive]}>{preset.bpm} BPM</Text>
-                                <View style={[styles.syncBadge, preset.inCloud ? styles.syncBadgeCloud : styles.syncBadgeLocal]}>
-                                  <Ionicons name={preset.inCloud ? 'cloud-done-outline' : 'phone-portrait-outline'} size={10} color={COLORS.mediumGray} />
-                                  <Text style={styles.syncBadgeText}>{preset.inCloud ? 'Cloud' : 'Local'}</Text>
-                                </View>
-                              </View>
-                              <View style={styles.playlistPresetFooterRow}>
-                                <View style={styles.playlistPresetActionsLeft}>
-                                  {preset.scope === 'overall' && (
-                                    <TouchableOpacity style={styles.scopeInlineButton} onPress={() => handleChangePresetScope(preset, 'personal')}>
-                                      <Ionicons name="person-outline" size={14} color={COLORS.black} />
-                                      <Text style={styles.scopeInlineButtonText}>Personal</Text>
-                                    </TouchableOpacity>
-                                  )}
-                                  {preset.scope === 'personal' && isManagerOrSuperadmin && (
-                                    <TouchableOpacity style={styles.scopeInlineButton} onPress={() => handleChangePresetScope(preset, 'overall')}>
-                                      <Ionicons name="globe-outline" size={14} color={COLORS.black} />
-                                      <Text style={styles.scopeInlineButtonText}>Overall</Text>
-                                    </TouchableOpacity>
-                                  )}
-                                </View>
-                                <View style={styles.customPresetActions}>
-                                  {canModifyPreset(preset) && (
-                                    <>
-                                      <TouchableOpacity style={styles.inlineActionButton} onPress={() => openPlaylistPicker(preset, 'assign')}>
-                                        <Ionicons name="add" size={16} color={COLORS.black} />
-                                      </TouchableOpacity>
-                                      <TouchableOpacity style={styles.inlineActionButton} onPress={() => handleRemovePresetFromPlaylist(preset, name)}>
-                                        <Ionicons name="remove" size={16} color={COLORS.black} />
-                                      </TouchableOpacity>
-                                    </>
-                                  )}
-                                  <TouchableOpacity style={styles.menuButton} onPress={() => openPresetMenu(preset)}>
-                                    <Ionicons name="ellipsis-vertical" size={18} color={COLORS.black} />
-                                  </TouchableOpacity>
-                                </View>
-                              </View>
-                            </View>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                ))
               )}
+              {nameScope === 'personal' && isManagerOrSuperadmin && (
+                <View style={styles.playlistHeaderScopeActions}>
+                  <TouchableOpacity style={styles.playlistHeaderScopeButton} onPress={(e) => { e.stopPropagation(); handleChangePlaylistScope(name, 'overall') }}>
+                    <Ionicons name="globe-outline" size={12} color={COLORS.black} />
+                  </TouchableOpacity>
+                </View>
+              )}
+              <View style={styles.playlistAccordionCount}>
+                <Text style={styles.playlistAccordionCountText}>{(playlistGroups[name] || []).length}</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+        )
+      })()}
+
+      {openPlaylistNames[name] && (
+        <View style={styles.playlistAccordionBody}>
+          {getOrderedPlaylistGroup(name).map((preset, presetIdx) => {
+            const orderedGroup = getOrderedPlaylistGroup(name)
+            const isFirst = presetIdx === 0
+            const isLast = presetIdx === orderedGroup.length - 1
+            return (
+              <TouchableOpacity
+                key={preset.id}
+                style={[styles.playlistPresetCard, activePreset?.id === preset.id && styles.customPresetCardActive]}
+                onPress={() => handleSelectPreset(preset)}
+              >
+                <View style={styles.playlistPresetBody}>
+                  <View style={styles.playlistPresetTopRow}>
+                    <Text style={[styles.playlistPresetName, activePreset?.id === preset.id && styles.playlistPresetNameActive]} numberOfLines={2}>
+                      {preset.name}
+                    </Text>
+                    <View style={[styles.playlistPresetScopePill, preset.scope === 'overall' ? styles.playlistPresetScopeOverall : styles.playlistPresetScopePersonal]}>
+                      <Ionicons name={preset.scope === 'overall' ? 'globe-outline' : 'person-outline'} size={11} color={preset.scope === 'overall' ? COLORS.black : COLORS.mediumGray} />
+                      <Text style={styles.playlistPresetScopeText}>{preset.scope === 'overall' ? 'Overall' : 'Personal'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.playlistPresetMetaRow}>
+                    <Text style={[styles.playlistPresetBpm, activePreset?.id === preset.id && styles.playlistPresetBpmActive]}>{preset.bpm} BPM</Text>
+                    <View style={[styles.syncBadge, preset.inCloud ? styles.syncBadgeCloud : styles.syncBadgeLocal]}>
+                      <Ionicons name={preset.inCloud ? 'cloud-done-outline' : 'phone-portrait-outline'} size={10} color={COLORS.mediumGray} />
+                      <Text style={styles.syncBadgeText}>{preset.inCloud ? 'Cloud' : 'Local'}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.playlistPresetFooterRow}>
+                    <View style={styles.playlistPresetActionsLeft}>
+                      {preset.scope === 'overall' && isManagerOrSuperadmin && (
+                        <TouchableOpacity style={styles.scopeInlineButton} onPress={() => handleChangePresetScope(preset, 'personal')}>
+                          <Ionicons name="person-outline" size={14} color={COLORS.black} />
+                          <Text style={styles.scopeInlineButtonText}>Personal</Text>
+                        </TouchableOpacity>
+                      )}
+                      {preset.scope === 'personal' && isManagerOrSuperadmin && (
+                        <TouchableOpacity style={styles.scopeInlineButton} onPress={() => handleChangePresetScope(preset, 'overall')}>
+                          <Ionicons name="globe-outline" size={14} color={COLORS.black} />
+                          <Text style={styles.scopeInlineButtonText}>Overall</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <View style={styles.customPresetActions}>
+                      <View style={styles.reorderBtns}>
+                        <TouchableOpacity
+                          style={[styles.reorderBtn, isFirst && styles.reorderBtnDisabled]}
+                          onPress={() => handleReorderPlaylistPreset(name, presetIdx, 'up')}
+                          disabled={isFirst}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Ionicons name="chevron-up" size={13} color={isFirst ? COLORS.lightGray : COLORS.black} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.reorderBtn, isLast && styles.reorderBtnDisabled]}
+                          onPress={() => handleReorderPlaylistPreset(name, presetIdx, 'down')}
+                          disabled={isLast}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          <Ionicons name="chevron-down" size={13} color={isLast ? COLORS.lightGray : COLORS.black} />
+                        </TouchableOpacity>
+                      </View>
+                      {/* <TouchableOpacity style={styles.inlineActionButton} onPress={() => openPlaylistPicker(preset, 'assign')}>
+                        <Ionicons name="add" size={16} color={COLORS.black} />
+                      </TouchableOpacity> */}
+                      {/* {canModifyPreset(preset) && (
+                        <TouchableOpacity style={styles.inlineActionButton} onPress={() => handleRemovePresetFromPlaylist(preset, name)}>
+                          <Ionicons name="remove" size={16} color={COLORS.black} />
+                        </TouchableOpacity>
+                      )} */}
+                      <TouchableOpacity style={styles.menuButton} onPress={() => openPresetMenu(preset)}>
+                        <Ionicons name="ellipsis-vertical" size={18} color={COLORS.black} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+      )}
+    </View>
+  ))
+)}
             </>
-          ) : tabPresets.length === 0 ? (
+          ) : filteredTabPresets.length === 0 ? (
             <Text style={styles.emptyPresetsText}>
-              {activeTab === 'personal' ? 'No personal presets yet. Tap + to add one.' : 'No overall presets yet. Tap + to add one.'}
+              {normalizedSearch
+                ? 'No matches found. Try a different search term.'
+                : activeTab === 'personal'
+                  ? 'No personal presets yet. Tap + to add one.'
+                  : 'No overall presets yet. Tap + to add one.'}
             </Text>
           ) : (
-            tabPresets.map((preset) => (
+            filteredTabPresets.map((preset) => (
               <TouchableOpacity
                 key={preset.id}
                 style={[styles.customPresetCard, activePreset?.id === preset.id && styles.customPresetCardActive]}
@@ -1517,7 +1880,7 @@ export default function MetronomeScreen() {
                   <Text style={styles.menuItemText}>Edit</Text>
                 </TouchableOpacity>
               )}
-              {menuPreset && canModifyPreset(menuPreset) && (
+              {menuPreset && (
                 <TouchableOpacity style={styles.menuItem} onPress={() => { const p = menuPreset; closePresetMenu(); openPlaylistPicker(p, 'assign') }}>
                   <Ionicons name="albums-outline" size={18} color={COLORS.black} />
                   <Text style={styles.menuItemText}>Add to Playlist</Text>
@@ -1549,9 +1912,9 @@ export default function MetronomeScreen() {
               </Text>
               {combinedPlaylistNames.length > 0 && (
                 <View style={styles.playlistChoiceList}>
-                  <Text style={styles.modalFieldLabel}>Existing playlists</Text>
+                  <Text style={styles.modalFieldLabel}>{canUseOverallPlaylists ? 'Existing playlists' : 'Existing personal playlists'}</Text>
                   <ScrollView style={styles.playlistChoiceScroll}>
-                    {combinedPlaylistNames.map(name => {
+                    {playlistPickerExistingNames.map(name => {
                       const selected = playlistPickerNames.includes(name)
                       return (
                         <TouchableOpacity
@@ -1584,10 +1947,12 @@ export default function MetronomeScreen() {
                   <Ionicons name="person-outline" size={16} color={playlistPickerScope === 'personal' ? COLORS.white : COLORS.darkGray} />
                   <Text style={[styles.scopeOptionText, playlistPickerScope === 'personal' && styles.scopeOptionTextActive]}>Personal</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[styles.scopeOption, playlistPickerScope === 'overall' && styles.scopeOptionActive]} onPress={() => setPlaylistPickerScope('overall')}>
-                  <Ionicons name="globe-outline" size={16} color={playlistPickerScope === 'overall' ? COLORS.white : COLORS.darkGray} />
-                  <Text style={[styles.scopeOptionText, playlistPickerScope === 'overall' && styles.scopeOptionTextActive]}>Overall</Text>
-                </TouchableOpacity>
+                {canUseOverallPlaylists && (
+                  <TouchableOpacity style={[styles.scopeOption, playlistPickerScope === 'overall' && styles.scopeOptionActive]} onPress={() => setPlaylistPickerScope('overall')}>
+                    <Ionicons name="globe-outline" size={16} color={playlistPickerScope === 'overall' ? COLORS.white : COLORS.darkGray} />
+                    <Text style={[styles.scopeOptionText, playlistPickerScope === 'overall' && styles.scopeOptionTextActive]}>Overall</Text>
+                  </TouchableOpacity>
+                )}
               </View>
               <TextInput
                 style={styles.modalInput}
@@ -1725,6 +2090,28 @@ export default function MetronomeScreen() {
                 placeholderTextColor={COLORS.mediumGray}
                 value={newPresetName} onChangeText={setNewPresetName} autoFocus
               />
+              <View style={styles.timeSignatureCard}>
+                <View style={styles.timeSignatureCardLeft}>
+                  <Text style={styles.timeSignatureCardTitle}>Time Signatures</Text>
+                  <Text style={styles.timeSignatureCardSubtitle}>
+                    {useTimeSignatures
+                      ? `On · ${selectedTimeSignature.label} · ${selectedTimeSignature.description}`
+                      : 'Off · steady quarter-note clicks'}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Switch
+                    value={useTimeSignatures}
+                    onValueChange={setUseTimeSignatures}
+                    trackColor={{ false: COLORS.lightGray, true: COLORS.black }}
+                    thumbColor={COLORS.white}
+                  />
+                  <TouchableOpacity style={styles.timeSignatureCardButton} onPress={() => setShowTimeSignatureModal(true)}>
+                    <Ionicons name="musical-notes-outline" size={16} color={COLORS.black} />
+                    <Text style={styles.timeSignatureCardButtonText}>Choose</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
               <Text style={styles.modalFieldLabel}>Playlist</Text>
               <TouchableOpacity style={styles.playlistPickerButton} onPress={() => openPlaylistPicker(editingPreset ?? null, 'field')}>
                 <Ionicons name="albums-outline" size={18} color={COLORS.black} />
@@ -1812,6 +2199,8 @@ const styles = StyleSheet.create({
   addPresetButton: { padding: 6 },
   addPlaylistButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: COLORS.veryLightGray, borderWidth: 1, borderColor: COLORS.lightGray },
   addPlaylistButtonText: { fontSize: 12, fontWeight: '800', color: COLORS.black },
+  searchBar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: COLORS.white, borderWidth: 1.5, borderColor: COLORS.veryLightGray },
+  searchInput: { flex: 1, fontSize: 14, color: COLORS.black, fontWeight: '600', padding: 0 },
 
   tabBar: { flexDirection: 'row', backgroundColor: COLORS.veryLightGray, borderRadius: 8, padding: 3, marginBottom: 8, gap: 3, flexWrap: 'wrap' },
   tab: { flexGrow: 1, flexBasis: '30%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 9, borderRadius: 6, gap: 5 },
@@ -1860,6 +2249,15 @@ const styles = StyleSheet.create({
   customPresetMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
   customPresetBpm: { fontSize: 13, color: COLORS.mediumGray, fontWeight: '600' },
   customPresetBpmActive: { color: COLORS.darkGray },
+
+  reorderBtns: { flexDirection: 'column', gap: 2 },
+reorderBtn: {
+  width: 24, height: 24, borderRadius: 6,
+  backgroundColor: COLORS.veryLightGray,
+  borderWidth: 1, borderColor: COLORS.lightGray,
+  justifyContent: 'center', alignItems: 'center',
+},
+reorderBtnDisabled: { opacity: 0.35 },
 
   playlistPresetCard: { backgroundColor: COLORS.white, borderRadius: 10, padding: 14, marginBottom: 10, borderWidth: 1.5, borderColor: COLORS.veryLightGray, elevation: 1, shadowColor: COLORS.black, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2 },
   playlistPresetBody: { gap: 10 },

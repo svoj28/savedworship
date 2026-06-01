@@ -22,6 +22,10 @@ export function navigateFromNotification(notification: AppNotification) {
   switch (notification.type) {
     case 'management_broadcast': {
       const initialSection = resolveManagementSection(notification)
+      if (initialSection === 'lineup') {
+        navigationRef.navigate('LineupsTab')
+        return true
+      }
       navigationRef.navigate('ManagementTab', initialSection ? { initialSection } : undefined)
       return true
     }

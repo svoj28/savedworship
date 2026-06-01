@@ -6,7 +6,7 @@
  */
 
 import * as SQLite from 'expo-sqlite'
-import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper } from './models'
+import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, CalendarEvent } from './models'
 
 let dbInstance: SQLite.SQLiteDatabase | null = null
 
@@ -65,9 +65,16 @@ export async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS lineup_items (
         id TEXT PRIMARY KEY,
         lineup_id TEXT NOT NULL,
-        song_id TEXT NOT NULL,
+        song_id TEXT NOT NULL DEFAULT '',
+        user_id TEXT DEFAULT '',
         position INTEGER,
         created_at INTEGER,
+        updated_at INTEGER,
+        artist TEXT,
+        song_title TEXT,
+        song_key TEXT,
+        version_url TEXT,
+        category TEXT DEFAULT 'any',
         _synced INTEGER DEFAULT 0
       );
       
@@ -110,6 +117,18 @@ export async function initializeDatabase() {
         user_id TEXT NOT NULL,
         youtube_url TEXT NOT NULL,
         description TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS team_calendar_events (
+        id TEXT PRIMARY KEY,
+        event_date TEXT NOT NULL,
+        title TEXT NOT NULL,
+        assignments TEXT,
+        notes TEXT,
+        user_id TEXT NOT NULL,
         created_at INTEGER,
         updated_at INTEGER,
         _synced INTEGER DEFAULT 0
@@ -169,6 +188,8 @@ export async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_file_droppers_user_id ON file_droppers(user_id);
       CREATE INDEX IF NOT EXISTS idx_announcements_user_id ON important_announcements(user_id);
       CREATE INDEX IF NOT EXISTS idx_version_droppers_user_id ON version_droppers(user_id);
+      CREATE INDEX IF NOT EXISTS idx_team_calendar_events_date ON team_calendar_events(event_date);
+      CREATE INDEX IF NOT EXISTS idx_team_calendar_events_user_id ON team_calendar_events(user_id);
       CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
       CREATE INDEX IF NOT EXISTS idx_playlists_user_id ON playlists(user_id);
       CREATE INDEX IF NOT EXISTS idx_playlist_items_playlist_id ON playlist_items(playlist_id);
@@ -261,6 +282,14 @@ try {
 } catch (e) {}
 
 try {
+  await dbInstance.execAsync(`ALTER TABLE team_calendar_events ADD COLUMN created_at_iso TEXT;`)
+} catch (e) {}
+
+try {
+  await dbInstance.execAsync(`ALTER TABLE team_calendar_events ADD COLUMN updated_at_iso TEXT;`)
+} catch (e) {}
+
+try {
   await dbInstance.execAsync(`ALTER TABLE contacts ADD COLUMN created_at_iso TEXT;`)
 } catch (e) {}
 
@@ -341,6 +370,46 @@ try {
 
     try {
       await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN artist TEXT;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN song_title TEXT;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN song_key TEXT;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN version_url TEXT;
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
+        ALTER TABLE lineup_items ADD COLUMN category TEXT DEFAULT 'any';
+      `)
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    try {
+      await dbInstance.execAsync(`
         ALTER TABLE messages ADD COLUMN user_id TEXT DEFAULT '';
       `)
     } catch (e) {
@@ -376,7 +445,7 @@ try {
     const tablesForDeletedAt = [
       'artists', 'chord_lists', 'songs', 'lineups', 'lineup_items',
       'messages', 'file_droppers', 'important_announcements', 'version_droppers',
-      'contacts', 'playlists', 'playlist_items', 'user_profiles'
+        'team_calendar_events', 'contacts', 'playlists', 'playlist_items', 'user_profiles'
     ]
     for (const table of tablesForDeletedAt) {
       try {
@@ -463,4 +532,4 @@ export async function getOrInitDatabase() {
 
 
 
-export type { Artist, ChordList, Song, Lineup, LineupItem, Message }
+export type { Artist, ChordList, Song, Lineup, LineupItem, Message, CalendarEvent } 

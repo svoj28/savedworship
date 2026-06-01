@@ -990,7 +990,7 @@ const handleDeleteMessage = async (messageId: string) => {
       </View>
 
       {/* Header — overall or DM list */}
-      {(chatMode === 'overall' || (chatMode === 'direct' && !receiverId)) && (
+      {/* {(chatMode === 'overall' || (chatMode === 'direct' && !receiverId)) && (
         <View style={styles.header}>
           <View style={styles.headerContent}>
             <View style={styles.headerAvatarCol}>
@@ -1010,7 +1010,7 @@ const handleDeleteMessage = async (messageId: string) => {
             </View>
           </View>
         </View>
-      )}
+      )} */}
 
       {/* ── OVERALL CHAT ── */}
       {chatMode === 'overall' && (

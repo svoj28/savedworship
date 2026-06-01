@@ -4,6 +4,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { isOnline } from './networkStatus'
 
 export const OFFLINE_GUEST_USER_ID = 'offline-guest'
+const CACHED_USER_KEY = 'savedworship_cached_auth_user'
+
+async function cacheUser(user: AuthUser) {
+  try {
+    await AsyncStorage.setItem(CACHED_USER_KEY, JSON.stringify(user))
+  } catch (err) {
+    console.warn('Failed to cache auth user:', err)
+  }
+}
+
+async function getCachedUser(): Promise<AuthUser | null> {
+  try {
+    const cached = await AsyncStorage.getItem(CACHED_USER_KEY)
+    return cached ? JSON.parse(cached) as AuthUser : null
+  } catch (err) {
+    console.warn('Failed to read cached auth user:', err)
+    return null
+  }
+}
+
+async function clearCachedUser() {
+  try {
+    await AsyncStorage.removeItem(CACHED_USER_KEY)
+  } catch (err) {
+    console.warn('Failed to clear cached auth user:', err)
+  }
+}
 
 function createOfflineGuestUser(): AuthUser {
   return {
@@ -48,6 +75,12 @@ export async function signUpWithEmail(
     }
 
     if (data.user) {
+      await cacheUser({
+        id: data.user.id,
+        email: data.user.email || '',
+        user_metadata: data.user.user_metadata,
+      })
+
       // Create local profile with displayName as nickname
       try {
         const { createUserProfile } = await import('../db/queries')
@@ -103,6 +136,12 @@ export async function signInWithEmail(
     }
 
     if (data.user) {
+      await cacheUser({
+        id: data.user.id,
+        email: data.user.email || '',
+        user_metadata: data.user.user_metadata,
+      })
+
       return {
         user: {
           id: data.user.id,
@@ -168,6 +207,8 @@ export async function signOut(): Promise<{ error: AuthError | null }> {
       return { error: { message: error.message } }
     }
 
+    await clearCachedUser()
+
     return { error: null }
   } catch (err) {
     return {
@@ -185,18 +226,26 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
     if (error || !data.session?.user) {
       if (!(await isOnline())) {
-        return createOfflineGuestUser()
+        return (await getCachedUser()) ?? createOfflineGuestUser()
       }
+      await clearCachedUser()
       return null
     }
 
-    return {
+    const currentUser: AuthUser = {
       id: data.session.user.id,
       email: data.session.user.email || '',
       user_metadata: data.session.user.user_metadata,
     }
+
+    await cacheUser(currentUser)
+
+    return currentUser
   } catch (err) {
     console.error('Error getting current user:', err)
+    if (!(await isOnline())) {
+      return (await getCachedUser()) ?? createOfflineGuestUser()
+    }
     return null
   }
 }
@@ -221,13 +270,20 @@ export function onAuthStateChange(
 ): () => void {
   const { data } = supabase.auth.onAuthStateChange(async (event, session) => {
     if (session?.user) {
-      callback({
+      const authUser = {
         id: session.user.id,
         email: session.user.email || '',
         user_metadata: session.user.user_metadata,
-      })
+      }
+      await cacheUser(authUser)
+      callback(authUser)
     } else {
-      callback((await isOnline()) ? null : createOfflineGuestUser())
+      if (await isOnline()) {
+        await clearCachedUser()
+        callback(null)
+        return
+      }
+      callback((await getCachedUser()) ?? createOfflineGuestUser())
     }
   })
 

@@ -45,15 +45,22 @@ export interface Lineup {
   createdAt: number
   updatedAt: number
   synced: boolean
+  items?: LineupItem[]
 }
 
 export interface LineupItem {
   id: string
   lineupId: string
-  songId: string
+  songId?: string
   userId: string
   position: number
+  artist: string
+  songTitle: string
+  key?: string
+  versionUrl?: string
+  category?: 'joyful' | 'solemn' | 'victory' | 'any'
   createdAt: number
+  updatedAt: number
   synced: boolean
 }
 
@@ -96,6 +103,24 @@ export interface VersionDropper {
   userId: string
   youtubeUrl: string
   description?: string
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
+export interface CalendarAssignment {
+  role: string
+  person: string
+  note?: string
+}
+
+export interface CalendarEvent {
+  id: string
+  eventDate: string
+  title: string
+  assignments: CalendarAssignment[]
+  notes?: string
+  userId: string
   createdAt: number
   updatedAt: number
   synced: boolean

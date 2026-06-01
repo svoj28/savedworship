@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar'
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
-import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Linking from 'expo-linking'
 import {
   ActivityIndicator,
@@ -26,7 +26,6 @@ import { onAuthStateChange, getCurrentUser, AuthUser, OFFLINE_GUEST_USER_ID } fr
 // Sync
 import { stampUserIdOnUnsyncedRows, removeOrphanedUnsyncedRows, subscribeToChanges, fullSync } from './lib/sync'
 import { queueDb } from './db/index'
-import { pingSupabaseOncePerDay } from './lib/supabaseKeepAlive'
 import { startNetworkSync, stopNetworkSync } from './lib/networkSync'
 
 // Notifications
@@ -43,10 +42,12 @@ import NoteDetailScreen from './screens/NoteDetailScreen'
 import MetronomeScreen from './screens/MetronomeScreen'
 import ManualTransposeScreen from './screens/ManualTransposeScreen'
 import PersonalNotesScreen from './screens/PersonalNotesScreen'
+import LineupScreen from './screens/LineupScreen'
 import ManagementScreen from './screens/ManagementScreen'
 import ConversationScreen from './screens/ConversationScreen'
 import EditAccountScreen from './screens/EditAccountScreen'
 import { useRole } from '../SavedWorshipMusicTool/lib/useRole'
+import CalendarScreen from './screens/CalendarScreen'
 import AudioToolsScreen from './screens/AudioToolsScreen'
 import { StatusBar as RNStatusBar } from 'react-native'
 import { loadNotificationsFromSupabase } from './lib/notifications'
@@ -254,7 +255,7 @@ function PersonalNotesStack() {
       <Stack.Screen
         name="NoteDetail"
         component={NoteDetailScreen}
-        options={{ title: 'Note', headerLeft: () => null }}
+        options={{ title: 'Note', headerLeft: () => null, headerShown: false}}
       />
     </Stack.Navigator>
   )
@@ -283,11 +284,14 @@ function makeHeaderOptions(colors: AppColors) {
 
 function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (v: boolean) => void }) {
   const { colors } = useAppTheme()
+  const insets = useSafeAreaInsets()
+  const androidBottomInset = Platform.OS === 'android' ? insets.bottom : 0
 
   const tabIcon = (route: any, focused: boolean, color: string, size: number) => {
     const icons: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Ionicons.glyphMap]> = {
       ChordListsTab:    ['musical-notes',  'musical-notes-outline'],
       PersonalNotesTab: ['shield',          'shield-outline'],
+      LineupsTab:       ['list',            'list-outline'],
       ManagementTab:    ['settings',        'settings-outline'],
       ConversationTab:  ['chatbubbles',     'chatbubbles-outline'],
     }
@@ -324,7 +328,7 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (v: boolean) => vo
           borderTopWidth: StyleSheet.hairlineWidth,
           elevation: 0,
           shadowOpacity: 0,
-          height: Platform.OS === 'ios' ? 84 : 60,
+          height: (Platform.OS === 'ios' ? 84 : 60) + androidBottomInset,
           paddingBottom: Platform.OS === 'ios' ? 28 : 10,
           paddingTop: 8,
         },
@@ -338,6 +342,7 @@ function TabsScreen({ setDrawerVisible }: { setDrawerVisible: (v: boolean) => vo
     >
       <Tab.Screen name="ChordListsTab"    component={ChordListsStack}   options={{ title: 'Chords' }} />
       <Tab.Screen name="PersonalNotesTab" component={PersonalNotesStack} options={{ title: 'Notes' }} />
+      <Tab.Screen name="LineupsTab"       component={LineupScreen}      options={{ title: 'Lineups' }} />
       <Tab.Screen name="ManagementTab"    component={ManagementScreen}   options={{ title: 'Manage' }} />
       <Tab.Screen name="ConversationTab"  component={ConversationScreen} options={{ title: 'Chat' }} />
     </Tab.Navigator>
@@ -375,6 +380,11 @@ function AppTabs({
           name="AudioTools"
           component={AudioToolsScreen}
           options={{ title: 'Audio Tools', headerLeft: () => null, ...makeHeaderOptions(colors) }}
+        />
+        <Stack.Screen
+          name="Calendar"
+          component={CalendarScreen}
+          options={{ title: 'Team Calendar', headerLeft: () => null, ...makeHeaderOptions(colors) }}
         />
         <Stack.Screen
           name="EditAccount"
@@ -567,7 +577,6 @@ function AppContent() {
         const online = await isOnline()
         if (online) {
           fullSync(user.id).catch(err => console.error('Initial sync failed:', err))
-          await pingSupabaseOncePerDay(user.id)
           await loadNotificationsFromSupabase(user.id)
         }
 

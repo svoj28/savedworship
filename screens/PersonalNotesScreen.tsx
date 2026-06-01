@@ -10,9 +10,12 @@ import {
   Alert,
   TextInput,
   FlatList,
-Modal,
+  Modal,
   StatusBar,
   RefreshControl,
+  Animated,
+  PanResponder,
+  Dimensions,
 } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import { ChordList, Artist } from '../db/models'
@@ -43,6 +46,49 @@ const [searchFocused, setSearchFocused] = useState(false)
   const [artists, setArtists] = useState<Artist[]>([])
   const [uploading, setUploading] = useState<string | null>(null) // track by id
   const hasLoadedOnceRef = React.useRef(false)
+  const SCREEN_HEIGHT = Dimensions.get('window').height
+
+  const pan = React.useRef(new Animated.Value(0)).current
+
+  const panResponder = React.useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, gestureState) => {
+        return gestureState.dy > 5 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx)
+      },
+      onMoveShouldSetPanResponderCapture: (_evt, gestureState) => {
+        return gestureState.dy > 5 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx)
+      },
+      onPanResponderGrant: () => {
+        pan.setValue(0)
+      },
+      onPanResponderMove: (_evt, gestureState) => {
+        if (gestureState.dy > 0) {
+          pan.setValue(gestureState.dy)
+        }
+      },
+      onPanResponderRelease: (_evt, gestureState) => {
+        if (gestureState.dy > 80) {
+          Animated.timing(pan, {
+            toValue: SCREEN_HEIGHT,
+            duration: 180,
+            useNativeDriver: false,
+          }).start(() => {
+            pan.setValue(0)
+            setShowCreateModal(false)
+            setNewListTitle('')
+          })
+        } else {
+          Animated.timing(pan, {
+            toValue: 0,
+            duration: 150,
+            useNativeDriver: false,
+          }).start()
+        }
+      },
+      onPanResponderTerminationRequest: () => false,
+    })
+  ).current
 
     useFocusEffect(
     React.useCallback(() => {
@@ -373,11 +419,20 @@ activeOpacity={0.82}
       </TouchableOpacity>
 
       {/* ─── CREATE MODAL ─── */}
-<Modal visible=      {showCreateModal} transparent animationType="slide">
+      <Modal
+        visible={showCreateModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowCreateModal(false)
+          setNewListTitle('')
+        }}
+      >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHead}>
+          <Animated.View style={[styles.modalSheet, { transform: [{ translateY: pan }] }]}>
+            <View style={styles.modalDragArea} {...panResponder.panHandlers}>
+              <View style={styles.modalHandle} />
+              <View style={styles.modalHead}>
               <TouchableOpacity
                                 onPress={() => {
                   setShowCreateModal(false)
@@ -390,7 +445,8 @@ activeOpacity={0.82}
               <TouchableOpacity                 onPress={handleCreateList} style={styles.modalActionBtn}              >
                 <Text style={styles.modalAction}>Create</Text>
               </TouchableOpacity>
-</View>
+              </View>
+            </View>
 
             <View style={styles.modalBody}>
               <Text style={styles.fieldLabel}>TITLE</Text>
@@ -408,7 +464,7 @@ activeOpacity={0.82}
                 A "Personal" artist will be created automatically to organize your notes.
               </Text>
             </View>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
     </View>
@@ -660,6 +716,9 @@ elevation: 8,
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
     paddingBottom: 36,
+  },
+  modalDragArea: {
+    paddingTop: 8,
   },
   modalHandle: {
     width: 36,

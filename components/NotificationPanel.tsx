@@ -148,7 +148,7 @@ export default function NotificationPanel({ visible, onClose }: Props) {
 
         <View style={styles.panel}>
           {/* Drag handle */}
-          <View style={styles.handle} />
+          {/* <View style={styles.handle} /> */}
 
           {/* Header */}
           <View style={styles.header}>
@@ -376,9 +376,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0a0a0a',
     letterSpacing: 0.1,
-  headerBtnDisabled: {
-    opacity: 0.65,
+
   },
+    headerBtnDisabled: {
+    opacity: 0.65,
   },
   unreadCountBadge: {
     backgroundColor: '#1a1a1a',

@@ -157,15 +157,15 @@ function renderSongLines(content: string, mode: ViewMode) {
     const trimmed = rawLine.trim()
 
     if (!trimmed) {
-      rendered.push(<View key={`blank-${index}`} style={{ height: 12 }} />)
+      rendered.push(<View key={`blank-${index}`} style={styles.lineWrap} />)
       continue
     }
 
     if (isSectionHeaderLine(trimmed)) {
       rendered.push(
-        <Text key={`section-${index}`} style={styles.sectionLine}>
-          {trimmed}
-        </Text>
+        <View key={`section-${index}`} style={styles.lineWrap}>
+          <Text style={styles.sectionLine}>{trimmed}</Text>
+        </View>
       )
       continue
     }
@@ -183,9 +183,9 @@ function renderSongLines(content: string, mode: ViewMode) {
 
     if (lineToRender.trim()) {
       rendered.push(
-        <Text key={`line-${index}`} style={styles.contentLine}>
-          {lineToRender}
-        </Text>
+        <View key={`line-${index}`} style={styles.lineWrap}>
+          <Text style={styles.contentLine}>{lineToRender}</Text>
+        </View>
       )
     }
   }
@@ -275,14 +275,6 @@ export default function ChordListScreen({ route, navigation }: Props) {
   useFocusEffect(
     React.useCallback(() => { void loadChordList({ silent: hasLoadedOnceRef.current }) }, [chordListId])
   )
-
-  // useEffect(() => {
-  //   const u1 = onTableChange('chord_lists',    () => loadChordList())
-  //   const u2 = onTableChange('songs',          () => loadChordList())
-  //   const u3 = onTableChange('playlists',      () => loadChordList())
-  //   const u4 = onTableChange('playlist_items', () => loadChordList())
-  //   return () => { u1(); u2(); u3(); u4() }
-  // }, [chordListId])
 
   useEffect(() => { stopAutoScroll() }, [selectedSongId, viewMode, notationMode, transposeToKey])
 
@@ -746,6 +738,8 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
   const youtubeUrl  = selectedSong?.youtubeUrl?.trim() || ''
   const youtubeId   = extractYouTubeId(youtubeUrl)
   const hasVideo    = Boolean(youtubeId)
+  const hasOptions  = canManageChords || browseItems.length > 1 || playlists.length > 0 || hasVideo || parsedSections.length > 1
+  const showMainControls = false
 
   return (
     <View style={styles.container}>
@@ -776,13 +770,15 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
         >
           <Ionicons name="copy-outline" size={16} color="#0A0A0A" />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.iconBtn}
-          onPress={() => setShowOptionsModal(true)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="ellipsis-horizontal" size={16} color="#0A0A0A" />
-        </TouchableOpacity>
+        {hasOptions && (
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => setShowOptionsModal(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="ellipsis-horizontal" size={16} color="#0A0A0A" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* ─── NAV CONTROLS ─── */}
@@ -819,33 +815,33 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
         </View>
       )}
 
-      {/* ─── SHEET / VIDEO TABS ─── */}
-      <View style={styles.songTabBar}>
-        <TouchableOpacity
-          style={[styles.songTab, activeSongTab === 'sheet' && styles.songTabActive]}
-          onPress={() => setActiveSongTab('sheet')} activeOpacity={0.75}
-        >
-          <Ionicons name="document-text-outline" size={14}
-            color={activeSongTab === 'sheet' ? '#0A0A0A' : '#ADADAD'} style={{ marginRight: 5 }} />
-          <Text style={[styles.songTabText, activeSongTab === 'sheet' && styles.songTabTextActive]}>
-            Sheet
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.songTab, activeSongTab === 'video' && styles.songTabActive, !hasVideo && styles.songTabDisabled]}
-          onPress={() => hasVideo && setActiveSongTab('video')}
-          activeOpacity={hasVideo ? 0.75 : 1}
-        >
-          <Ionicons name="logo-youtube" size={14}
-            color={activeSongTab === 'video' ? '#FF0000' : '#ADADAD'} style={{ marginRight: 5 }} />
-          <Text style={[styles.songTabText, activeSongTab === 'video' && styles.songTabTextActive, !hasVideo && styles.songTabTextDisabled]}>
-            Video{!hasVideo ? ' (none)' : ''}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      {showMainControls && (
+        <View style={styles.songTabBar}>
+          <TouchableOpacity
+            style={[styles.songTab, activeSongTab === 'sheet' && styles.songTabActive]}
+            onPress={() => setActiveSongTab('sheet')} activeOpacity={0.75}
+          >
+            <Ionicons name="document-text-outline" size={14}
+              color={activeSongTab === 'sheet' ? '#0A0A0A' : '#ADADAD'} style={{ marginRight: 5 }} />
+            <Text style={[styles.songTabText, activeSongTab === 'sheet' && styles.songTabTextActive]}>
+              Sheet
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.songTab, activeSongTab === 'video' && styles.songTabActive, !hasVideo && styles.songTabDisabled]}
+            onPress={() => hasVideo && setActiveSongTab('video')}
+            activeOpacity={hasVideo ? 0.75 : 1}
+          >
+            <Ionicons name="logo-youtube" size={14}
+              color={activeSongTab === 'video' ? '#FF0000' : '#ADADAD'} style={{ marginRight: 5 }} />
+            <Text style={[styles.songTabText, activeSongTab === 'video' && styles.songTabTextActive, !hasVideo && styles.songTabTextDisabled]}>
+              Video{!hasVideo ? ' (none)' : ''}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
-      {/* ─── VIDEO TAB ─── */}
-      {activeSongTab === 'video' && hasVideo && (
+      {showMainControls && activeSongTab === 'video' && hasVideo && (
         <View style={styles.videoContainer}>
           <YoutubePlayer height={220} videoId={youtubeId!} play={false} />
           <View style={styles.videoMeta}>
@@ -869,63 +865,71 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
       {/* ─── SHEET TAB ─── */}
       {activeSongTab === 'sheet' && (
         <>
-          {/* Controls Row */}
-          <View style={styles.controlsRow}>
-            <View style={styles.viewModePills}>
-              {(['lyrics', 'chords', 'both'] as const).map(mode => (
-                <TouchableOpacity
-                  key={mode}
-                  style={[styles.pill, viewMode === mode && styles.pillActive]}
-                  onPress={() => setViewMode(mode)} activeOpacity={0.75}
-                >
-                  <Text style={[styles.pillText, viewMode === mode && styles.pillTextActive]}>
-                    {mode === 'lyrics' ? 'Lyrics' : mode === 'chords' ? 'Chords' : 'Both'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
+          {showMainControls && (
+            <>
+              <View style={styles.controlsRow}>
+                <View style={styles.viewModePills}>
+                  {(['lyrics', 'chords', 'both'] as const).map(mode => (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[styles.pill, viewMode === mode && styles.pillActive]}
+                      onPress={() => setViewMode(mode)} activeOpacity={0.75}
+                    >
+                      <Text numberOfLines={1} style={[styles.pillText, viewMode === mode && styles.pillTextActive]}>
+                        {mode === 'lyrics' ? 'Lyrics' : mode === 'chords' ? 'Chords' : 'Both'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
 
-          <View style={styles.notationRow}>
-            <Text style={styles.notationLabel}>Notation</Text>
-            <View style={styles.notationPills}>
-              {(['chords', 'nashville'] as const).map(mode => (
+              {/* Notation pills row — full width */}
+              <View style={styles.notationRow}>
+                <Text style={styles.notationLabel}>Notation</Text>
+                <View style={styles.notationPills}>
+                  {(['chords', 'nashville'] as const).map(mode => (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[styles.pillCompact, notationMode === mode && styles.pillActive]}
+                      onPress={() => setNotationMode(mode)}
+                      activeOpacity={0.75}
+                    >
+                      <Text numberOfLines={1} style={[styles.pillText, notationMode === mode && styles.pillTextActive]}>
+                        {mode === 'chords' ? 'Chords' : 'Nashville'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Transpose chip + scroll button row — below the pills */}
+              <View style={styles.notationControlsRow}>
+                <View style={{ flex: 1 }}>
+                  {notationMode === 'chords' ? (
+                    <TouchableOpacity
+                      style={styles.transposeChip}
+                      onPress={() => setShowTransposePicker(true)} activeOpacity={0.75}
+                    >
+                      <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
+                      <Text style={styles.transposeChipText}>{selectedSong?.key || 'C'}{' → '}{transposeToKey}</Text>
+                      <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
                 <TouchableOpacity
-                  key={mode}
-                  style={[styles.pill, notationMode === mode && styles.pillActive]}
-                  onPress={() => setNotationMode(mode)}
-                  activeOpacity={0.75}
+                  style={[styles.scrollIconBtn, isAutoScrolling && styles.scrollIconBtnActive]}
+                  onPress={toggleAutoScroll}
+                  activeOpacity={0.8}
                 >
-                  <Text style={[styles.pillText, notationMode === mode && styles.pillTextActive]}>
-                    {mode === 'chords' ? 'Chords' : 'Nashville'}
-                  </Text>
+                  <Ionicons
+                    name={isAutoScrolling ? 'pause' : 'play'}
+                    size={14}
+                    color={isAutoScrolling ? '#FAFAFA' : '#0A0A0A'}
+                  />
                 </TouchableOpacity>
-              ))}
-            </View>
-            {notationMode === 'chords' ? (
-              <TouchableOpacity
-                style={styles.transposeChip}
-                onPress={() => setShowTransposePicker(true)} activeOpacity={0.75}
-              >
-                <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
-                <Text style={styles.transposeChipText}>
-                  {selectedSong?.key || 'C'}{' → '}{transposeToKey}
-                </Text>
-                <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
-              </TouchableOpacity>
-            ) : <View style={{ width: 120 }} />}
-            <TouchableOpacity
-              style={[styles.scrollIconBtn, isAutoScrolling && styles.scrollIconBtnActive]}
-              onPress={toggleAutoScroll}
-              activeOpacity={0.8}
-            >
-              <Ionicons
-                name={isAutoScrolling ? 'pause' : 'play'}
-                size={14}
-                color={isAutoScrolling ? '#FAFAFA' : '#0A0A0A'}
-              />
-            </TouchableOpacity>
-          </View>
+              </View>
+            </>
+          )}
 
           {parsedSections.length > 1 && selectedSong && (
             <View style={styles.sectionNavBar}>
@@ -1000,14 +1004,14 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
               onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
               refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             >
-              {selectedSong && (
+              {/* {selectedSong && (
                 <View style={styles.songHeader}>
                   <Text style={styles.songTitle}>{selectedSong.title}</Text>
                   <View style={styles.keyBadge}>
                     <Text style={styles.keyBadgeText}>Key of {transposeToKey}</Text>
                   </View>
                 </View>
-              )}
+              )} */}
 
               {selectedSong ? (
                 <View style={styles.songContentBlock}>
@@ -1059,8 +1063,130 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScrollBody}>
+              <View style={{ paddingVertical: 8, paddingHorizontal: 4 }}>
+                <Text style={[styles.optionSectionLabel, { marginLeft: 16 }]}>VIEW & CONTROLS</Text>
 
-              {/* Browse Mode */}
+                <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+                  <View style={styles.songTabBar}>
+                    <TouchableOpacity
+                      style={[styles.songTab, activeSongTab === 'sheet' && styles.songTabActive]}
+                      onPress={() => setActiveSongTab('sheet')} activeOpacity={0.75}
+                    >
+                      <Ionicons name="document-text-outline" size={14}
+                        color={activeSongTab === 'sheet' ? '#0A0A0A' : '#ADADAD'} style={{ marginRight: 5 }} />
+                      <Text style={[styles.songTabText, activeSongTab === 'sheet' && styles.songTabTextActive]}>Sheet</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.songTab, activeSongTab === 'video' && styles.songTabActive, !hasVideo && styles.songTabDisabled]}
+                      onPress={() => hasVideo && setActiveSongTab('video')}
+                      activeOpacity={hasVideo ? 0.75 : 1}
+                    >
+                      <Ionicons name="logo-youtube" size={14}
+                        color={activeSongTab === 'video' ? '#FF0000' : '#ADADAD'} style={{ marginRight: 5 }} />
+                      <Text style={[styles.songTabText, activeSongTab === 'video' && styles.songTabTextActive, !hasVideo && styles.songTabTextDisabled]}>Video{!hasVideo ? ' (none)' : ''}</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.controlsRow}>
+                    <View style={styles.viewModePills}>
+                      {(['lyrics', 'chords', 'both'] as const).map(mode => (
+                        <TouchableOpacity
+                          key={mode}
+                          style={[styles.pill, viewMode === mode && styles.pillActive]}
+                          onPress={() => setViewMode(mode)} activeOpacity={0.75}
+                        >
+                          <Text numberOfLines={1} style={[styles.pillText, viewMode === mode && styles.pillTextActive]}>
+                            {mode === 'lyrics' ? 'Lyrics' : mode === 'chords' ? 'Chords' : 'Both'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+
+                  {/* Notation pills row — full width */}
+                  <View style={styles.notationRow}>
+                    <Text style={styles.notationLabel}>Notation</Text>
+                      <View style={styles.notationPills}>
+                      {(['chords', 'nashville'] as const).map(mode => (
+                        <TouchableOpacity
+                          key={mode}
+                          style={[styles.pillCompact, notationMode === mode && styles.pillActive]}
+                          onPress={() => setNotationMode(mode)}
+                          activeOpacity={0.75}
+                        >
+                          <Text numberOfLines={1} style={[styles.pillText, notationMode === mode && styles.pillTextActive]}>
+                            {mode === 'chords' ? 'Chords' : 'Nashville'}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+
+                  {/* Transpose chip + scroll button row — below the pills */}
+                  <View style={styles.notationControlsRow}>
+                    <View style={{ flex: 1 }}>
+                      {notationMode === 'chords' ? (
+                        <TouchableOpacity
+                          style={styles.transposeChip}
+                          onPress={() => setShowTransposePicker(true)} activeOpacity={0.75}
+                        >
+                          <Ionicons name="musical-notes" size={12} color="#555" style={{ marginRight: 5 }} />
+                          <Text style={styles.transposeChipText}>{selectedSong?.key || 'C'}{' → '}{transposeToKey}</Text>
+                          <Ionicons name="chevron-down" size={11} color="#ADADAD" style={{ marginLeft: 3 }} />
+                        </TouchableOpacity>
+                      ) : null}
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.scrollIconBtn, isAutoScrolling && styles.scrollIconBtnActive]}
+                      onPress={toggleAutoScroll}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name={isAutoScrolling ? 'pause' : 'play'} size={14} color={isAutoScrolling ? '#FAFAFA' : '#0A0A0A'} />
+                    </TouchableOpacity>
+                  </View>
+
+                  {songs.length > 1 && browseMode === 'single' && (
+                    <View style={styles.songPickerWrap}>
+                      <Ionicons name="musical-note" size={13} color="#B0B0B0" style={{ marginLeft: 14 }} />
+                      <Picker
+                        style={styles.songPicker}
+                        selectedValue={selectedSongId}
+                        onValueChange={value => {
+                          setSelectedSongId(value)
+                          const song = songs.find(s => s.id === value)
+                          if (song && !hasNashville(song.content || '')) {
+                            setTransposeToKey(song.key || 'C')
+                          }
+                        }}
+                        dropdownIconColor="#ADADAD"
+                      >
+                        {songs.map(song => (
+                          <Picker.Item key={song.id} label={song.title} value={song.id} />
+                        ))}
+                      </Picker>
+                    </View>
+                  )}
+
+                  {activeSongTab === 'video' && hasVideo && (
+                    <View style={{ paddingTop: 10 }}>
+                      <TouchableOpacity
+                        style={styles.openYoutubeBtn}
+                        onPress={() => {
+                          const url = /^https?:\/\//i.test(youtubeUrl) ? youtubeUrl : `https://${youtubeUrl}`
+                          Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open YouTube'))
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="logo-youtube" size={14} color="#FF0000" />
+                        <Text style={styles.openYoutubeBtnText}>Open in YouTube</Text>
+                        <Ionicons name="open-outline" size={13} color="#888" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              {/* Browse Mode
               <View style={styles.optionSection}>
                 <Text style={styles.optionSectionLabel}>BROWSE MODE</Text>
                 <View style={styles.browseModeBar}>
@@ -1083,7 +1209,7 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
                     </TouchableOpacity>
                   ))}
                 </View>
-              </View>
+              </View> */}
 
               {/* Auto-scroll speed */}
               <View style={styles.optionSection}>
@@ -1267,11 +1393,18 @@ const styles = StyleSheet.create({
   openYoutubeBtnText: { fontSize: 13, fontWeight: '600', color: '#CCC' },
 
   controlsRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EBEBEB', gap: 8 },
+  // Pills fill the full width of their container (viewModePills or notationPills)
   viewModePills: { flexDirection: 'row', flex: 1, backgroundColor: '#F2F2F2', borderRadius: 10, padding: 3, gap: 2 },
-  notationRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingBottom: 10, gap: 8, borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
+  notationRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, gap: 10 },
   notationLabel: { fontSize: 11, fontWeight: '800', color: '#ADADAD', letterSpacing: 0.9, textTransform: 'uppercase' },
-  notationPills: { flexDirection: 'row', flex: 1, backgroundColor: '#F2F2F2', borderRadius: 10, padding: 3, gap: 2 },
-  pill: { flex: 1, paddingVertical: 7, alignItems: 'center', borderRadius: 8 },
+  notationPills: { flexDirection: 'row', flex: 1, backgroundColor: '#F2F2F2', borderRadius: 10, padding: 3, gap: 2, alignItems: 'center' },
+  // pill: flex: 1 so each pill expands equally to fill its parent (viewModePills or notationPills)
+  pill: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8, paddingHorizontal: 8, justifyContent: 'center' },
+  pillCompact: { paddingVertical: 8, alignItems: 'center', borderRadius: 8, paddingHorizontal: 12, justifyContent: 'center', minWidth: 86 },
+  notationRowContainer: { position: 'relative', paddingTop: 6 },
+  notationRowInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  transposeChipWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center', top: 18 },
+  notationControlsRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', paddingHorizontal: 14, paddingBottom: 10, gap: 8, borderBottomWidth: 1, borderBottomColor: '#EBEBEB' },
   pillActive: { backgroundColor: '#FFF', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3, elevation: 2 },
   pillText: { fontSize: 12, fontWeight: '600', color: '#ADADAD' },
   pillTextActive: { color: '#0A0A0A' },
@@ -1294,8 +1427,9 @@ const styles = StyleSheet.create({
   keyBadgeText: { fontSize: 11, fontWeight: '700', color: '#FAFAFA', letterSpacing: 0.5 },
   content: { fontSize: 15, lineHeight: 26, color: '#2A2A2A', fontFamily: 'Courier New', letterSpacing: 0.1 },
   songContentBlock: { paddingVertical: 4 },
-  contentLine: { fontSize: 15, lineHeight: 26, color: '#2A2A2A', fontFamily: 'Courier New', letterSpacing: 0.1 },
-  sectionLine: { fontSize: 15, lineHeight: 26, color: '#0A0A0A', fontWeight: '800', fontFamily: 'Courier New', letterSpacing: 0.1 },
+  lineWrap: { marginBottom: 8 },
+  contentLine: { fontSize: 16, lineHeight: 32, color: '#232323', fontFamily: 'Courier New', letterSpacing: 0.2 },
+  sectionLine: { fontSize: 16, lineHeight: 34, color: '#0A0A0A', fontWeight: '900', fontFamily: 'Courier New', letterSpacing: 0.3 },
   sectionNavBar: { backgroundColor: '#FFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB', paddingVertical: 10 },
   sectionNavScrollContent: { paddingHorizontal: 14, gap: 7, flexDirection: 'row', alignItems: 'center' },
   sectionNavPill: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F2F2F2', borderWidth: 1, borderColor: '#EBEBEB', gap: 6 },

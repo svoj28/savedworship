@@ -1,3 +1,7 @@
+alter table public.metronome_presets
+  add column if not exists use_time_signatures boolean not null default false,
+  add column if not exists time_signature_label text;
+
 alter table public.metronome_presets enable row level security;
 
 drop policy if exists "metronome_presets_select" on public.metronome_presets;

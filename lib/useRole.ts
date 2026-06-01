@@ -74,6 +74,7 @@ export function useRole() {
     // 'manager' can perform full CRUD like superadmin
     canManageChords: role === 'superadmin' || role === 'manager',
     canManageContent: role === 'superadmin' || role === 'admin' || role === 'manager',
+    canManageCalendar: role === 'superadmin' || role === 'manager',
     canMessage: role !== 'guest',
     canEditProfile: role !== 'guest',
     canAddContacts: role !== 'guest',

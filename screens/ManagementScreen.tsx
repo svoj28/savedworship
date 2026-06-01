@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -15,27 +15,24 @@ import {
 } from 'react-native'
 import * as DocumentPicker from 'expo-document-picker'
 import Ionicons from '@expo/vector-icons/Ionicons'
+import { WebView } from 'react-native-webview'
 import { getCurrentUser } from '../lib/auth'
 import {
-  getAllLineups,
   getAllFileDroppers,
   getAllAnnouncements,
   getAllVersionDroppers,
-  createLineup,
   createFileDropper,
   createImportantAnnouncement,
   createVersionDropper,
-  updateLineup,
   updateFileDropper,
   updateAnnouncement,
   updateVersionDropper,
-  deleteLineup,
   deleteFileDropper,
   deleteAnnouncement,
   deleteVersionDropper,
 } from '../db/queries'
 import YoutubePlayer from 'react-native-youtube-iframe'
-import { Lineup, FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
+import { FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
 import { useRole } from '../lib/useRole'
 import { notifyManagementChangeToAllUsers } from '../lib/notifications'
 import { onTableChange } from '../lib/sync'
@@ -44,7 +41,7 @@ import { useNotifications } from '../lib/NotificationContext'
 import { usePullToRefresh } from '../lib/usePullToRefresh'
 
 
-type Section = 'lineup' | 'conversation' | 'files' | 'announcements' | 'versions' | null
+type Section = 'conversation' | 'files' | 'announcements' | 'versions' | null
 
 interface FormData {
   title?: string
@@ -64,15 +61,13 @@ interface SectionConfig {
 }
 
 const SECTIONS: SectionConfig[] = [
-  { key: 'lineup',        label: 'Lineup',         icon: 'list-outline',        countKey: 'lineups',       countLabel: 'items'   },
   { key: 'conversation',  label: 'Important Messages',   icon: 'chatbubbles-outline', countKey: 'announcements', countLabel: 'messages'   },
   { key: 'files',         label: 'Files',          icon: 'folder-outline',      countKey: 'files',         countLabel: 'files'   },
   { key: 'announcements', label: 'Announcements',  icon: 'megaphone-outline',   countKey: 'announcements', countLabel: 'items'   },
-  { key: 'versions',      label: 'Versions',       icon: 'play-circle-outline', countKey: 'versions',      countLabel: 'videos'  },
+  // { key: 'versions',      label: 'Versions',       icon: 'play-circle-outline', countKey: 'versions',      countLabel: 'videos'  },
 ]
 
 const SECTION_TITLES: Record<Exclude<Section, null>, string> = {
-  lineup:        'Lineup Posted',
   conversation:  'Important Messages',
   files:         'File Dropper',
   announcements: 'Announcements',
@@ -92,6 +87,251 @@ function extractYouTubeId(url: string): string | null {
   return null
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function hasHtml(value: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(value)
+}
+
+function plainTextToHtml(value: string): string {
+  const escaped = escapeHtml(value.trim())
+  if (!escaped) return ''
+  return `<p>${escaped.replace(/\n/g, '<br/>')}</p>`
+}
+
+function normalizeRichTextValue(value?: string): string {
+  const text = value ?? ''
+  if (!text.trim()) return ''
+  return hasHtml(text) ? text : plainTextToHtml(text)
+}
+
+function stripHtml(value?: string): string {
+  if (!value) return ''
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function buildRichTextDocument(initialHtml: string, placeholder: string, editable: boolean): string {
+  const safeInitialHtml = JSON.stringify(initialHtml || '')
+  const safePlaceholder = escapeHtml(placeholder)
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <style>
+    :root { color-scheme: light; }
+    html, body { margin: 0; padding: 0; background: transparent; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #0A0A0A;
+      font-size: 16px;
+      line-height: 1.5;
+      -webkit-text-size-adjust: 100%;
+      padding: 0;
+    }
+    #editor {
+      min-height: 100vh;
+      outline: none;
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 14px 14px 20px;
+      box-sizing: border-box;
+    }
+    #editor:empty:before {
+      content: attr(data-placeholder);
+      color: #C4C4C4;
+    }
+    b, strong { font-weight: 800; }
+    i, em { font-style: italic; }
+    u { text-decoration: underline; }
+    p { margin: 0 0 10px; }
+    p:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div id="editor" ${editable ? 'contenteditable="true"' : 'contenteditable="false"'} data-placeholder="${safePlaceholder}"></div>
+  <script>
+    (function() {
+      var editor = document.getElementById('editor');
+      var savedRange = null;
+
+      function post(type, payload) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(Object.assign({ type: type }, payload || {})));
+      }
+
+      function postChange() {
+        post('change', { html: editor.innerHTML });
+      }
+
+      function restoreSelection() {
+        var selection = window.getSelection();
+        if (!savedRange || !selection) return;
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+      }
+
+      function saveSelection() {
+        var selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return;
+        var range = selection.getRangeAt(0);
+        if (!editor.contains(range.commonAncestorContainer)) return;
+        savedRange = range.cloneRange();
+      }
+
+      editor.addEventListener('input', postChange);
+      editor.addEventListener('keyup', saveSelection);
+      editor.addEventListener('mouseup', saveSelection);
+      document.addEventListener('selectionchange', saveSelection);
+
+      window.__setHtml = function(html) {
+        editor.innerHTML = html || '';
+        if (!editor.innerHTML.trim()) {
+          editor.innerHTML = '<div><br /></div>';
+        }
+      };
+
+      window.__applyCommand = function(command) {
+        editor.focus();
+        restoreSelection();
+        document.execCommand(command, false, null);
+        savedRange = null;
+        postChange();
+      };
+
+      window.__focusEditor = function() {
+        editor.focus();
+      };
+
+      window.__setHtml(${safeInitialHtml});
+      post('ready');
+    })();
+  </script>
+</body>
+</html>`
+}
+
+function RichTextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  height = 220,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+  height?: number
+}) {
+  const webViewRef = useRef<any>(null)
+  const [ready, setReady] = useState(false)
+  const initialHtmlRef = useRef<string>(normalizeRichTextValue(value))
+  const normalizedValue = normalizeRichTextValue(value)
+
+  const applyFormat = (command: 'bold' | 'italic' | 'underline') => {
+    webViewRef.current?.injectJavaScript(`window.__applyCommand(${JSON.stringify(command)}); true;`)
+  }
+
+  return (
+    <View style={styles.richField}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={[styles.richEditorWrap, { height }]}> 
+        <WebView
+          ref={webViewRef}
+          originWhitelist={['*']}
+          source={{ html: buildRichTextDocument(initialHtmlRef.current, placeholder, true) }}
+          style={styles.richEditorWebView}
+          onMessage={(event) => {
+            try {
+              const message = JSON.parse(event.nativeEvent.data)
+              if (message.type === 'ready') {
+                setReady(true)
+                return
+              }
+              if (message.type === 'change' && typeof message.html === 'string') {
+                onChange(message.html)
+              }
+            } catch {
+              // Ignore malformed bridge messages.
+            }
+          }}
+          javaScriptEnabled
+          domStorageEnabled
+          scrollEnabled
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
+      <View style={styles.richToolbar}>
+        <TouchableOpacity
+          style={styles.richToolBtn}
+          onPressIn={() => webViewRef.current?.injectJavaScript('window.__focusEditor(); true;')}
+          onPress={() => applyFormat('bold')}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.richToolBtnText}>B</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.richToolBtn}
+          onPressIn={() => webViewRef.current?.injectJavaScript('window.__focusEditor(); true;')}
+          onPress={() => applyFormat('italic')}
+          activeOpacity={0.75}
+        >
+          <Text style={[styles.richToolBtnText, styles.richToolItalic]}>I</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.richToolBtn}
+          onPressIn={() => webViewRef.current?.injectJavaScript('window.__focusEditor(); true;')}
+          onPress={() => applyFormat('underline')}
+          activeOpacity={0.75}
+        >
+          <Text style={[styles.richToolBtnText, styles.richToolUnderline]}>U</Text>
+        </TouchableOpacity>
+        <Text style={styles.richToolbarHint}>Highlight text, then tap a style</Text>
+      </View>
+    </View>
+  )
+}
+
+function RichTextBlock({ label, value }: { label: string; value: string }) {
+  if (!value) return null
+
+  const previewSource = { html: buildRichTextDocument(value, '', false) }
+
+  return (
+    <View style={[styles.detailBlock, { flex: 1 }]}>
+      <Text style={styles.detailLabel}>{label}</Text>
+      <View style={styles.detailRichPreviewWrap}>
+        <WebView
+          originWhitelist={['*']}
+          source={previewSource}
+          style={styles.detailRichPreview}
+          scrollEnabled
+          showsVerticalScrollIndicator={false}
+          javaScriptEnabled
+          domStorageEnabled
+        />
+      </View>
+    </View>
+  )
+}
+
 export default function ManagementScreen({ route }: any) {
   const [activeSection, setActiveSection] = useState<Section>(null)
   const [userId, setUserId] = useState<string>('')
@@ -102,7 +342,6 @@ export default function ManagementScreen({ route }: any) {
   const { notifications } = useNotifications()
   const lastManagementNotificationIdRef = React.useRef<string | null>(null)
 
-    const [lineups, setLineups] = useState<Lineup[]>([])
   const [files, setFiles] = useState<FileDropper[]>([])
   const [announcements, setAnnouncements] = useState<ImportantAnnouncement[]>([])
   const [versions, setVersions] = useState<VersionDropper[]>([])
@@ -114,17 +353,6 @@ export default function ManagementScreen({ route }: any) {
   const [selectedItem, setSelectedItem] = useState<any | null>(null)
 
   const normalizeManagementRow = (tableName: string, row: any) => {
-    if (tableName === 'lineups') {
-      return {
-        id: row.id,
-        title: row.title,
-        description: row.description || '',
-        userId: row.user_id,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        synced: Boolean(row._synced),
-      }
-    }
     if (tableName === 'file_droppers') {
       return {
         id: row.id,
@@ -177,7 +405,6 @@ export default function ManagementScreen({ route }: any) {
       })
     }
 
-    if (tableName === 'lineups') applyUpsert(setLineups)
     if (tableName === 'file_droppers') applyUpsert(setFiles)
     if (tableName === 'important_announcements') applyUpsert(setAnnouncements)
     if (tableName === 'version_droppers') applyUpsert(setVersions)
@@ -188,13 +415,11 @@ export default function ManagementScreen({ route }: any) {
   const refreshData = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!options.silent) setLoading(true)
     try {
-      const [lineupData, fileData, announcementData, versionData] = await Promise.all([
-        getAllLineups(),
+      const [fileData, announcementData, versionData] = await Promise.all([
         getAllFileDroppers(),
         getAllAnnouncements(),
         getAllVersionDroppers(),
       ])
-      setLineups(lineupData)
       setFiles(fileData)
       setAnnouncements(announcementData)
       setVersions(versionData)
@@ -241,17 +466,9 @@ export default function ManagementScreen({ route }: any) {
   }, [route?.params?.initialSection])
 
   useEffect(() => {
-    const unsubLineups = onTableChange('lineups', () => void refreshData({ silent: true }))
     const unsubFiles = onTableChange('file_droppers', () => void refreshData({ silent: true }))
     const unsubAnnouncements = onTableChange('important_announcements', () => void refreshData({ silent: true }))
     const unsubVersions = onTableChange('version_droppers', () => void refreshData({ silent: true }))
-
-    const lineupsChannel = supabase
-      .channel('management-lineups')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lineups' }, payload => {
-        applyRealtimeManagementChange('lineups', payload)
-      })
-      .subscribe()
 
     const filesChannel = supabase
       .channel('management-files')
@@ -275,11 +492,9 @@ export default function ManagementScreen({ route }: any) {
       .subscribe()
 
     return () => {
-      unsubLineups()
       unsubFiles()
       unsubAnnouncements()
       unsubVersions()
-      supabase.removeChannel(lineupsChannel)
       supabase.removeChannel(filesChannel)
       supabase.removeChannel(announcementsChannel)
       supabase.removeChannel(versionsChannel)
@@ -289,7 +504,6 @@ export default function ManagementScreen({ route }: any) {
 const getCount = (key?: string): number => {
     if (!key) return 0
     const map: Record<string, number> = {
-      lineups: lineups.length,
       files: files.length,
       announcements: announcements.length,
       versions: versions.length,
@@ -298,7 +512,6 @@ const getCount = (key?: string): number => {
   }
 
   const getItems = (): any[] => {
-    if (activeSection === 'lineup') return lineups
     if (activeSection === 'files') return files
     if (activeSection === 'conversation') return announcements
     if (activeSection === 'announcements') return announcements
@@ -361,10 +574,6 @@ const getCount = (key?: string): number => {
   }
 
   const upsertLocalItem = (item: any) => {
-    if (activeSection === 'lineup') {
-      setLineups(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
-      return
-    }
     if (activeSection === 'files') {
       setFiles(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
       return
@@ -379,10 +588,6 @@ const getCount = (key?: string): number => {
   }
 
   const removeLocalItem = (itemId: string) => {
-    if (activeSection === 'lineup') {
-      setLineups(prev => prev.filter(item => item.id !== itemId))
-      return
-    }
     if (activeSection === 'files') {
       setFiles(prev => prev.filter(item => item.id !== itemId))
       return
@@ -406,34 +611,7 @@ const getCount = (key?: string): number => {
     setSaving(true)
     try {
       const now = Date.now()
-      if (activeSection === 'lineup') {
-        if (editingId) {
-          await updateLineup(editingId, {
-            title: formData.title,
-            description: formData.description,
-            updatedAt: now,
-          })
-          upsertLocalItem({
-            id: editingId,
-            title: formData.title,
-            description: formData.description,
-            userId,
-            updatedAt: now,
-          })
-          void notifyManagementChangeToAllUsers(userId, 'updated', 'Lineup', formData.title)
-        } else {
-          const created = await createLineup({
-            title: formData.title,
-            description: formData.description,
-            userId,
-            createdAt: now,
-            updatedAt: now,
-            synced: false,
-          })
-          upsertLocalItem(created)
-          void notifyManagementChangeToAllUsers(userId, 'created', 'Lineup', formData.title)
-        }
-      } else if (activeSection === 'files') {
+      if (activeSection === 'files') {
         if (!formData.fileUrl?.trim()) {           Alert.alert('Error', 'Please enter a file URL');           return         }
         if (editingId) {
           await updateFileDropper(editingId, {
@@ -465,7 +643,7 @@ const getCount = (key?: string): number => {
           void notifyManagementChangeToAllUsers(userId, 'created', 'File', formData.title)
         }
       } else if (activeSection === 'conversation' || activeSection === 'announcements') {
-        if (!formData.content?.trim()) {           Alert.alert('Error', 'Please enter announcement content');           return         }
+        if (!stripHtml(formData.content || '').trim()) {           Alert.alert('Error', 'Please enter announcement content');           return         }
         if (editingId) {
           await updateAnnouncement(editingId, {
             title: formData.title,
@@ -545,8 +723,7 @@ const getCount = (key?: string): number => {
         onPress: async () => {
           setDeletingId(item.id)
           try {
-            if (activeSection === 'lineup') await deleteLineup(item.id)
-            else if (activeSection === 'files') await deleteFileDropper(item.id)
+            if (activeSection === 'files') await deleteFileDropper(item.id)
             else if (activeSection === 'conversation' || activeSection === 'announcements') await deleteAnnouncement(item.id)
             else if (activeSection === 'versions') await deleteVersionDropper(item.id)
             removeLocalItem(item.id)
@@ -610,12 +787,196 @@ const getCount = (key?: string): number => {
   }
 
   // ─── SECTION DETAIL ───
+  // ─── SECTION DETAIL ───
   const items = getItems()
   const sectionTitle = SECTION_TITLES[activeSection]
   const sectionIcon = SECTIONS.find(s => s.key === activeSection)?.icon ?? 'cube-outline'
 
-      return (
-<View style={styles.container}>
+  // ─── ITEM DETAIL VIEW (inline, full screen) ───
+  if (selectedItem) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="#FFF" />
+
+        <View style={styles.sectionHeader}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => setSelectedItem(null)} activeOpacity={0.7}>
+            <Ionicons name="arrow-back" size={16} color="#0A0A0A" />
+          </TouchableOpacity>
+          <View style={styles.sectionHeaderMeta}>
+            <Text style={styles.sectionHeaderEyebrow}>{sectionTitle.toUpperCase()}</Text>
+            <Text style={styles.sectionHeaderTitle} numberOfLines={1}>{selectedItem.title}</Text>
+          </View>
+          {canManageContent ? (
+            <TouchableOpacity
+              style={styles.addBtn}
+              onPress={() => { const item = selectedItem; setSelectedItem(null); handleEdit(item) }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="pencil-outline" size={16} color="#FAFAFA" />
+            </TouchableOpacity>
+          ) : <View style={{ width: 34 }} />}
+        </View>
+
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingTop: 22, paddingBottom: 60, gap: 18 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {selectedItem.description
+            ? <RichTextBlock label="DESCRIPTION" value={selectedItem.description} />
+            : null}
+
+          {selectedItem.content
+            ? <RichTextBlock label="CONTENT" value={selectedItem.content} />
+            : null}
+
+          {selectedItem.youtubeUrl ? (
+            <View style={styles.detailBlock}>
+              <Text style={styles.detailLabel}>VIDEO</Text>
+              {(() => {
+                const videoId = extractYouTubeId(selectedItem.youtubeUrl)
+                return videoId ? (
+                  <View style={styles.detailYoutubeWrap}>
+                    <YoutubePlayer height={200} videoId={videoId} play={false} />
+                    <TouchableOpacity
+                      style={styles.detailOpenYoutubeBtn}
+                      onPress={() => {
+                        const url = /^https?:\/\//i.test(selectedItem.youtubeUrl)
+                          ? selectedItem.youtubeUrl
+                          : `https://${selectedItem.youtubeUrl}`
+                        Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open YouTube'))
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="logo-youtube" size={14} color="#FF0000" />
+                      <Text style={styles.detailOpenYoutubeBtnText}>Open in YouTube</Text>
+                      <Ionicons name="open-outline" size={13} color="#888" />
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <Text style={styles.detailMonoText}>{selectedItem.youtubeUrl}</Text>
+                )
+              })()}
+            </View>
+          ) : null}
+
+          {selectedItem.fileUrl ? (
+            <View style={styles.detailBlock}>
+              <Text style={styles.detailLabel}>FILE URL</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  const url = /^https?:\/\//i.test(selectedItem.fileUrl)
+                    ? selectedItem.fileUrl
+                    : `https://${selectedItem.fileUrl}`
+                  Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open file'))
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.detailMonoText, { color: '#0A0A0A', textDecorationLine: 'underline' }]}>
+                  {selectedItem.fileUrl}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {selectedItem.fileName ? (
+            <View style={styles.detailBlock}>
+              <Text style={styles.detailLabel}>FILE NAME</Text>
+              <Text style={styles.detailText}>{selectedItem.fileName}</Text>
+            </View>
+          ) : null}
+
+          {canManageContent && (
+            <View style={[styles.detailActions, { marginTop: 8 }]}>
+              <TouchableOpacity
+                style={[styles.detailActionBtn, styles.detailActionBtnSecondary]}
+                onPress={() => { const item = selectedItem; setSelectedItem(null); handleEdit(item) }}
+              >
+                <Ionicons name="pencil-outline" size={16} color="#0A0A0A" />
+                <Text style={styles.detailActionBtnText}>Edit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.detailActionBtn, styles.detailActionBtnDestructive]}
+                onPress={() => { const item = selectedItem; setSelectedItem(null); handleDelete(item) }}
+              >
+                <Ionicons name="trash-outline" size={16} color="#FFF" />
+                <Text style={styles.detailActionBtnTextDestructive}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </ScrollView>
+
+        <Modal visible={showForm} transparent animationType="slide" onRequestClose={() => setShowForm(false)}>
+          <View style={styles.formOverlay}>
+            <View style={styles.formSheet}>
+              <View style={styles.formHandle} />
+              <View style={styles.formHead}>
+                <TouchableOpacity onPress={() => setShowForm(false)}>
+                  <Text style={styles.formCancel}>Cancel</Text>
+                </TouchableOpacity>
+                <Text style={styles.formTitle}>{editingId ? 'Edit Item' : `Add ${sectionTitle}`}</Text>
+                <TouchableOpacity onPress={handleSaveConfirm} style={[styles.formSaveBtn, (saving || !!deletingId) && styles.formSaveBtnDisabled]} disabled={saving || !!deletingId}>
+                  {saving ? <ActivityIndicator size="small" color="#FAFAFA" /> : <Text style={styles.formSave}>Save</Text>}
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.formBody} contentContainerStyle={styles.formBodyContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always" keyboardDismissMode="none">
+                <Text style={styles.fieldLabel}>TITLE</Text>
+                <TextInput style={styles.textInput} placeholder="Enter title…" placeholderTextColor="#C4C4C4" value={formData.title || ''} onChangeText={(text) => setFormData({ ...formData, title: text })} />
+                {(activeSection === 'conversation' || activeSection === 'announcements') && (
+                  <RichTextField label="CONTENT" placeholder="Write your announcement…" value={formData.content || ''} onChange={(text) => setFormData({ ...formData, content: text })} height={260} />
+                )}
+                {activeSection === 'files' && (
+                  <>
+                    <Text style={[styles.fieldLabel, { marginTop: 20 }]}>FILE</Text>
+                    <TouchableOpacity style={styles.filePickerBtn} onPress={handlePickFile} disabled={pickingFile} activeOpacity={0.8}>
+                      {pickingFile ? <ActivityIndicator size="small" color="#FAFAFA" /> : <Ionicons name="folder-open-outline" size={16} color="#FAFAFA" />}
+                      <Text style={styles.filePickerBtnText}>{pickingFile ? 'Picking file…' : 'Pick from Device'}</Text>
+                    </TouchableOpacity>
+                    {formData.fileName ? (
+                      <View style={styles.selectedFile}>
+                        <Ionicons name="document-outline" size={16} color="#555" />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.selectedFileName}>{formData.fileName}</Text>
+                          {formData.fileUrl && <Text style={styles.selectedFileUrl} numberOfLines={1}>{formData.fileUrl}</Text>}
+                        </View>
+                        <TouchableOpacity onPress={() => setFormData({ ...formData, fileUrl: '', fileName: '' })} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                          <Ionicons name="close-circle" size={18} color="#C0C0C0" />
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                    <Text style={styles.orDivider}>— or enter URL manually —</Text>
+                    <TextInput style={styles.textInput} placeholder="https://…" placeholderTextColor="#C4C4C4" value={formData.fileUrl || ''} onChangeText={(text) => setFormData({ ...formData, fileUrl: text })} autoCapitalize="none" keyboardType="url" />
+                  </>
+                )}
+                {activeSection === 'versions' && (
+                  <>
+                    <Text style={[styles.fieldLabel, { marginTop: 20 }]}>YOUTUBE URL</Text>
+                    <TextInput style={styles.textInput} placeholder="https://youtube.com/…" placeholderTextColor="#C4C4C4" value={formData.youtubeUrl || ''} onChangeText={(text) => setFormData({ ...formData, youtubeUrl: text })} autoCapitalize="none" keyboardType="url" />
+                  </>
+                )}
+                {(activeSection === 'files' || activeSection === 'versions') && (
+                  <RichTextField label="DESCRIPTION" placeholder="Optional description…" value={formData.description || ''} onChange={(text) => setFormData({ ...formData, description: text })} height={180} />
+                )}
+                <View style={{ height: 20 }} />
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {(saving || !!deletingId) && (
+          <View style={styles.busyOverlay} pointerEvents="auto">
+            <View style={styles.busyCard}>
+              <ActivityIndicator size="large" color="#0A0A0A" />
+            </View>
+          </View>
+        )}
+      </View>
+    )
+  }
+
+  // ─── SECTION LIST VIEW ───
+  return (
+    <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFF" />
 
       <View style={styles.sectionHeader}>
@@ -636,7 +997,7 @@ const getCount = (key?: string): number => {
       {loading ? (
         <View style={styles.centerContent}>
           <ActivityIndicator size="large" color="#0A0A0A" />
-                    </View>
+        </View>
       ) : items.length === 0 ? (
         <View style={styles.centerContent}>
           <View style={styles.emptyIconWrap}>
@@ -656,22 +1017,21 @@ const getCount = (key?: string): number => {
           <Text style={styles.itemsSectionLabel}>
             {items.length} {items.length === 1 ? 'ITEM' : 'ITEMS'}
           </Text>
-
           {items.map((item, idx) => (
-          <TouchableOpacity key={item.id} style={styles.itemCard} onPress={() => handleOpenItem(item)} activeOpacity={0.75}>
-            <View style={styles.itemIndexWrap}>
+            <TouchableOpacity key={item.id} style={styles.itemCard} onPress={() => handleOpenItem(item)} activeOpacity={0.75}>
+              <View style={styles.itemIndexWrap}>
                 <Text style={styles.itemIndex}>{idx + 1}</Text>
               </View>
               <View style={styles.itemBody}>
-              <Text style={styles.itemTitle}>{item.title}</Text>
-              {item.description ? <Text style={styles.itemMeta} numberOfLines={2}>{item.description}</Text> : null}
-              {item.content ? <Text style={styles.itemMeta} numberOfLines={2}>{item.content}</Text> : null}
-              {item.youtubeUrl ? (
+                <Text style={styles.itemTitle}>{item.title}</Text>
+                {item.description ? <Text style={styles.itemMeta} numberOfLines={2}>{stripHtml(item.description)}</Text> : null}
+                {item.content ? <Text style={styles.itemMeta} numberOfLines={2}>{stripHtml(item.content)}</Text> : null}
+                {item.youtubeUrl ? (
                   <View style={styles.itemUrlRow}>
                     <Ionicons name="logo-youtube" size={11} color="#ADADAD" />
-<Text style={styles.itemUrl} numberOfLines={1}>{item.youtubeUrl}</Text>
-            </View>
-) : null}
+                    <Text style={styles.itemUrl} numberOfLines={1}>{item.youtubeUrl}</Text>
+                  </View>
+                ) : null}
                 {item.fileUrl ? (
                   <View style={styles.itemUrlRow}>
                     <Ionicons name="attach-outline" size={11} color="#ADADAD" />
@@ -680,240 +1040,93 @@ const getCount = (key?: string): number => {
                 ) : null}
                 <Text style={styles.itemViewMore}>Tap to view full content</Text>
               </View>
-                {canManageContent && (
-            <View style={styles.itemActions}>
-              <TouchableOpacity style={styles.itemActionBtn} onPress={() => handleEdit(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                <Ionicons name="pencil-outline" size={15} color="#0A0A0A" />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.itemActionBtn, styles.itemActionBtnDestructive]} onPress={() => handleDelete(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                <Ionicons name="trash-outline" size={15} color="#C0C0C0" />
-              </TouchableOpacity>
-            </View>
-                )}
-          </TouchableOpacity>
-        ))}
-
-         {canManageContent && (
-        <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddNew} activeOpacity={0.7}>
-          <Ionicons name="add" size={17} color="#0A0A0A" />
-          <Text style={styles.addMoreText}>Add Another</Text>
-        </TouchableOpacity>
-        )}
-      <View style={{ height: 40 }} />
-        </ScrollView>
-    )  }
-
-  {/* ─── FORM MODAL ─── */}
-      <Modal visible={showForm} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHead}>
-              <TouchableOpacity onPress={() => setShowForm(false)}>
-                <Text style={styles.modalCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>
-                {editingId ? 'Edit Item' : `Add ${sectionTitle}`}
-              </Text>
-              <TouchableOpacity onPress={handleSaveConfirm} style={[styles.modalSaveBtn, (saving || !!deletingId) && styles.modalSaveBtnDisabled]} disabled={saving || !!deletingId}>
-                {saving ? <ActivityIndicator size="small" color="#FAFAFA" /> : <Text style={styles.modalSave}>Save</Text>}
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-<Text style={styles.fieldLabel}>TITLE</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Enter title…"
-                placeholderTextColor="#C4C4C4"
-                value={formData.title || ''}
-                onChangeText={(text) => setFormData({ ...formData, title: text })}
-                              />
-
-              {(activeSection === 'conversation' || activeSection === 'announcements') && (
-<>
-                  <Text style={[styles.fieldLabel, { marginTop: 20 }]}>CONTENT</Text>
-                <TextInput
-                  style={[styles.textInput, styles.textArea]}
-                  placeholder="Write your announcement…"
-                    placeholderTextColor="#C4C4C4"
-                  value={formData.content || ''}
-                  onChangeText={(text) => setFormData({ ...formData, content: text })}
-                  multiline                   numberOfLines={5} textAlignVertical="top"
-                />
-</>
+              {canManageContent && (
+                <View style={styles.itemActions}>
+                  <TouchableOpacity style={styles.itemActionBtn} onPress={() => handleEdit(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Ionicons name="pencil-outline" size={15} color="#0A0A0A" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.itemActionBtn, styles.itemActionBtnDestructive]} onPress={() => handleDelete(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <Ionicons name="trash-outline" size={15} color="#C0C0C0" />
+                  </TouchableOpacity>
+                </View>
               )}
+            </TouchableOpacity>
+          ))}
+          {canManageContent && (
+            <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddNew} activeOpacity={0.7}>
+              <Ionicons name="add" size={17} color="#0A0A0A" />
+              <Text style={styles.addMoreText}>Add Another</Text>
+            </TouchableOpacity>
+          )}
+          <View style={{ height: 40 }} />
+        </ScrollView>
+      )}
 
+      <Modal visible={showForm} transparent animationType="slide" onRequestClose={() => setShowForm(false)}>
+        <View style={styles.formOverlay}>
+          <View style={styles.formSheet}>
+            <View style={styles.formHandle} />
+            <View style={styles.formHead}>
+              <TouchableOpacity onPress={() => setShowForm(false)}>
+                <Text style={styles.formCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.formTitle}>{editingId ? 'Edit Item' : `Add ${sectionTitle}`}</Text>
+              <TouchableOpacity onPress={handleSaveConfirm} style={[styles.formSaveBtn, (saving || !!deletingId) && styles.formSaveBtnDisabled]} disabled={saving || !!deletingId}>
+                {saving ? <ActivityIndicator size="small" color="#FAFAFA" /> : <Text style={styles.formSave}>Save</Text>}
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.formBody} contentContainerStyle={styles.formBodyContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always" keyboardDismissMode="none">
+              <Text style={styles.fieldLabel}>TITLE</Text>
+              <TextInput style={styles.textInput} placeholder="Enter title…" placeholderTextColor="#C4C4C4" value={formData.title || ''} onChangeText={(text) => setFormData({ ...formData, title: text })} />
+              {(activeSection === 'conversation' || activeSection === 'announcements') && (
+                <RichTextField label="CONTENT" placeholder="Write your announcement…" value={formData.content || ''} onChange={(text) => setFormData({ ...formData, content: text })} height={260} />
+              )}
               {activeSection === 'files' && (
                 <>
                   <Text style={[styles.fieldLabel, { marginTop: 20 }]}>FILE</Text>
-                    <TouchableOpacity                       style={styles.filePickerBtn}                       onPress={handlePickFile}                       disabled={pickingFile} activeOpacity={0.8}>
-                    {pickingFile
-                      ? <ActivityIndicator size="small" color="#FAFAFA" />
-                      :                       <Ionicons name="folder-open-outline" size={16} color="#FAFAFA" />
-}
-                      <Text style={styles.filePickerBtnText}>                        {pickingFile ? 'Picking file…' : 'Pick from Device'}                      </Text>
-                    </TouchableOpacity>
-                  
+                  <TouchableOpacity style={styles.filePickerBtn} onPress={handlePickFile} disabled={pickingFile} activeOpacity={0.8}>
+                    {pickingFile ? <ActivityIndicator size="small" color="#FAFAFA" /> : <Ionicons name="folder-open-outline" size={16} color="#FAFAFA" />}
+                    <Text style={styles.filePickerBtnText}>{pickingFile ? 'Picking file…' : 'Pick from Device'}</Text>
+                  </TouchableOpacity>
                   {formData.fileName ? (
                     <View style={styles.selectedFile}>
                       <Ionicons name="document-outline" size={16} color="#555" />
                       <View style={{ flex: 1 }}>
                         <Text style={styles.selectedFileName}>{formData.fileName}</Text>
-                        {formData.fileUrl &&                           <Text style={styles.selectedFileUrl} numberOfLines={1}>                            {formData.fileUrl}                          </Text>}
+                        {formData.fileUrl && <Text style={styles.selectedFileUrl} numberOfLines={1}>{formData.fileUrl}</Text>}
                       </View>
                       <TouchableOpacity onPress={() => setFormData({ ...formData, fileUrl: '', fileName: '' })} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                         <Ionicons name="close-circle" size={18} color="#C0C0C0" />
                       </TouchableOpacity>
                     </View>
                   ) : null}
-
-<Text style={styles.orDivider}>— or enter URL manually —</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder="https://…"
-                    placeholderTextColor="#C4C4C4"
-                    value={formData.fileUrl || ''}
-                    onChangeText={(text) => setFormData({ ...formData, fileUrl: text })}
-                    autoCapitalize="none" keyboardType="url"
-                  />
+                  <Text style={styles.orDivider}>— or enter URL manually —</Text>
+                  <TextInput style={styles.textInput} placeholder="https://…" placeholderTextColor="#C4C4C4" value={formData.fileUrl || ''} onChangeText={(text) => setFormData({ ...formData, fileUrl: text })} autoCapitalize="none" keyboardType="url" />
                 </>
               )}
-
               {activeSection === 'versions' && (
-<>
+                <>
                   <Text style={[styles.fieldLabel, { marginTop: 20 }]}>YOUTUBE URL</Text>
-                <TextInput
-                  style={styles.textInput}
-                  placeholder="https://youtube.com/…"
-                    placeholderTextColor="#C4C4C4"
-                  value={formData.youtubeUrl || ''}
-                  onChangeText={(text) => setFormData({ ...formData, youtubeUrl: text })}
-                  autoCapitalize="none" keyboardType="url"
-                />
-</>
+                  <TextInput style={styles.textInput} placeholder="https://youtube.com/…" placeholderTextColor="#C4C4C4" value={formData.youtubeUrl || ''} onChangeText={(text) => setFormData({ ...formData, youtubeUrl: text })} autoCapitalize="none" keyboardType="url" />
+                </>
               )}
-
-              {(activeSection === 'lineup' || activeSection === 'files' || activeSection === 'versions') && (
-<>
-                  <Text style={[styles.fieldLabel, { marginTop: 20 }]}>DESCRIPTION</Text>
-                <TextInput
-                  style={[styles.textInput, styles.textArea]}
-                  placeholder="Optional description…"
-                    placeholderTextColor="#C4C4C4"
-                  value={formData.description || ''}
-                  onChangeText={(text) => setFormData({ ...formData, description: text })}
-                  multiline                   numberOfLines={4} textAlignVertical="top"
-                />
-</>
+              {(activeSection === 'files' || activeSection === 'versions') && (
+                <RichTextField label="DESCRIPTION" placeholder="Optional description…" value={formData.description || ''} onChange={(text) => setFormData({ ...formData, description: text })} height={180} />
               )}
-<View style={{ height: 30 }} />
+              <View style={{ height: 20 }} />
             </ScrollView>
           </View>
         </View>
       </Modal>
 
-      {(loading || saving || deletingId) && (
+      {(loading || saving || !!deletingId) && (
         <View style={styles.busyOverlay} pointerEvents="auto">
           <View style={styles.busyCard}>
             <ActivityIndicator size="large" color="#0A0A0A" />
-            {/* <Text style={styles.busyTitle}>{saving ? 'Saving changes…' : 'Deleting item…'}</Text>
-            <Text style={styles.busySubtitle}>Please wait until the operation finishes.</Text> */}
           </View>
         </View>
       )}
-
-      <Modal visible={selectedItem !== null} transparent animationType="fade" onRequestClose={() => setSelectedItem(null)}>
-        <View style={styles.detailOverlay}>
-          <TouchableOpacity style={styles.detailBackdrop} activeOpacity={1} onPress={() => setSelectedItem(null)} />
-          <View style={styles.detailSheet}>
-            <View style={styles.detailHandle} />
-            <View style={styles.detailHead}>
-              <View style={styles.detailHeadTextWrap}>
-                <Text style={styles.detailEyebrow}>{sectionTitle}</Text>
-                <Text style={styles.detailTitle}>{selectedItem?.title || 'Item'}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setSelectedItem(null)} style={styles.detailCloseBtn}>
-                <Ionicons name="close" size={20} color="#0A0A0A" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.detailBody} contentContainerStyle={styles.detailBodyContent} showsVerticalScrollIndicator={false}>
-              {selectedItem?.description ? (
-                <View style={styles.detailBlock}>
-                  <Text style={styles.detailLabel}>DESCRIPTION</Text>
-                  <Text style={styles.detailText}>{selectedItem.description}</Text>
-                </View>
-              ) : null}
-
-              {selectedItem?.content ? (
-                <View style={styles.detailBlock}>
-                  <Text style={styles.detailLabel}>CONTENT</Text>
-                  <Text style={styles.detailText}>{selectedItem.content}</Text>
-                </View>
-              ) : null}
-
-              {selectedItem?.youtubeUrl ? (
-  <View style={styles.detailBlock}>
-    <Text style={styles.detailLabel}>VIDEO</Text>
-    {(() => {
-      const videoId = extractYouTubeId(selectedItem.youtubeUrl)
-      return videoId ? (
-        <View style={styles.detailYoutubeWrap}>
-          <YoutubePlayer height={180} videoId={videoId} play={false} />
-          <TouchableOpacity
-            style={styles.detailOpenYoutubeBtn}
-            onPress={() => {
-              const url = /^https?:\/\//i.test(selectedItem.youtubeUrl)
-                ? selectedItem.youtubeUrl
-                : `https://${selectedItem.youtubeUrl}`
-              Linking.openURL(url).catch(() => Alert.alert('Error', 'Could not open YouTube'))
-            }}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="logo-youtube" size={14} color="#FF0000" />
-            <Text style={styles.detailOpenYoutubeBtnText}>Open in YouTube</Text>
-            <Ionicons name="open-outline" size={13} color="#888" />
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <Text style={styles.detailMonoText}>{selectedItem.youtubeUrl}</Text>
-      )
-    })()}
-  </View>
-) : null}
-
-              {selectedItem?.fileUrl ? (
-                <View style={styles.detailBlock}>
-                  <Text style={styles.detailLabel}>FILE URL</Text>
-                  <Text style={styles.detailMonoText}>{selectedItem.fileUrl}</Text>
-                </View>
-              ) : null}
-
-              {selectedItem?.fileName ? (
-                <View style={styles.detailBlock}>
-                  <Text style={styles.detailLabel}>FILE NAME</Text>
-                  <Text style={styles.detailText}>{selectedItem.fileName}</Text>
-                </View>
-              ) : null}
-            </ScrollView>
-
-            {canManageContent && selectedItem && (
-              <View style={styles.detailActions}>
-                <TouchableOpacity style={[styles.detailActionBtn, styles.detailActionBtnSecondary]} onPress={() => { const item = selectedItem; setSelectedItem(null); handleEdit(item) }}>
-                  <Ionicons name="pencil-outline" size={16} color="#0A0A0A" />
-                  <Text style={styles.detailActionBtnText}>Edit</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.detailActionBtn, styles.detailActionBtnDestructive]} onPress={() => { const item = selectedItem; setSelectedItem(null); handleDelete(item) }}>
-                  <Ionicons name="trash-outline" size={16} color="#FFF" />
-                  <Text style={styles.detailActionBtnTextDestructive}>Delete</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        </View>
-      </Modal>
-        </View>
+    </View>
   )
 }
 
@@ -1043,27 +1256,37 @@ paddingHorizontal: 16,
   addMoreText: { fontSize: 13, fontWeight: '700', color: '#0A0A0A' },
 
   // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  modalSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, maxHeight: '92%', paddingBottom: 36 },
-  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 12, marginBottom: 4 },
-  modalHead: {
+  formOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+  formSheet: { flex: 1, backgroundColor: '#FFF', paddingTop: 12, paddingBottom: 18 },
+  formHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 4, marginBottom: 8 },
+  formHead: {
     flexDirection: 'row',
-justifyContent: 'space-between',
+    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
   },
-  modalTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
-  modalCancel: { fontSize: 14, color: '#ADADAD', fontWeight: '500', minWidth: 54 },
-  modalSaveBtn: { backgroundColor: '#0A0A0A', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, minWidth: 54, alignItems: 'center' },
-  modalSaveBtnDisabled: { opacity: 0.6 },
-  modalSave: { fontSize: 13, fontWeight: '700', color: '#FAFAFA' },
-  modalBody: { paddingHorizontal: 20, paddingTop: 20 },
+  formTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
+  formCancel: { fontSize: 14, color: '#ADADAD', fontWeight: '500', minWidth: 54 },
+  formSaveBtn: { backgroundColor: '#0A0A0A', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, minWidth: 54, alignItems: 'center' },
+  formSaveBtnDisabled: { opacity: 0.6 },
+  formSave: { fontSize: 13, fontWeight: '700', color: '#FAFAFA' },
+  formBody: { flex: 1 },
+  formBodyContent: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 28, gap: 16 },
   fieldLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, marginBottom: 9, textTransform: 'uppercase' },
   textInput: { backgroundColor: '#F7F7F7', borderRadius: 13, borderWidth: 1.5, borderColor: '#EBEBEB', paddingHorizontal: 15, paddingVertical: 14, fontSize: 15, color: '#0A0A0A', fontWeight: '500' },
   textArea: { minHeight: 100, textAlignVertical: 'top' },
+  richField: { gap: 9 },
+  richToolbar: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  richToolBtn: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E6E6E6' },
+  richToolBtnText: { fontSize: 15, fontWeight: '800', color: '#0A0A0A' },
+  richToolItalic: { fontStyle: 'italic' },
+  richToolUnderline: { textDecorationLine: 'underline' },
+  richToolbarHint: { marginLeft: 6, fontSize: 12, color: '#8A8A8A', flex: 1 },
+  richEditorWrap: { borderRadius: 14, borderWidth: 1.5, borderColor: '#EBEBEB', overflow: 'hidden', backgroundColor: '#FFF' },
+  richEditorWebView: { flex: 1, backgroundColor: 'transparent' },
   filePickerBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#0A0A0A', borderRadius: 13, paddingVertical: 14, marginBottom: 12 },
   filePickerBtnText: { fontSize: 14, fontWeight: '700', color: '#FAFAFA' },
   selectedFile: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F5F5', borderRadius: 12, borderWidth: 1, borderColor: '#EBEBEB', padding: 12, marginBottom: 12 },
@@ -1107,20 +1330,22 @@ justifyContent: 'space-between',
     textAlign: 'center',
     lineHeight: 18,
   },
-  detailOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
   detailBackdrop: { ...StyleSheet.absoluteFillObject },
-  detailSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, maxHeight: '88%', paddingBottom: 18 },
-  detailHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 12, marginBottom: 8 },
+  detailSheet: { flex: 1, backgroundColor: '#FFF', paddingBottom: 18, paddingTop: 12 },
+  detailHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E0E0E0', alignSelf: 'center', marginTop: 4, marginBottom: 8 },
   detailHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   detailHeadTextWrap: { flex: 1, paddingRight: 16 },
   detailEyebrow: { fontSize: 9, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, marginBottom: 4, textTransform: 'uppercase' },
   detailTitle: { fontSize: 18, fontWeight: '800', color: '#0A0A0A', letterSpacing: -0.3 },
   detailCloseBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F2F2F2', justifyContent: 'center', alignItems: 'center' },
-  detailBody: { maxHeight: 360 },
+  detailBody: { flex: 1 },
   detailBodyContent: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 10, gap: 14 },
   detailBlock: { gap: 6 },
   detailLabel: { fontSize: 10, fontWeight: '700', color: '#C0C0C0', letterSpacing: 2, textTransform: 'uppercase' },
   detailText: { fontSize: 14, color: '#222', lineHeight: 21 },
+  detailRichPreviewWrap: { flex: 1, minHeight: 300, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: '#EBEBEB', backgroundColor: '#FFF' },
+detailRichPreview: { flex: 1, backgroundColor: 'transparent' },
   detailMonoText: { fontSize: 13, color: '#222', lineHeight: 20, fontFamily: 'monospace' },
   detailActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingTop: 10 },
   detailActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 12, paddingVertical: 13 },

@@ -16,6 +16,9 @@ import {
   Animated,
   PanResponder,
   Dimensions,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
 } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import { ChordList, Artist } from '../db/models'
@@ -419,54 +422,67 @@ activeOpacity={0.82}
       </TouchableOpacity>
 
       {/* ─── CREATE MODAL ─── */}
-      <Modal
-        visible={showCreateModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => {
-          setShowCreateModal(false)
-          setNewListTitle('')
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <Animated.View style={[styles.modalSheet, { transform: [{ translateY: pan }] }]}>
-            <View style={styles.modalDragArea} {...panResponder.panHandlers}>
-              <View style={styles.modalHandle} />
-              <View style={styles.modalHead}>
-              <TouchableOpacity
-                                onPress={() => {
+      {/* ─── CREATE MODAL ─── */}
+<Modal
+  visible={showCreateModal}
+  transparent
+  animationType="slide"
+  onRequestClose={() => {
+    Keyboard.dismiss()
+    setTimeout(() => {
+      setShowCreateModal(false)
+      setNewListTitle('')
+    }, Platform.OS === 'android' ? 150 : 50)
+  }}
+>
+  <KeyboardAvoidingView
+    style={{ flex: 1 }}
+    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    keyboardVerticalOffset={0}
+  >
+    <View style={styles.modalOverlay}>
+      <Animated.View style={[styles.modalSheet, { transform: [{ translateY: pan }] }]}>
+        <View style={styles.modalDragArea} {...panResponder.panHandlers}>
+          <View style={styles.modalHandle} />
+          <View style={styles.modalHead}>
+            <TouchableOpacity
+              onPress={() => {
+                Keyboard.dismiss()
+                setTimeout(() => {
                   setShowCreateModal(false)
                   setNewListTitle('')
-                }}
-              >
-                <Text style={styles.modalCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>New Note</Text>
-              <TouchableOpacity                 onPress={handleCreateList} style={styles.modalActionBtn}              >
-                <Text style={styles.modalAction}>Create</Text>
-              </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.modalBody}>
-              <Text style={styles.fieldLabel}>TITLE</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Note title…"
-                placeholderTextColor="#C4C4C4"
-                value={newListTitle}
-                onChangeText={setNewListTitle}
-                autoFocus
-                returnKeyType="done"
-                onSubmitEditing={handleCreateList}
-              />
-              <Text style={styles.fieldHint}>
-                A "Personal" artist will be created automatically to organize your notes.
-              </Text>
-            </View>
-          </Animated.View>
+                }, Platform.OS === 'android' ? 150 : 50)
+              }}
+            >
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>New Note</Text>
+            <TouchableOpacity onPress={handleCreateList} style={styles.modalActionBtn}>
+              <Text style={styles.modalAction}>Create</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </Modal>
+
+        <View style={styles.modalBody}>
+          <Text style={styles.fieldLabel}>TITLE</Text>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Note title…"
+            placeholderTextColor="#C4C4C4"
+            value={newListTitle}
+            onChangeText={setNewListTitle}
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={handleCreateList}
+          />
+          <Text style={styles.fieldHint}>
+            A "Personal" artist will be created automatically to organize your notes.
+          </Text>
+        </View>
+      </Animated.View>
+    </View>
+  </KeyboardAvoidingView>
+</Modal>
     </View>
   )
 }
@@ -707,10 +723,10 @@ elevation: 8,
   
   // Modal
   modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
+  flex: 1,
+  backgroundColor: 'rgba(0,0,0,0.4)',
+  justifyContent: 'flex-end',
+},
   modalSheet: {
     backgroundColor: '#FFF',
     borderTopLeftRadius: 26,

@@ -12,7 +12,11 @@ import {
   StatusBar,
   Linking,
   RefreshControl,
+  KeyboardAvoidingView,
+  Platform,
+   Keyboard
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { WebView } from 'react-native-webview'
 import YoutubePlayer from 'react-native-youtube-iframe'
@@ -133,7 +137,7 @@ function buildRichTextDocument(initialHtml: string, placeholder: string, editabl
     }
     #editor:empty:before {
       content: attr(data-placeholder);
-      color: #C4C4C4;
+      color: #999999;
     }
     b, strong { font-weight: 800; }
     i, em { font-style: italic; }
@@ -311,6 +315,7 @@ function createDraftItem(seed?: Partial<LineupDraftItem>): LineupDraftItem {
 
 export default function LineupScreen() {
   const { canManageContent } = useRole()
+   const insets = useSafeAreaInsets()
   const [userId, setUserId] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -442,12 +447,23 @@ export default function LineupScreen() {
     })
   }
 
-  const submitLineup = async () => {
+ const submitLineup = async () => {
     if (!canManageContent) {
       Alert.alert('Access denied', 'Only admins or managers can manage lineups.')
       return
     }
     if (saving || deletingId) return
+
+    let activeUserId = userId
+    if (!activeUserId) {
+      const currentUser = await getCurrentUser()
+      if (!currentUser) {
+        Alert.alert('Error', 'Could not verify your account. Please try again.')
+        return
+      }
+      activeUserId = currentUser.id
+      setUserId(activeUserId)
+    }
 
     const title = formData.title.trim()
     if (!title) {
@@ -480,7 +496,7 @@ export default function LineupScreen() {
         await Promise.all(oldItems.map(item => deleteLineupItem(item.id)))
         await Promise.all(validItems.map(item => createLineupItem({
           lineupId: editingId,
-          userId,
+          userId: activeUserId,
           position: item.position,
           artist: item.artist.trim(),
           songTitle: item.songTitle.trim(),
@@ -491,19 +507,19 @@ export default function LineupScreen() {
           updatedAt: now,
           synced: false,
         })))
-        void notifyManagementChangeToAllUsers(userId, 'updated', 'Lineup', title)
+        void notifyManagementChangeToAllUsers(activeUserId, 'updated', 'Lineup', title)
       } else {
         const created = await createLineup({
           title,
           description: cleanDescription,
-          userId,
+          userId: activeUserId,
           createdAt: now,
           updatedAt: now,
           synced: false,
         })
         await Promise.all(validItems.map(item => createLineupItem({
           lineupId: created.id,
-          userId,
+          userId: activeUserId,
           position: item.position,
           artist: item.artist.trim(),
           songTitle: item.songTitle.trim(),
@@ -514,9 +530,11 @@ export default function LineupScreen() {
           updatedAt: now,
           synced: false,
         })))
-        void notifyManagementChangeToAllUsers(userId, 'created', 'Lineup', title)
+        void notifyManagementChangeToAllUsers(activeUserId, 'created', 'Lineup', title)
       }
 
+      Keyboard.dismiss()
+      await new Promise(res => setTimeout(res, 50))
       setShowForm(false)
       setEditingId(null)
       setFormData({ title: '', description: '', items: [createDraftItem()] })
@@ -534,6 +552,12 @@ export default function LineupScreen() {
       return
     }
     if (saving || deletingId) return
+
+    const activeUserId = userId
+    if (!activeUserId) {
+      Alert.alert('Error', 'Could not verify your account. Please try again.')
+      return
+    }
 
     Alert.alert('Delete Lineup', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
@@ -575,7 +599,7 @@ export default function LineupScreen() {
 
       {loading ? (
         <View style={styles.centerContent}>
-          <ActivityIndicator size="large" color="#121212" />
+          <ActivityIndicator size="large" color="#000" />
         </View>
       ) : lineups.length === 0 ? (
         <View style={styles.emptyState}>
@@ -594,7 +618,7 @@ export default function LineupScreen() {
         </View>
       ) : (
         <ScrollView
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 40 }]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           showsVerticalScrollIndicator={false}
         >
@@ -645,7 +669,7 @@ export default function LineupScreen() {
                       <Text style={styles.cardActionText}>Edit</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.cardActionBtn, styles.cardActionBtnDanger]} onPress={() => confirmDelete(lineup)} activeOpacity={0.75}>
-                      <Ionicons name="trash-outline" size={15} color="#A53A3A" />
+                      <Ionicons name="trash-outline" size={15} color="#000" />
                       <Text style={[styles.cardActionText, styles.cardActionTextDanger]}>Delete</Text>
                     </TouchableOpacity>
                   </View>
@@ -657,11 +681,17 @@ export default function LineupScreen() {
       )}
 
       <Modal visible={showForm} transparent animationType="slide" onRequestClose={() => setShowForm(false)}>
-        <View style={styles.formOverlay}>
-          <View style={styles.formSheet}>
-            {/* <View style={styles.formHandle} /> */}
+        <KeyboardAvoidingView
+          style={styles.formOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+        >
+          <View style={[styles.formSheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             <View style={styles.formHead}>
-              <TouchableOpacity onPress={() => setShowForm(false)}>
+              <TouchableOpacity onPress={() => {
+                  Keyboard.dismiss()
+                  setTimeout(() => setShowForm(false), 50)
+                }}>
                 <Text style={styles.formCancel}>Cancel</Text>
               </TouchableOpacity>
               <Text style={styles.formTitle}>{editingId ? 'Edit Lineup' : 'Add Lineup'}</Text>
@@ -670,12 +700,12 @@ export default function LineupScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.formBody} contentContainerStyle={styles.formBodyContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always" keyboardDismissMode="none">
+            <ScrollView style={styles.formBody} contentContainerStyle={styles.formBodyContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="always" keyboardDismissMode="on-drag">
               <Text style={styles.fieldLabel}>LINEUP TITLE</Text>
               <TextInput
                 style={styles.textInput}
                 placeholder="Enter lineup title…"
-                placeholderTextColor="#B6B0A7"
+                placeholderTextColor="#999999"
                 value={formData.title}
                 onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
               />
@@ -707,7 +737,7 @@ export default function LineupScreen() {
                     <View style={styles.songEditorHead}>
                       <Text style={styles.songEditorIndex}>Song {index + 1}</Text>
                       <TouchableOpacity onPress={() => removeDraftItem(item.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                        <Ionicons name="close-circle" size={20} color="#C97B7B" />
+                        <Ionicons name="close-circle" size={20} color="#555555" />
                       </TouchableOpacity>
                     </View>
 
@@ -715,7 +745,7 @@ export default function LineupScreen() {
                     <TextInput
                       style={styles.textInput}
                       placeholder="Artist name"
-                      placeholderTextColor="#B6B0A7"
+                      placeholderTextColor="#AAAAAA"
                       value={item.artist}
                       onChangeText={(text) => updateDraftItem(item.id, { artist: text })}
                     />
@@ -724,7 +754,7 @@ export default function LineupScreen() {
                     <TextInput
                       style={styles.textInput}
                       placeholder="Song title"
-                      placeholderTextColor="#B6B0A7"
+                      placeholderTextColor="#AAAAAA"
                       value={item.songTitle}
                       onChangeText={(text) => updateDraftItem(item.id, { songTitle: text })}
                     />
@@ -735,7 +765,7 @@ export default function LineupScreen() {
                         <TextInput
                           style={styles.textInput}
                           placeholder="C, D, Eb…"
-                          placeholderTextColor="#B6B0A7"
+                          placeholderTextColor="#AAAAAA"
                           value={item.key}
                           onChangeText={(text) => updateDraftItem(item.id, { key: text })}
                         />
@@ -764,7 +794,7 @@ export default function LineupScreen() {
                     <TextInput
                       style={styles.textInput}
                       placeholder="https://youtube.com/watch?v=…"
-                      placeholderTextColor="#B6B0A7"
+                      placeholderTextColor="#AAAAAA"
                       value={item.versionUrl}
                       onChangeText={(text) => updateDraftItem(item.id, { versionUrl: text })}
                       autoCapitalize="none"
@@ -795,13 +825,13 @@ export default function LineupScreen() {
               <View style={{ height: 24 }} />
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={selectedLineup !== null} transparent animationType="fade" onRequestClose={() => setSelectedLineup(null)}>
         <View style={styles.detailOverlay}>
           <TouchableOpacity style={styles.detailBackdrop} activeOpacity={1} onPress={() => setSelectedLineup(null)} />
-          <View style={styles.detailSheet}>
+          <View style={[styles.detailSheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
             <View style={styles.detailHandle} />
             <View style={styles.detailHead}>
               <View style={styles.detailHeadTextWrap}>
@@ -843,7 +873,7 @@ export default function LineupScreen() {
                             >
                               <Ionicons name="logo-youtube" size={14} color="#FF0000" />
                               <Text style={styles.detailOpenYoutubeBtnText}>Open in YouTube</Text>
-                              <Ionicons name="open-outline" size={13} color="#888" />
+                              <Ionicons name="open-outline" size={13} color="#888888" />
                             </TouchableOpacity>
                           </View>
                         ) : (
@@ -884,6 +914,7 @@ export default function LineupScreen() {
 }
 
 const styles = StyleSheet.create({
+  // ─── Layout ────────────────────────────────────────────────────────────────
   container: { flex: 1, backgroundColor: '#FFF' },
   header: {
     paddingHorizontal: 20,
@@ -894,21 +925,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 12,
   },
-  eyebrow: { fontSize: 11, letterSpacing: 2, color: '#000', fontWeight: '800' },
-  title: { fontSize: 32, lineHeight: 36, fontWeight: '900', color: '#141414', marginTop: 4 },
+  centerContent: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  // ─── Header ────────────────────────────────────────────────────────────────
+  eyebrow: { fontSize: 11, letterSpacing: 2, color: '#555555', fontWeight: '800' },
+  title: { fontSize: 32, lineHeight: 36, fontWeight: '900', color: '#000000', marginTop: 4 },
   primaryAction: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#141414',
+    backgroundColor: '#000000',
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 18,
     flexShrink: 1,
     maxWidth: '52%',
   },
-  primaryActionText: { color: '#fff', fontSize: 13, fontWeight: '800', flexShrink: 1 },
-  centerContent: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  primaryActionText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', flexShrink: 1 },
+
+  // ─── Empty state ───────────────────────────────────────────────────────────
   emptyState: {
     marginHorizontal: 20,
     marginTop: 24,
@@ -917,31 +952,37 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.06,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 10 },
     elevation: 2,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
   },
   emptyIconWrap: {
     width: 64,
     height: 64,
     borderRadius: 20,
-    backgroundColor: '#e8e8e8',
+    backgroundColor: '#F0F0F0',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 14,
   },
-  emptyTitle: { fontSize: 19, fontWeight: '800', color: '#151515' },
-  emptySubtitle: { marginTop: 8, fontSize: 14, lineHeight: 20, color: '#6F6A61', textAlign: 'center' },
+  emptyTitle: { fontSize: 19, fontWeight: '800', color: '#000000' },
+  emptySubtitle: { marginTop: 8, fontSize: 14, lineHeight: 20, color: '#555555', textAlign: 'center' },
   emptyCta: {
     marginTop: 18,
-    backgroundColor: '#141414',
+    backgroundColor: '#000000',
     borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  emptyCtaText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  emptyCtaText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
+
+  // ─── List ──────────────────────────────────────────────────────────────────
   listContent: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 40, gap: 14 },
+
+  // ─── Lineup card ───────────────────────────────────────────────────────────
   lineupCard: {
     backgroundColor: '#FFF',
     borderRadius: 28,
@@ -952,21 +993,25 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 2,
     borderWidth: 1,
-    borderColor: '#F0E8DA',
+    borderColor: '#E4E4E4',
   },
   cardTopRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
-  cardIndex: { fontSize: 11, letterSpacing: 1.4, color: '#8C7A5B', fontWeight: '800' },
-  cardTitle: { fontSize: 22, lineHeight: 26, color: '#161616', fontWeight: '900', marginTop: 4 },
-  cardCountPill: { backgroundColor: '#F5EFE5', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
-  cardCountPillText: { color: '#7B6746', fontSize: 12, fontWeight: '800' },
-  cardDescription: { marginTop: 12, color: '#63615C', fontSize: 14, lineHeight: 21 },
+  cardIndex: { fontSize: 11, letterSpacing: 1.4, color: '#777777', fontWeight: '800' },
+  cardTitle: { fontSize: 22, lineHeight: 26, color: '#000000', fontWeight: '900', marginTop: 4 },
+  cardCountPill: { backgroundColor: '#F0F0F0', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  cardCountPillText: { color: '#333333', fontSize: 12, fontWeight: '800' },
+  cardDescription: { marginTop: 12, color: '#888888', fontSize: 14, lineHeight: 21 },
+
+  // ─── Song stack ────────────────────────────────────────────────────────────
   songStack: { marginTop: 16, gap: 10 },
   songRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  songDot: { width: 10, height: 10, borderRadius: 999, marginTop: 5, backgroundColor: '#B99C6B' },
+  songDot: { width: 10, height: 10, borderRadius: 999, marginTop: 5, backgroundColor: '#333333' },
   songMeta: { flex: 1 },
-  songName: { color: '#161616', fontSize: 15, fontWeight: '800' },
-  songSubMeta: { color: '#766F65', fontSize: 12, marginTop: 2 },
-  moreText: { color: '#8C7A5B', fontSize: 12, fontWeight: '700', marginTop: 2 },
+  songName: { color: '#000000', fontSize: 15, fontWeight: '800' },
+  songSubMeta: { color: '#AAAAAA', fontSize: 12, marginTop: 2 },
+  moreText: { color: '#555555', fontSize: 12, fontWeight: '700', marginTop: 2 },
+
+  // ─── Card actions ──────────────────────────────────────────────────────────
   cardActions: { marginTop: 16, flexDirection: 'row', gap: 10 },
   cardActionBtn: {
     flex: 1,
@@ -976,103 +1021,124 @@ const styles = StyleSheet.create({
     gap: 8,
     borderRadius: 16,
     paddingVertical: 12,
-    backgroundColor: '#F5EFE5',
+    backgroundColor: '#F0F0F0',
   },
-  cardActionBtnDanger: { backgroundColor: '#F8E6E6' },
-  cardActionText: { fontSize: 13, fontWeight: '800', color: '#161616' },
-  cardActionTextDanger: { color: '#A53A3A' },
-  formOverlay: { flex: 1, backgroundColor: 'rgba(15, 15, 15, 0.55)', justifyContent: 'flex-end' },
-  formSheet: { backgroundColor: '#FFFDF9', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '94%' },
-  formHandle: { alignSelf: 'center', width: 48, height: 5, borderRadius: 999, backgroundColor: '#FFF', marginTop: 12 },
-  formHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingVertical: 14 },
-  formCancel: { color: '#7D7364', fontSize: 14, fontWeight: '700' },
-  formTitle: { color: '#161616', fontSize: 16, fontWeight: '900' },
-  formSaveBtn: { backgroundColor: '#141414', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 10, minWidth: 74, alignItems: 'center' },
-  formSaveBtnDisabled: { opacity: 0.6 },
+  cardActionBtnDanger: { backgroundColor: '#EBEBEB', borderWidth: 1, borderColor: '#CCCCCC' },
+  cardActionText: { fontSize: 13, fontWeight: '800', color: '#000000' },
+  cardActionTextDanger: { color: '#000000' },
+
+  // ─── Form modal ────────────────────────────────────────────────────────────
+  formOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  formSheet: { backgroundColor: '#FFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '94%' },
+  formHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  formCancel: { color: '#000000', fontSize: 14, fontWeight: '700' },
+  formTitle: { color: '#000000', fontSize: 16, fontWeight: '900' },
+  formSaveBtn: { backgroundColor: '#000000', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 10, minWidth: 74, alignItems: 'center' },
+  formSaveBtnDisabled: { opacity: 0.45 },
   formSave: { color: '#FFF', fontWeight: '800', fontSize: 13 },
   formBody: { maxHeight: '100%' },
   formBodyContent: { paddingHorizontal: 18, paddingBottom: 24 },
-  fieldLabel: { color: '#7A6E60', fontSize: 11, letterSpacing: 1.6, fontWeight: '800', marginTop: 16, marginBottom: 8 },
+
+  // ─── Form fields ───────────────────────────────────────────────────────────
+  fieldLabel: { color: '#555555', fontSize: 11, letterSpacing: 1.6, fontWeight: '800', marginTop: 16, marginBottom: 8 },
   textInput: {
     backgroundColor: '#FFF',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#E7DECF',
+    borderColor: '#DDDDDD',
     paddingHorizontal: 14,
     paddingVertical: 13,
     fontSize: 15,
-    color: '#161616',
+    color: '#000000',
   },
+
+  // ─── Rich text editor ──────────────────────────────────────────────────────
   richField: { marginTop: 6 },
-  richEditorWrap: { borderRadius: 20, overflow: 'hidden', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E7DECF' },
+  richEditorWrap: { borderRadius: 20, overflow: 'hidden', backgroundColor: '#FFF', borderWidth: 1, borderColor: '#DDDDDD' },
   richEditorWebView: { backgroundColor: 'transparent' },
   richToolbar: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  richToolBtn: { width: 34, height: 34, borderRadius: 12, backgroundColor: '#F5EFE5', alignItems: 'center', justifyContent: 'center' },
-  richToolBtnText: { color: '#161616', fontSize: 15, fontWeight: '900' },
+  richToolBtn: { width: 34, height: 34, borderRadius: 12, backgroundColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' },
+  richToolBtnText: { color: '#000000', fontSize: 15, fontWeight: '900' },
   richToolItalic: { fontStyle: 'italic' },
   richToolUnderline: { textDecorationLine: 'underline' },
-  richToolbarHint: { color: '#8C8277', fontSize: 12, marginLeft: 8, flex: 1 },
-  sectionDivider: { height: 1, backgroundColor: '#EFE4D2', marginTop: 22, marginBottom: 8 },
+  richToolbarHint: { color: '#888888', fontSize: 12, marginLeft: 8, flex: 1 },
+
+  // ─── Songs section ─────────────────────────────────────────────────────────
+  sectionDivider: { height: 1, backgroundColor: '#E8E8E8', marginTop: 22, marginBottom: 8 },
   songHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
-  songHeaderHint: { color: '#8A847A', fontSize: 12, marginTop: 2, flexShrink: 1 },
+  songHeaderHint: { color: '#888888', fontSize: 12, marginTop: 2, flexShrink: 1 },
   inlineAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#F5EFE5',
+    backgroundColor: '#F0F0F0',
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 14,
     alignSelf: 'flex-start',
     flexShrink: 0,
   },
-  inlineAddBtnText: { color: '#161616', fontWeight: '800', fontSize: 13 },
-  songEditorCard: { marginTop: 14, backgroundColor: '#FFF', borderRadius: 24, borderWidth: 1, borderColor: '#ECE2D3', padding: 14 },
+  inlineAddBtnText: { color: '#000000', fontWeight: '800', fontSize: 13 },
+
+  // ─── Song editor card ──────────────────────────────────────────────────────
+  songEditorCard: { marginTop: 14, backgroundColor: '#FAFAFA', borderRadius: 24, borderWidth: 1, borderColor: '#E4E4E4', padding: 14 },
   songEditorHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  songEditorIndex: { color: '#8C7A5B', fontWeight: '900', fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase' },
+  songEditorIndex: { color: '#555555', fontWeight: '900', fontSize: 12, letterSpacing: 1.2, textTransform: 'uppercase' },
   songInlineRow: { flexDirection: 'row', gap: 10 },
   songInlineCol: { flex: 1 },
+
+  // ─── Category chips ────────────────────────────────────────────────────────
   categoryWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  categoryChip: { backgroundColor: '#F5EFE5', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 8 },
-  categoryChipActive: { backgroundColor: '#141414' },
-  categoryChipText: { color: '#736856', fontSize: 11, fontWeight: '800' },
-  categoryChipTextActive: { color: '#FFF' },
-  previewCard: { marginTop: 14, backgroundColor: '#FAF7F1', borderRadius: 20, padding: 12, borderWidth: 1, borderColor: '#EEE4D4' },
-  previewLabel: { color: '#8C7A5B', fontSize: 11, fontWeight: '800', letterSpacing: 1.3, marginBottom: 10 },
+  categoryChip: { backgroundColor: '#F0F0F0', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 8 },
+  categoryChipActive: { backgroundColor: '#000000' },
+  categoryChipText: { color: '#555555', fontSize: 11, fontWeight: '800' },
+  categoryChipTextActive: { color: '#FFFFFF' },
+
+  // ─── Preview card ──────────────────────────────────────────────────────────
+  previewCard: { marginTop: 14, backgroundColor: '#F5F5F5', borderRadius: 20, padding: 12, borderWidth: 1, borderColor: '#E4E4E4' },
+  previewLabel: { color: '#555555', fontSize: 11, fontWeight: '800', letterSpacing: 1.3, marginBottom: 10 },
   previewOpenBtn: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF', borderRadius: 14, paddingVertical: 10 },
-  previewOpenBtnText: { color: '#161616', fontSize: 13, fontWeight: '800' },
-  detailOverlay: { flex: 1, backgroundColor: 'rgba(15, 15, 15, 0.56)', justifyContent: 'flex-end' },
+  previewOpenBtnText: { color: '#000000', fontSize: 13, fontWeight: '800' },
+
+  // ─── Detail modal ──────────────────────────────────────────────────────────
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.56)', justifyContent: 'flex-end' },
   detailBackdrop: { ...StyleSheet.absoluteFillObject },
-  detailSheet: { backgroundColor: '#FFFDF9', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '92%' },
-  detailHandle: { alignSelf: 'center', width: 48, height: 5, borderRadius: 999, backgroundColor: '#D7C8B1', marginTop: 12 },
+  detailSheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: '92%' },
+  detailHandle: { alignSelf: 'center', width: 48, height: 5, borderRadius: 999, backgroundColor: '#CCCCCC', marginTop: 12 },
   detailHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', paddingHorizontal: 18, paddingTop: 14, paddingBottom: 10 },
   detailHeadTextWrap: { flex: 1, paddingRight: 10 },
-  detailEyebrow: { color: '#8C7A5B', fontSize: 11, letterSpacing: 1.5, fontWeight: '900' },
-  detailTitle: { color: '#161616', fontSize: 24, lineHeight: 28, fontWeight: '900', marginTop: 4 },
-  detailCloseBtn: { width: 34, height: 34, borderRadius: 999, backgroundColor: '#F3EBDD', alignItems: 'center', justifyContent: 'center' },
+  detailEyebrow: { color: '#777777', fontSize: 11, letterSpacing: 1.5, fontWeight: '900' },
+  detailTitle: { color: '#000000', fontSize: 24, lineHeight: 28, fontWeight: '900', marginTop: 4 },
+  detailCloseBtn: { width: 34, height: 34, borderRadius: 999, backgroundColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' },
   detailBody: { maxHeight: '100%' },
   detailBodyContent: { paddingHorizontal: 18, paddingBottom: 22 },
   detailBlock: { marginTop: 16 },
-  detailLabel: { color: '#8C7A5B', fontSize: 11, letterSpacing: 1.4, fontWeight: '900', marginBottom: 10 },
-  detailRichPreviewWrap: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E9DDCC', borderRadius: 20, overflow: 'hidden', minHeight: 120 },
+  detailLabel: { color: '#777777', fontSize: 11, letterSpacing: 1.4, fontWeight: '900', marginBottom: 10 },
+  detailRichPreviewWrap: { backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E4E4E4', borderRadius: 20, overflow: 'hidden', minHeight: 120 },
   detailRichPreview: { backgroundColor: 'transparent', minHeight: 120 },
-  detailSongCard: { marginTop: 16, backgroundColor: '#FFF', borderRadius: 24, borderWidth: 1, borderColor: '#ECE2D3', padding: 14 },
-  detailSongIndex: { color: '#8C7A5B', fontSize: 11, letterSpacing: 1.2, fontWeight: '900', textTransform: 'uppercase' },
-  detailSongTitle: { color: '#161616', fontSize: 18, fontWeight: '900', marginTop: 6 },
-  detailSongMeta: { color: '#6F685F', fontSize: 13, marginTop: 4 },
+
+  // ─── Detail song card ──────────────────────────────────────────────────────
+  detailSongCard: { marginTop: 16, backgroundColor: '#FFF', borderRadius: 24, borderWidth: 1, borderColor: '#E4E4E4', padding: 14 },
+  detailSongIndex: { color: '#777777', fontSize: 11, letterSpacing: 1.2, fontWeight: '900', textTransform: 'uppercase' },
+  detailSongTitle: { color: '#000000', fontSize: 18, fontWeight: '900', marginTop: 6 },
+  detailSongMeta: { color: '#555555', fontSize: 13, marginTop: 4 },
   detailChipRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  detailChip: { backgroundColor: '#F5EFE5', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
-  detailChipText: { color: '#6D5E46', fontSize: 11, fontWeight: '800' },
+  detailChip: { backgroundColor: '#F0F0F0', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
+  detailChipText: { color: '#333333', fontSize: 11, fontWeight: '800' },
   detailYoutubeWrap: { borderRadius: 16, overflow: 'hidden' },
-  detailOpenYoutubeBtn: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFF', borderRadius: 14, paddingVertical: 10 },
-  detailOpenYoutubeBtnText: { color: '#161616', fontSize: 13, fontWeight: '800' },
-  detailMonoText: { color: '#4C4C4C', fontSize: 13, lineHeight: 20 },
+  detailOpenYoutubeBtn: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F5F5F5', borderRadius: 14, paddingVertical: 10 },
+  detailOpenYoutubeBtnText: { color: '#000000', fontSize: 13, fontWeight: '800' },
+  detailMonoText: { color: '#333333', fontSize: 13, lineHeight: 20 },
+
+  // ─── Detail actions ────────────────────────────────────────────────────────
   detailActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 18, paddingTop: 8, paddingBottom: 18 },
   detailActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 16, paddingVertical: 13 },
-  detailActionBtnSecondary: { backgroundColor: '#F5EFE5' },
-  detailActionBtnDestructive: { backgroundColor: '#C44E4E' },
-  detailActionBtnText: { color: '#161616', fontSize: 13, fontWeight: '800' },
-  detailActionBtnTextDestructive: { color: '#FFF', fontSize: 13, fontWeight: '800' },
-  busyOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.45)' },
-  busyCard: { backgroundColor: '#FFF', borderRadius: 20, padding: 20, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
+  detailActionBtnSecondary: { backgroundColor: '#F0F0F0' },
+  detailActionBtnDestructive: { backgroundColor: '#000000' },
+  detailActionBtnText: { color: '#000000', fontSize: 13, fontWeight: '800' },
+  detailActionBtnTextDestructive: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+
+  // ─── Busy overlay ──────────────────────────────────────────────────────────
+  busyOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.5)' },
+  busyCard: { backgroundColor: '#FFF', borderRadius: 20, padding: 20, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, borderWidth: 1, borderColor: '#E8E8E8' },
 })

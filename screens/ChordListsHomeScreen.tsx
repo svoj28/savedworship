@@ -446,16 +446,17 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
   }
 
   const handleMoveItemDown = async (index: number) => {
-    if (index >= playlistItems.length - 1 || !selectedPlaylist) return
-    try {
-      const cur = playlistItems[index]
-      const next = playlistItems[index + 1]
-      await updatePlaylistItemPosition(cur.id, next.position)
-      await loadPlaylistItems(selectedPlaylist.id)
-    } catch {
-      Alert.alert('Error', 'Failed to reorder')
-    }
+  if (index >= playlistItems.length - 1 || !selectedPlaylist) return
+  try {
+    const cur = playlistItems[index]
+    const next = playlistItems[index + 1]
+    await updatePlaylistItemPosition(cur.id, next.position)
+    await updatePlaylistItemPosition(next.id, cur.position)   // ← also move next up
+    await loadPlaylistItems(selectedPlaylist.id)
+  } catch {
+    Alert.alert('Error', 'Failed to reorder')
   }
+}
 
   const visibleArtists = artists.filter(a => (artistItems[a.id] || []).length > 0)
   const normalizedSearch = searchText.trim().toLowerCase()
@@ -661,7 +662,8 @@ export default function ChordListsHomeScreen({ navigation }: Props) {
                                       synced: false,
                                       userId,
                                     })
-                                    await loadPlaylistItems(selectedPlaylist.id)
+                                    const pid = selectedPlaylist.id
+                                    await loadPlaylistItems(pid)
                                     Alert.alert('Added', `"${item.title}" added to playlist`)
                                   } catch {
                                     Alert.alert('Error', 'Failed to add song')

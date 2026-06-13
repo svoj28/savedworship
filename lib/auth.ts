@@ -225,9 +225,16 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     const { data, error } = await supabase.auth.getSession()
 
     if (error || !data.session?.user) {
+      // Session check failed/empty — this can happen offline when a token
+      // refresh fails even though the user is still legitimately signed in.
+      // Prefer the cached user over kicking them to the sign-in screen.
+      const cached = await getCachedUser()
+      if (cached) return cached
+
       if (!(await isOnline())) {
-        return (await getCachedUser()) ?? createOfflineGuestUser()
+        return createOfflineGuestUser()
       }
+
       await clearCachedUser()
       return null
     }
@@ -239,13 +246,12 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     }
 
     await cacheUser(currentUser)
-
     return currentUser
   } catch (err) {
     console.error('Error getting current user:', err)
-    if (!(await isOnline())) {
-      return (await getCachedUser()) ?? createOfflineGuestUser()
-    }
+    const cached = await getCachedUser()
+    if (cached) return cached
+    if (!(await isOnline())) return createOfflineGuestUser()
     return null
   }
 }
@@ -277,17 +283,22 @@ export function onAuthStateChange(
       }
       await cacheUser(authUser)
       callback(authUser)
-    } else {
-      if (await isOnline()) {
-        await clearCachedUser()
-        callback(null)
-        return
-      }
-      callback((await getCachedUser()) ?? createOfflineGuestUser())
+      return
     }
+
+    // No session — only clear the cache on an EXPLICIT sign-out.
+    // A null session from a failed offline token refresh (event is usually
+    // 'INITIAL_SESSION' or 'TOKEN_REFRESHED' in that case) should not log
+    // the user out; fall back to whatever we have cached.
+    if (event === 'SIGNED_OUT') {
+      await clearCachedUser()
+      callback(null)
+      return
+    }
+
+    callback((await getCachedUser()) ?? createOfflineGuestUser())
   })
 
-  // Return unsubscribe function
   return () => {
     if (data?.subscription) {
       data.subscription.unsubscribe()

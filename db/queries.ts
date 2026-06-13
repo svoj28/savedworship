@@ -265,12 +265,38 @@ export async function getLineupsByUserId(userId: string): Promise<Lineup[]> {
 }
 
 export async function getAllLineups(): Promise<Lineup[]> {
-  const { data } = await supabase.from('lineups').select('*').order('created_at', { ascending: false })
-  if (data && data.length > 0) return data.map(mapLineup)
+  if (await isOnline()) {
+    try {
+      const { data, error } = await supabase
+        .from('lineups')
+        .select('*')
+        .order('created_at', { ascending: false })
+      if (!error && data && data.length > 0) return data.map(mapLineup)
+    } catch (err) {
+      console.warn('[getAllLineups] Supabase fetch failed, using local cache:', err)
+    }
+  }
 
   const results = await query('SELECT * FROM lineups ORDER BY created_at DESC')
   return results.map(mapLineup)
 }
+
+// export async function getAllLineupItems(): Promise<LineupItem[]> {
+//   if (await isOnline()) {
+//     try {
+//       const { data, error } = await supabase
+//         .from('lineup_items')
+//         .select('*')
+//         .order('position', { ascending: true })
+//       if (!error && data && data.length > 0) return data.map(mapLineupItem)
+//     } catch (err) {
+//       console.warn('[getAllLineupItems] Supabase fetch failed, using local cache:', err)
+//     }
+//   }
+
+//   const results = await query('SELECT * FROM lineup_items ORDER BY position ASC')
+//   return results.map(mapLineupItem)
+// }
 
 // ─── LINEUP ITEMS ────────────────────────────────────────────────────────────
 export async function createLineupItem(data: Omit<LineupItem, 'id'>): Promise<LineupItem> {
@@ -307,8 +333,17 @@ export async function getLineupItemsByLineupId(lineupId: string): Promise<Lineup
 }
 
 export async function getAllLineupItems(): Promise<LineupItem[]> {
-  const { data } = await supabase.from('lineup_items').select('*').order('position', { ascending: true })
-  if (data && data.length > 0) return data.map(mapLineupItem)
+  if (await isOnline()) {
+    try {
+      const { data, error } = await supabase
+        .from('lineup_items')
+        .select('*')
+        .order('position', { ascending: true })
+      if (!error && data && data.length > 0) return data.map(mapLineupItem)
+    } catch (err) {
+      console.warn('[getAllLineupItems] Supabase fetch failed, using local cache:', err)
+    }
+  }
 
   const results = await query('SELECT * FROM lineup_items ORDER BY position ASC')
   return results.map(mapLineupItem)
@@ -330,13 +365,42 @@ export async function deleteLineupItem(id: string): Promise<void> {
 }
 
 export async function updateLineup(id: string, data: Partial<Lineup>): Promise<void> {
-  const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'synced', 'createdAt'].includes(key))
+  const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'synced', 'createdAt', 'items'].includes(key))
   const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
   const values = filtered.map(([, val]) => val)
   if (!updates) return
-  await execute(`UPDATE lineups SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
-  const updated = await getLineupById(id)
-  if (updated) void syncRowToSupabase('lineups', updated).catch(err => console.warn('Background sync failed for lineups:', err))
+
+  // Build Supabase payload
+  const payload: any = {}
+  for (const [k, v] of filtered) payload[camelToSnake(k)] = v
+
+  try {
+    const { data: supData, error } = await supabase
+      .from('lineups')
+      .update(payload)
+      .eq('id', id)
+      .select()
+    if (error) throw error
+
+    const row = Array.isArray(supData) ? supData[0] : supData
+    if (row) {
+      await execute(
+        'UPDATE lineups SET title = ?, description = ?, updated_at = ?, _synced = 1 WHERE id = ?',
+        [row.title, row.description || '', Date.now(), id]
+      )
+    }
+    return
+  } catch (err) {
+    // Offline fallback
+    await execute(
+      `UPDATE lineups SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`,
+      [...values, Date.now(), id]
+    )
+    const updated = await getLineupById(id)
+    if (updated) void syncRowToSupabase('lineups', updated).catch(err =>
+      console.warn('Background sync failed for lineups:', err)
+    )
+  }
 }
 
 export async function deleteLineup(id: string): Promise<void> {
@@ -367,7 +431,7 @@ export async function editMessage(id: string, newText: string): Promise<void> {
     'UPDATE messages SET text = ?, updated_at = ?, edited_at = ?, _synced = 0 WHERE id = ?',
     [newText, editedAt, editedAt, id]
   )
-  const updated = await queryOne('SELECT * FROM messages WHERE id = ?', [id])
+  const updated = await queryOne('SELECT * FROM messages WHERE id = ?', [id]) as any
   if (updated) {
     await syncRowToSupabase('messages', {
       ...mapMessage(updated),
@@ -381,7 +445,7 @@ export async function deleteMessage(id: string): Promise<void> {
     'UPDATE messages SET is_deleted = 1, updated_at = ?, _synced = 0 WHERE id = ?',
     [Date.now(), id]
   )
-  const updated = await queryOne('SELECT * FROM messages WHERE id = ?', [id])
+  const updated = await queryOne('SELECT * FROM messages WHERE id = ?', [id]) as any
   if (updated) {
     await syncRowToSupabase('messages', {
       ...mapMessage(updated),
@@ -750,22 +814,34 @@ export async function deletePlaylist(id: string): Promise<void> {
 export async function addToPlaylist(data: Omit<PlaylistItem, 'id'>): Promise<PlaylistItem> {
   const id = uuid.v4() as string
   const item = { id, ...data }
-  await execute(
+   await execute(
     'INSERT INTO playlist_items (id, playlist_id, user_id, chord_list_id, song_id, position, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [item.id, item.playlistId, item.userId || '', item.chordListId || null, item.songId || null, item.position, item.createdAt, item.createdAt, 0]
+    [item.id, item.playlistId, item.userId || '', item.chordListId || null, item.songId || null, item.position, item.createdAt, Date.now(), 0]
   )
   await syncRowToSupabase('playlist_items', item)
   return item
 }
 
 export async function getPlaylistItems(playlistId: string): Promise<PlaylistItem[]> {
+  // Always read from local DB first — addToPlaylist writes locally then syncs async,
+  // so Supabase may not have the new row yet when we immediately reload.
+  const localResults = await query(
+    'SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC',
+    [playlistId]
+  )
+  if (localResults && localResults.length > 0) return localResults.map(mapPlaylistItem)
+
+  // Fallback: if local is empty (e.g. fresh install), try Supabase
   if (await isOnline()) {
-    const { data } = await supabase.from('playlist_items').select('*').eq('playlist_id', playlistId).order('position', { ascending: true })
+    const { data } = await supabase
+      .from('playlist_items')
+      .select('*')
+      .eq('playlist_id', playlistId)
+      .order('position', { ascending: true })
     if (data && data.length > 0) return data.map(mapPlaylistItem)
   }
 
-  const results = await query('SELECT * FROM playlist_items WHERE playlist_id = ? ORDER BY position ASC', [playlistId])
-  return results.map(mapPlaylistItem)
+  return []
 }
 
 export async function removeFromPlaylist(id: string): Promise<void> {

@@ -140,7 +140,7 @@ function extractChordsOnlyFromContent(content: string): string {
     const matches = [...line.matchAll(/\[([^\]]+)\]/g)]
     if (matches.length > 0) {
       // Only emit the chord names, no surrounding lyric text
-      chordLines.push(matches.map(m => m[1]).join('  '))
+      chordLines.push(matches.map(m => m[1].replace(/\/[A-G][#b]?$/, '')).join('  '))
     }
     // Lines with no [chord] tokens are silently dropped
   }
@@ -174,10 +174,16 @@ function renderSongLines(content: string, mode: ViewMode) {
     if (mode === 'lyrics') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '').trim()
     } else if (mode === 'chords') {
-      const matches = [...rawLine.matchAll(/\[([^\]]+)\]/g)]
-      if (matches.length === 0) continue
-      lineToRender = matches.map(match => match[1]).join('  ')
-    } else if (mode === 'both') {
+  if (!/\[[^\]]+\]/.test(rawLine)) continue
+  // Extract chord tokens and preserve slash between adjacent [X]/[Y] patterns
+  lineToRender = rawLine
+    .replace(/\[([^\]]+)\]\s*\/\s*\[([^\]]+)\]/g, '$1/$2') // [D]/[F#] → D/F#
+    .replace(/\[([^\]]+)\]/g, '$1')                          // remaining [X] → X
+    .replace(/[^A-G#b/\d°ø+\s]/g, '')                       // strip lyric chars
+    .replace(/\s+/g, '  ')
+    .trim()
+  if (!lineToRender) continue
+}else if (mode === 'both') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '$1').trim()
     }
 

@@ -11,6 +11,9 @@ import {
   ActivityIndicator,
   Pressable,
   RefreshControl,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { WebView } from 'react-native-webview'
@@ -445,60 +448,61 @@ export default function CalendarScreen() {
   }
 
   const handleSubmit = async () => {
-    if (!canManageCalendar) {
-      Alert.alert('Access denied', 'Only managers can change the team calendar.')
-      return
-    }
-
-    if (!formData.eventDate.trim()) {
-      Alert.alert('Notice', 'Please enter a date.')
-      return
-    }
-
-    if (!formData.title.trim()) {
-      Alert.alert('Notice', 'Please enter a schedule title.')
-      return
-    }
-
-    const assignments = normalizeAssignments(formData.assignments)
-    const now = Date.now()
-    const payload = {
-      eventDate: formData.eventDate.trim(),
-      title: formData.title.trim(),
-      assignments,
-      notes: formData.notes,
-      userId,
-      createdAt: now,
-      updatedAt: now,
-      synced: false,
-    }
-
-    setSaving(true)
-    try {
-      if (editingId) {
-        await updateCalendarEvent(editingId, {
-          eventDate: payload.eventDate,
-          title: payload.title,
-          assignments: payload.assignments,
-          notes: payload.notes,
-          updatedAt: now,
-        })
-      } else {
-        await createCalendarEvent(payload)
-      }
-      await loadEvents()
-      setSelectedDate(payload.eventDate)
-      setMonthDate(parseDateKey(payload.eventDate))
-      setShowForm(false)
-      setEditingId(null)
-      setFormData({ eventDate: selectedDate, title: '', notes: '', assignments: [blankAssignment()] })
-    } catch (err) {
-      console.error('Failed to save calendar event:', err)
-      Alert.alert('Error', 'Failed to save the schedule item.')
-    } finally {
-      setSaving(false)
-    }
+  if (!canManageCalendar) {
+    Alert.alert('Access denied', 'Only managers can change the team calendar.')
+    return
   }
+
+  if (!formData.eventDate.trim()) {
+    Alert.alert('Notice', 'Please enter a date.')
+    return
+  }
+
+  if (!formData.title.trim()) {
+    Alert.alert('Notice', 'Please enter a schedule title.')
+    return
+  }
+
+  const assignments = normalizeAssignments(formData.assignments)
+  const now = Date.now()
+  const payload = {
+    eventDate: formData.eventDate.trim(),
+    title: formData.title.trim(),
+    assignments,
+    notes: formData.notes,
+    userId,
+    createdAt: now,
+    updatedAt: now,
+    synced: false,
+  }
+
+  Keyboard.dismiss()
+  setSaving(true)
+  try {
+    if (editingId) {
+      await updateCalendarEvent(editingId, {
+        eventDate: payload.eventDate,
+        title: payload.title,
+        assignments: payload.assignments,
+        notes: payload.notes,
+        updatedAt: now,
+      })
+    } else {
+      await createCalendarEvent(payload)
+    }
+    await loadEvents()
+    setSelectedDate(payload.eventDate)
+    setMonthDate(parseDateKey(payload.eventDate))
+    setShowForm(false)
+    setEditingId(null)
+    setFormData({ eventDate: selectedDate, title: '', notes: '', assignments: [blankAssignment()] })
+  } catch (err) {
+    console.error('Failed to save calendar event:', err)
+    Alert.alert('Error', 'Failed to save the schedule item.')
+  } finally {
+    setSaving(false)
+  }
+}
 
   const confirmDelete = (event: CalendarEvent) => {
     if (!canManageCalendar) {
@@ -703,141 +707,158 @@ export default function CalendarScreen() {
         </TouchableOpacity>
       )}
 
-      <Modal visible={showForm} transparent animationType="slide" onRequestClose={() => setShowForm(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.formSheet}>
-            <View style={[styles.formHeader, { paddingTop: Math.max(14, insets.top + 8) }]}>
-              <TouchableOpacity onPress={() => setShowForm(false)}>
-                <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <Text style={styles.formTitle}>{editingId ? 'Edit Schedule' : 'New Schedule'}</Text>
-              <TouchableOpacity onPress={handleSubmit} disabled={saving}>
-                {saving ? <ActivityIndicator size="small" color="#111" /> : <Text style={styles.saveText}>Save</Text>}
+      <Modal
+  visible={showForm}
+  transparent
+  animationType="slide"
+  onRequestClose={() => {
+    Keyboard.dismiss()
+    setTimeout(() => setShowForm(false), Platform.OS === 'android' ? 150 : 50)
+  }}
+>
+  <KeyboardAvoidingView
+    style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }}
+    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    keyboardVerticalOffset={0}
+  >
+    <View style={styles.modalOverlay}>
+      <View style={[styles.formSheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <View style={[styles.formHeader, { paddingTop: Math.max(14, insets.top + 8) }]}>
+          <TouchableOpacity onPress={() => {
+            Keyboard.dismiss()
+            setTimeout(() => setShowForm(false), Platform.OS === 'android' ? 150 : 50)
+          }}>
+            <Text style={styles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+          <Text style={styles.formTitle}>{editingId ? 'Edit Schedule' : 'New Schedule'}</Text>
+          <TouchableOpacity onPress={handleSubmit} disabled={saving}>
+            {saving ? <ActivityIndicator size="small" color="#111" /> : <Text style={styles.saveText}>Save</Text>}
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView
+          style={styles.formBody}
+          contentContainerStyle={styles.formContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="always"
+        >
+          <Text style={styles.fieldLabel}>DATE</Text>
+          <TextInput
+            style={styles.textInput}
+            placeholder="YYYY-MM-DD"
+            value={formData.eventDate}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, eventDate: text }))}
+            placeholderTextColor="#BDBDBD"
+          />
+
+          <Text style={[styles.fieldLabel, { marginTop: 18 }]}>TITLE</Text>
+          <TextInput
+            style={styles.textInput}
+            placeholder="Sunday Worship Service"
+            value={formData.title}
+            onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
+            placeholderTextColor="#BDBDBD"
+          />
+
+          <View style={styles.assignmentSection}>
+            <View style={styles.assignmentSectionHeader}>
+              <Text style={styles.fieldLabel}>ROLES</Text>
+              <TouchableOpacity
+                style={styles.smallGhostBtn}
+                onPress={() => setFormData(prev => ({ ...prev, assignments: [...prev.assignments, blankAssignment()] }))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="add" size={14} color="#111" />
+                <Text style={styles.smallGhostText}>Add Role</Text>
               </TouchableOpacity>
             </View>
 
-            <ScrollView
-              style={styles.formBody}
-              contentContainerStyle={styles.formContent}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="always"
-            >
-              <Text style={styles.fieldLabel}>DATE</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="YYYY-MM-DD"
-                value={formData.eventDate}
-                onChangeText={(text) => setFormData(prev => ({ ...prev, eventDate: text }))}
-                placeholderTextColor="#BDBDBD"
-              />
-
-              <Text style={[styles.fieldLabel, { marginTop: 18 }]}>TITLE</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Sunday Worship Service"
-                value={formData.title}
-                onChangeText={(text) => setFormData(prev => ({ ...prev, title: text }))}
-                placeholderTextColor="#BDBDBD"
-              />
-
-              <View style={styles.assignmentSection}>
-                <View style={styles.assignmentSectionHeader}>
-                  <Text style={styles.fieldLabel}>ROLES</Text>
-                  <TouchableOpacity
-                    style={styles.smallGhostBtn}
-                    onPress={() => setFormData(prev => ({ ...prev, assignments: [...prev.assignments, blankAssignment()] }))}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="add" size={14} color="#111" />
-                    <Text style={styles.smallGhostText}>Add Role</Text>
-                  </TouchableOpacity>
+            {formData.assignments.map((assignment, index) => (
+              <View key={index} style={styles.assignmentEditorCard}>
+                <View style={styles.assignmentEditorTopRow}>
+                  <Text style={styles.assignmentEditorIndex}>#{index + 1}</Text>
+                  {formData.assignments.length > 1 && (
+                    <TouchableOpacity
+                      onPress={() => setFormData(prev => ({ ...prev, assignments: prev.assignments.filter((_, idx) => idx !== index) }))}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={styles.removeRoleText}>Remove</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
-                {formData.assignments.map((assignment, index) => (
-                  <View key={index} style={styles.assignmentEditorCard}>
-                    <View style={styles.assignmentEditorTopRow}>
-                      <Text style={styles.assignmentEditorIndex}>#{index + 1}</Text>
-                      {formData.assignments.length > 1 && (
-                        <TouchableOpacity
-                          onPress={() => setFormData(prev => ({ ...prev, assignments: prev.assignments.filter((_, idx) => idx !== index) }))}
-                          activeOpacity={0.75}
-                        >
-                          <Text style={styles.removeRoleText}>Remove</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    <View style={styles.presetRow}>
-                      {DEFAULT_ROLES.map(roleLabel => (
-                        <TouchableOpacity
-                          key={roleLabel}
-                          style={styles.presetChip}
-                          onPress={() => setFormData(prev => {
-                            const next = [...prev.assignments]
-                            next[index] = { ...next[index], role: roleLabel }
-                            return { ...prev, assignments: next }
-                          })}
-                          activeOpacity={0.75}
-                        >
-                          <Text style={styles.presetChipText}>{roleLabel}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-
-                    <TextInput
-                      style={[styles.textInput, styles.assignmentInput]}
-                      placeholder="Role"
-                      value={assignment.role}
-                      onChangeText={(text) => setFormData(prev => {
+                <View style={styles.presetRow}>
+                  {DEFAULT_ROLES.map(roleLabel => (
+                    <TouchableOpacity
+                      key={roleLabel}
+                      style={styles.presetChip}
+                      onPress={() => setFormData(prev => {
                         const next = [...prev.assignments]
-                        next[index] = { ...next[index], role: text }
+                        next[index] = { ...next[index], role: roleLabel }
                         return { ...prev, assignments: next }
                       })}
-                      placeholderTextColor="#BDBDBD"
-                    />
+                      activeOpacity={0.75}
+                    >
+                      <Text style={styles.presetChipText}>{roleLabel}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
-                    <TextInput
-                      style={[styles.textInput, styles.assignmentInput]}
-                      placeholder="Person"
-                      value={assignment.person}
-                      onChangeText={(text) => setFormData(prev => {
-                        const next = [...prev.assignments]
-                        next[index] = { ...next[index], person: text }
-                        return { ...prev, assignments: next }
-                      })}
-                      placeholderTextColor="#BDBDBD"
-                    />
+                <TextInput
+                  style={[styles.textInput, styles.assignmentInput]}
+                  placeholder="Role"
+                  value={assignment.role}
+                  onChangeText={(text) => setFormData(prev => {
+                    const next = [...prev.assignments]
+                    next[index] = { ...next[index], role: text }
+                    return { ...prev, assignments: next }
+                  })}
+                  placeholderTextColor="#BDBDBD"
+                />
 
-                    <TextInput
-                      style={[styles.textInput, styles.assignmentInput]}
-                      placeholder="Note (optional)"
-                      value={assignment.note || ''}
-                      onChangeText={(text) => setFormData(prev => {
-                        const next = [...prev.assignments]
-                        next[index] = { ...next[index], note: text }
-                        return { ...prev, assignments: next }
-                      })}
-                      placeholderTextColor="#BDBDBD"
-                    />
-                  </View>
-                ))}
+                <TextInput
+                  style={[styles.textInput, styles.assignmentInput]}
+                  placeholder="Person"
+                  value={assignment.person}
+                  onChangeText={(text) => setFormData(prev => {
+                    const next = [...prev.assignments]
+                    next[index] = { ...next[index], person: text }
+                    return { ...prev, assignments: next }
+                  })}
+                  placeholderTextColor="#BDBDBD"
+                />
+
+                <TextInput
+                  style={[styles.textInput, styles.assignmentInput]}
+                  placeholder="Note (optional)"
+                  value={assignment.note || ''}
+                  onChangeText={(text) => setFormData(prev => {
+                    const next = [...prev.assignments]
+                    next[index] = { ...next[index], note: text }
+                    return { ...prev, assignments: next }
+                  })}
+                  placeholderTextColor="#BDBDBD"
+                />
               </View>
-
-              <RichTextField
-                label="NOTES"
-                placeholder="Add rehearsal notes or service details..."
-                value={formData.notes}
-                onChange={(text) => setFormData(prev => ({ ...prev, notes: text }))}
-                height={240}
-              />
-
-              <Text style={styles.helperText}>
-                Tip: select text in the notes field, then tap B, I, or U for bold, italic, or underline.
-              </Text>
-            </ScrollView>
+            ))}
           </View>
-        </View>
-      </Modal>
+
+          <RichTextField
+            label="NOTES"
+            placeholder="Add rehearsal notes or service details..."
+            value={formData.notes}
+            onChange={(text) => setFormData(prev => ({ ...prev, notes: text }))}
+            height={240}
+          />
+
+          <Text style={styles.helperText}>
+            Tip: select text in the notes field, then tap B, I, or U for bold, italic, or underline.
+          </Text>
+        </ScrollView>
+      </View>
+    </View>
+  </KeyboardAvoidingView>
+</Modal>
 
       <Modal visible={selectedEvent !== null} transparent animationType="fade" onRequestClose={() => setSelectedEvent(null)}>
         <View style={styles.detailOverlay}>

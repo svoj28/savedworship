@@ -15,6 +15,7 @@ import { ScrollView as HorizontalScroll } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import { Picker } from '@react-native-picker/picker'
 import { getAllKeys, getTransposeDistance, transposeText, hasNashville, transposeTextToNashville } from '../lib/transpose'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
 
@@ -127,10 +128,16 @@ function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both') {
     if (mode === 'lyrics') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '').trim()
     } else if (mode === 'chords') {
-      const matches = [...rawLine.matchAll(/\[([^\]]+)\]/g)]
-      if (matches.length === 0) continue
-      lineToRender = matches.map(match => match[1]).join('  ')
-    } else if (mode === 'both') {
+  if (!/\[[^\]]+\]/.test(rawLine)) continue
+  // Extract chord tokens and preserve slash between adjacent [X]/[Y] patterns
+  lineToRender = rawLine
+    .replace(/\[([^\]]+)\]\s*\/\s*\[([^\]]+)\]/g, '$1/$2') // [D]/[F#] → D/F#
+    .replace(/\[([^\]]+)\]/g, '$1')                          // remaining [X] → X
+    .replace(/[^A-G#b/\d°ø+\s]/g, '')                       // strip lyric chars
+    .replace(/\s+/g, '  ')
+    .trim()
+  if (!lineToRender) continue
+} else if (mode === 'both') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '$1').trim()
     }
 
@@ -359,7 +366,8 @@ interface SongViewerProps {
 export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }: SongViewerProps) {
   const scrollRef = useRef<any>(null)
   const [currentIndex, setCurrentIndex]     = useState(0)
-  const [transposeKeys, setTransposeKeys]   = useState<string[]>([])
+  const [transposeKeys, setTransposeKeys] = useState<string[]>([])
+  const transposeStorageKey = `transpose_keys_${songs.map(s => s.id).join('_')}`
   const [notationMode, setNotationMode]     = useState<'chords' | 'nashville'>('chords')
   const [viewMode, setViewMode]             = useState<'lyrics' | 'chords' | 'both'>('both')
   const [fontSize, setFontSize]             = useState(15)
@@ -373,17 +381,34 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   currentIndexRef.current = currentIndex
 
   useEffect(() => {
-    if (visible && songs.length > 0) {
+  if (!visible || songs.length === 0) return
+
+  const init = async () => {
+    // Load persisted keys first
+    try {
+      const stored = await AsyncStorage.getItem(`transpose_keys`)
+      if (stored) {
+        const parsed: Record<string, string> = JSON.parse(stored)
+        // Map each song to its stored key, fallback to song's original key
+        setTransposeKeys(songs.map(s => parsed[s.id] ?? getEffectiveSongKey(s)))
+      } else {
+        setTransposeKeys(songs.map(getEffectiveSongKey))
+      }
+    } catch {
       setTransposeKeys(songs.map(getEffectiveSongKey))
-      setCurrentIndex(startIndex)
-      setNotationMode('chords')
-      setViewMode('both')
-      setIsAutoScrolling(false)
-      setTimeout(() => {
-        scrollRef.current?.scrollTo({ x: startIndex * SCREEN_WIDTH, animated: false })
-      }, 50)
     }
-  }, [visible, songs, startIndex])
+
+    setCurrentIndex(startIndex)
+    setNotationMode('chords')
+    setViewMode('both')
+    setIsAutoScrolling(false)
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ x: startIndex * SCREEN_WIDTH, animated: false })
+    }, 50)
+  }
+
+  void init()
+}, [visible, songs, startIndex])
 
   // Stop auto-scroll on song/mode change
   useEffect(() => { setIsAutoScrolling(false) }, [currentIndex, viewMode, notationMode])
@@ -396,9 +421,26 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
     }
   }
 
-  const updateTransposeKey = (index: number, key: string) => {
-    setTransposeKeys(prev => { const next = [...prev]; next[index] = key; return next })
+  const updateTransposeKey = async (index: number, key: string) => {
+  const song = songs[index]
+  if (!song) return
+
+  setTransposeKeys(prev => {
+    const next = [...prev]
+    next[index] = key
+    return next
+  })
+
+  // Persist: merge with existing stored keys
+  try {
+    const stored = await AsyncStorage.getItem(`transpose_keys`)
+    const parsed: Record<string, string> = stored ? JSON.parse(stored) : {}
+    parsed[song.id] = key
+    await AsyncStorage.setItem(`transpose_keys`, JSON.stringify(parsed))
+  } catch (err) {
+    console.error('Failed to persist transpose key', err)
   }
+}
 
   const toggleAutoScroll = () => {
     const next = !isAutoScrolling

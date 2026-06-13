@@ -22,6 +22,7 @@
       "bundleIdentifier": "com.svojworship.savedworship"
     },
     "android": {
+      "softwareKeyboardLayoutMode": "pan",
       "adaptiveIcon": {
         "foregroundImage": "./assets/SWLOGO.png",
         "backgroundColor": "#ffffff",

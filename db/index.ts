@@ -51,6 +51,16 @@ export async function initializeDatabase() {
         youtube_url TEXT
       );
         
+      CREATE TABLE IF NOT EXISTS important_messages (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        content TEXT,
+        user_id TEXT,
+        created_at INTEGER,
+        updated_at INTEGER,
+        deleted_at INTEGER,
+        _synced INTEGER DEFAULT 0
+      );
       
       CREATE TABLE IF NOT EXISTS lineups (
         id TEXT PRIMARY KEY,

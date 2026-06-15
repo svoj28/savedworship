@@ -148,7 +148,7 @@ function extractChordsOnlyFromContent(content: string): string {
   return chordLines.join('\n')
 }
 
-function renderSongLines(content: string, mode: ViewMode) {
+function renderSongLines(content: string, mode: ViewMode, fontSize: number) {
   const lines = content.split(/\r?\n/)
   const rendered: React.ReactNode[] = []
 
@@ -164,7 +164,12 @@ function renderSongLines(content: string, mode: ViewMode) {
     if (isSectionHeaderLine(trimmed)) {
       rendered.push(
         <View key={`section-${index}`} style={styles.lineWrap}>
-          <Text style={styles.sectionLine}>{trimmed}</Text>
+          <Text
+            numberOfLines={1}
+            style={[styles.sectionLine, { fontSize: fontSize + 1, lineHeight: (fontSize + 1) * 2.1 }]}
+          >
+            {trimmed}
+          </Text>
         </View>
       )
       continue
@@ -174,23 +179,27 @@ function renderSongLines(content: string, mode: ViewMode) {
     if (mode === 'lyrics') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '').trim()
     } else if (mode === 'chords') {
-  if (!/\[[^\]]+\]/.test(rawLine)) continue
-  // Extract chord tokens and preserve slash between adjacent [X]/[Y] patterns
-  lineToRender = rawLine
-    .replace(/\[([^\]]+)\]\s*\/\s*\[([^\]]+)\]/g, '$1/$2') // [D]/[F#] → D/F#
-    .replace(/\[([^\]]+)\]/g, '$1')                          // remaining [X] → X
-    .replace(/[^A-G#b/\d°ø+\s]/g, '')                       // strip lyric chars
-    .replace(/\s+/g, '  ')
-    .trim()
-  if (!lineToRender) continue
-}else if (mode === 'both') {
+      if (!/\[[^\]]+\]/.test(rawLine)) continue
+      lineToRender = rawLine
+        .replace(/\[([^\]]+)\]\s*\/\s*\[([^\]]+)\]/g, '$1/$2')
+        .replace(/\[([^\]]+)\]/g, '$1')
+        .replace(/[^A-G#b/\d°ø+\s]/g, '')
+        .replace(/\s+/g, '  ')
+        .trim()
+      if (!lineToRender) continue
+    } else if (mode === 'both') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '$1').trim()
     }
 
     if (lineToRender.trim()) {
       rendered.push(
         <View key={`line-${index}`} style={styles.lineWrap}>
-          <Text style={styles.contentLine}>{lineToRender}</Text>
+          <Text
+            numberOfLines={1}
+            style={[styles.contentLine, { fontSize, lineHeight: fontSize * 2 }]}
+          >
+            {lineToRender}
+          </Text>
         </View>
       )
     }
@@ -209,9 +218,12 @@ interface BrowseItem {
 }
 
 const SCROLL_SPEEDS = [
-  { label: 'Slow', value: 20 },
-  { label: 'Med',  value: 45 },
-  { label: 'Fast', value: 80 },
+  { label: '0.5×', value: 10 },
+  { label: '1×',   value: 20 },
+  { label: '1.5×', value: 32 },
+  { label: '2×',   value: 45 },
+  { label: '3×',   value: 70 },
+  { label: '4×',   value: 100 },
 ]
 
 export default function ChordListScreen({ route, navigation }: Props) {
@@ -235,6 +247,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const [activeSongTab, setActiveSongTab]       = useState<SongTab>('sheet')
   const [showOptionsModal, setShowOptionsModal] = useState(false)
   const hasLoadedOnceRef = useRef(false)
+  const [fontSize, setFontSize] = useState(16)
 
   const contentScrollRef      = useRef<ScrollView | null>(null)
 
@@ -245,6 +258,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
   const contentHeightRef    = useRef(0)
   const scrollViewHeightRef = useRef(0)
   const scrollFadeAnim      = useRef(new Animated.Value(0)).current
+  const isTouchingRef = useRef(false)
 
   // Keep a ref to the latest browseItems/currentItemIndex for use inside interval
   const browseItemsRef      = useRef<BrowseItem[]>([])
@@ -293,6 +307,7 @@ export default function ChordListScreen({ route, navigation }: Props) {
     const interval = 16
     const pixelsPerTick = (speed * interval) / 1000
     autoScrollRef.current = setInterval(() => {
+      if (isTouchingRef.current) return
       const maxScroll = contentHeightRef.current - scrollViewHeightRef.current
       if (scrollYRef.current >= maxScroll - 1) {
         // ── AUTO-ADVANCE to next song when scroll reaches bottom ──
@@ -907,6 +922,30 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
                   ))}
                 </View>
               </View>
+                  
+{/* Text size / zoom
+                  <View style={styles.notationRow}>
+                    <Text style={styles.notationLabel}>Text Size</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <TouchableOpacity
+                        style={styles.scrollIconBtn}
+                        onPress={() => setFontSize(f => Math.max(11, f - 1))}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={{ fontWeight: '800', color: '#0A0A0A' }}>A−</Text>
+                      </TouchableOpacity>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#888', minWidth: 24, textAlign: 'center' }}>
+                        {fontSize}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.scrollIconBtn}
+                        onPress={() => setFontSize(f => Math.min(28, f + 1))}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={{ fontWeight: '800', color: '#0A0A0A', fontSize: 15 }}>A+</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View> */}
 
               {/* Transpose chip + scroll button row — below the pills */}
               <View style={styles.notationControlsRow}>
@@ -1000,16 +1039,19 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
           {/* Content Area */}
           <View style={{ flex: 1 }}>
             <ScrollView
-              ref={contentScrollRef}
-              style={styles.contentArea}
-              contentContainerStyle={styles.contentInner}
-              showsVerticalScrollIndicator={false}
-              scrollEventThrottle={16}
-              onScroll={handleContentScroll}
-              onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
-              onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
-              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            >
+  ref={contentScrollRef}
+  style={styles.contentArea}
+  contentContainerStyle={styles.contentInner}
+  showsVerticalScrollIndicator={false}
+  scrollEventThrottle={16}
+  onScroll={handleContentScroll}
+  onScrollBeginDrag={() => { isTouchingRef.current = true }}
+  onScrollEndDrag={(e) => { isTouchingRef.current = false; scrollYRef.current = e.nativeEvent.contentOffset.y }}
+  onMomentumScrollEnd={(e) => { isTouchingRef.current = false; scrollYRef.current = e.nativeEvent.contentOffset.y }}
+  onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
+  onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
+  refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+>
               {/* {selectedSong && (
                 <View style={styles.songHeader}>
                   <Text style={styles.songTitle}>{selectedSong.title}</Text>
@@ -1026,8 +1068,16 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
                       <View style={styles.sectionBadge}>
                         <Text style={styles.sectionBadgeText}>{section.label}</Text>
                       </View>
-                      <View style={styles.sectionContentBlock}>
-                        {renderSongLines(section.content, viewMode)}
+                     <View style={styles.sectionContentBlock}>
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator
+                          contentContainerStyle={styles.hScrollContent}
+                        >
+                          <View style={styles.linesColumn}>
+                            {renderSongLines(section.content, viewMode, fontSize)}
+                          </View>
+                        </ScrollView>
                       </View>
                     </View>
                   ))}
@@ -1067,6 +1117,30 @@ const loadChordList = async ({ silent = false }: { silent?: boolean } = {}) => {
                 <Text style={styles.modalDone}>Done</Text>
               </TouchableOpacity>
             </View>
+
+            {/* Text size / zoom */}
+                  <View style={styles.notationRow}>
+                    <Text style={styles.notationLabel}>Text Size</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <TouchableOpacity
+                        style={styles.scrollIconBtn}
+                        onPress={() => setFontSize(f => Math.max(11, f - 1))}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={{ fontWeight: '800', color: '#0A0A0A' }}>A−</Text>
+                      </TouchableOpacity>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#888', minWidth: 24, textAlign: 'center' }}>
+                        {fontSize}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.scrollIconBtn}
+                        onPress={() => setFontSize(f => Math.min(28, f + 1))}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={{ fontWeight: '800', color: '#0A0A0A', fontSize: 15 }}>A+</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScrollBody}>
               <View style={{ paddingVertical: 8, paddingHorizontal: 4 }}>
@@ -1450,6 +1524,8 @@ const styles = StyleSheet.create({
   sectionBadge: { alignSelf: 'flex-start', backgroundColor: '#F2F2F2', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: '#E8E8E8' },
   sectionBadgeText: { fontSize: 11, fontWeight: '800', color: '#0A0A0A', letterSpacing: 0.4 },
   sectionContentBlock: { gap: 0 },
+  hScrollContent: { flexGrow: 1 },
+  linesColumn: { alignItems: 'flex-start' },
   emptySongState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 42, gap: 8 },
   emptySongTitle: { fontSize: 15, fontWeight: '800', color: '#0A0A0A' },
   emptySongSubtitle: { fontSize: 12, color: '#A8A8A8', textAlign: 'center', lineHeight: 18 },

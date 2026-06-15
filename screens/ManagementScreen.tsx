@@ -30,9 +30,13 @@ import {
   deleteFileDropper,
   deleteAnnouncement,
   deleteVersionDropper,
+  getAllImportantMessages,
+  createImportantMessage,
+  updateImportantMessage,
+  deleteImportantMessage,
 } from '../db/queries'
 import YoutubePlayer from 'react-native-youtube-iframe'
-import { FileDropper, ImportantAnnouncement, VersionDropper } from '../db/models'
+import { FileDropper, ImportantAnnouncement, VersionDropper, ImportantMessage } from '../db/models'
 import { useRole } from '../lib/useRole'
 import { notifyManagementChangeToAllUsers } from '../lib/notifications'
 import { onTableChange } from '../lib/sync'
@@ -61,10 +65,9 @@ interface SectionConfig {
 }
 
 const SECTIONS: SectionConfig[] = [
-  { key: 'conversation',  label: 'Important Messages',   icon: 'chatbubbles-outline', countKey: 'announcements', countLabel: 'messages'   },
-  { key: 'files',         label: 'Files',          icon: 'folder-outline',      countKey: 'files',         countLabel: 'files'   },
-  { key: 'announcements', label: 'Announcements',  icon: 'megaphone-outline',   countKey: 'announcements', countLabel: 'items'   },
-  // { key: 'versions',      label: 'Versions',       icon: 'play-circle-outline', countKey: 'versions',      countLabel: 'videos'  },
+  { key: 'conversation',  label: 'Important Messages', icon: 'chatbubbles-outline', countKey: 'messages',      countLabel: 'messages' },
+  { key: 'files',         label: 'Files',              icon: 'folder-outline',      countKey: 'files',         countLabel: 'files'   },
+  { key: 'announcements', label: 'Announcements',      icon: 'megaphone-outline',   countKey: 'announcements', countLabel: 'items'   },
 ]
 
 const SECTION_TITLES: Record<Exclude<Section, null>, string> = {
@@ -341,6 +344,7 @@ export default function ManagementScreen({ route }: any) {
   const { isAdmin, canManageContent } = useRole()
   const { notifications } = useNotifications()
   const lastManagementNotificationIdRef = React.useRef<string | null>(null)
+  const [messages, setMessages] = useState<ImportantMessage[]>([])
 
   const [files, setFiles] = useState<FileDropper[]>([])
   const [announcements, setAnnouncements] = useState<ImportantAnnouncement[]>([])
@@ -353,6 +357,18 @@ export default function ManagementScreen({ route }: any) {
   const [selectedItem, setSelectedItem] = useState<any | null>(null)
 
   const normalizeManagementRow = (tableName: string, row: any) => {
+    if (tableName === 'important_messages') {
+      return {
+        id: row.id,
+        title: row.title,
+        content: row.content || '',
+        userId: row.user_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        synced: Boolean(row._synced),
+      }
+    }
+    
     if (tableName === 'file_droppers') {
       return {
         id: row.id,
@@ -407,28 +423,31 @@ export default function ManagementScreen({ route }: any) {
 
     if (tableName === 'file_droppers') applyUpsert(setFiles)
     if (tableName === 'important_announcements') applyUpsert(setAnnouncements)
+    if (tableName === 'important_messages') applyUpsert(setMessages)
     if (tableName === 'version_droppers') applyUpsert(setVersions)
 
     setSelectedItem(prev => (prev?.id === normalized.id ? (eventType === 'DELETE' ? null : normalized) : prev))
   }
 
   const refreshData = useCallback(async (options: { silent?: boolean } = {}) => {
-    if (!options.silent) setLoading(true)
-    try {
-      const [fileData, announcementData, versionData] = await Promise.all([
-        getAllFileDroppers(),
-        getAllAnnouncements(),
-        getAllVersionDroppers(),
-      ])
-      setFiles(fileData)
-      setAnnouncements(announcementData)
-      setVersions(versionData)
-    } catch (err) {
-      console.error('Error loading data:', err)
-    } finally {
-      if (!options.silent) setLoading(false)
-    }
-  }, [])
+  if (!options.silent) setLoading(true)
+  try {
+    const [fileData, announcementData, versionData, messageData] = await Promise.all([
+      getAllFileDroppers(),
+      getAllAnnouncements(),
+      getAllVersionDroppers(),
+      getAllImportantMessages(),
+    ])
+    setFiles(fileData)
+    setAnnouncements(announcementData)
+    setVersions(versionData)
+    setMessages(messageData)
+  } catch (err) {
+    console.error('Error loading data:', err)
+  } finally {
+    if (!options.silent) setLoading(false)
+  }
+}, [])
 
   const { refreshing, onRefresh } = usePullToRefresh(() => refreshData({ silent: true }))
 
@@ -466,54 +485,65 @@ export default function ManagementScreen({ route }: any) {
   }, [route?.params?.initialSection])
 
   useEffect(() => {
-    const unsubFiles = onTableChange('file_droppers', () => void refreshData({ silent: true }))
-    const unsubAnnouncements = onTableChange('important_announcements', () => void refreshData({ silent: true }))
-    const unsubVersions = onTableChange('version_droppers', () => void refreshData({ silent: true }))
+  const unsubFiles = onTableChange('file_droppers', () => void refreshData({ silent: true }))
+  const unsubAnnouncements = onTableChange('important_announcements', () => void refreshData({ silent: true }))
+  const unsubVersions = onTableChange('version_droppers', () => void refreshData({ silent: true }))
+  const unsubMessages = onTableChange('important_messages', () => void refreshData({ silent: true }))
 
-    const filesChannel = supabase
-      .channel('management-files')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'file_droppers' }, payload => {
-        applyRealtimeManagementChange('file_droppers', payload)
-      })
-      .subscribe()
+  const filesChannel = supabase
+    .channel('management-files')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'file_droppers' }, payload => {
+      applyRealtimeManagementChange('file_droppers', payload)
+    })
+    .subscribe()
 
-    const announcementsChannel = supabase
-      .channel('management-announcements')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'important_announcements' }, payload => {
-        applyRealtimeManagementChange('important_announcements', payload)
-      })
-      .subscribe()
+  const announcementsChannel = supabase
+    .channel('management-announcements')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'important_announcements' }, payload => {
+      applyRealtimeManagementChange('important_announcements', payload)
+    })
+    .subscribe()
 
-    const versionsChannel = supabase
-      .channel('management-versions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'version_droppers' }, payload => {
-        applyRealtimeManagementChange('version_droppers', payload)
-      })
-      .subscribe()
+  const versionsChannel = supabase
+    .channel('management-versions')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'version_droppers' }, payload => {
+      applyRealtimeManagementChange('version_droppers', payload)
+    })
+    .subscribe()
 
-    return () => {
-      unsubFiles()
-      unsubAnnouncements()
-      unsubVersions()
-      supabase.removeChannel(filesChannel)
-      supabase.removeChannel(announcementsChannel)
-      supabase.removeChannel(versionsChannel)
-    }
-  }, [refreshData])
+  const messagesChannel = supabase
+    .channel('management-messages')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'important_messages' }, payload => {
+      applyRealtimeManagementChange('important_messages', payload)
+    })
+    .subscribe()
+
+  return () => {
+    unsubFiles()
+    unsubAnnouncements()
+    unsubVersions()
+    unsubMessages()
+    supabase.removeChannel(filesChannel)
+    supabase.removeChannel(announcementsChannel)
+    supabase.removeChannel(versionsChannel)
+    supabase.removeChannel(messagesChannel)
+  }
+}, [refreshData])
 
 const getCount = (key?: string): number => {
-    if (!key) return 0
-    const map: Record<string, number> = {
-      files: files.length,
-      announcements: announcements.length,
-      versions: versions.length,
-    }
-    return map[key] ?? 0
+  if (!key) return 0
+  const map: Record<string, number> = {
+    files: files.length,
+    announcements: announcements.length,
+    versions: versions.length,
+    messages: messages.length,
   }
+  return map[key] ?? 0
+}
 
   const getItems = (): any[] => {
     if (activeSection === 'files') return files
-    if (activeSection === 'conversation') return announcements
+    if (activeSection === 'conversation') return messages
     if (activeSection === 'announcements') return announcements
     if (activeSection === 'versions') return versions
     return []
@@ -574,32 +604,40 @@ const getCount = (key?: string): number => {
   }
 
   const upsertLocalItem = (item: any) => {
-    if (activeSection === 'files') {
-      setFiles(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
-      return
-    }
-    if (activeSection === 'conversation' || activeSection === 'announcements') {
-      setAnnouncements(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
-      return
-    }
-    if (activeSection === 'versions') {
-      setVersions(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
-    }
+  if (activeSection === 'files') {
+    setFiles(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+    return
   }
+  if (activeSection === 'conversation') {
+    setMessages(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+    return
+  }
+  if (activeSection === 'announcements') {
+    setAnnouncements(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+    return
+  }
+  if (activeSection === 'versions') {
+    setVersions(prev => editingId ? prev.map(existing => existing.id === editingId ? { ...existing, ...item } : existing) : [item, ...prev])
+  }
+}
 
-  const removeLocalItem = (itemId: string) => {
-    if (activeSection === 'files') {
-      setFiles(prev => prev.filter(item => item.id !== itemId))
-      return
-    }
-    if (activeSection === 'conversation' || activeSection === 'announcements') {
-      setAnnouncements(prev => prev.filter(item => item.id !== itemId))
-      return
-    }
-    if (activeSection === 'versions') {
-      setVersions(prev => prev.filter(item => item.id !== itemId))
-    }
+const removeLocalItem = (itemId: string) => {
+  if (activeSection === 'files') {
+    setFiles(prev => prev.filter(item => item.id !== itemId))
+    return
   }
+  if (activeSection === 'conversation') {
+    setMessages(prev => prev.filter(item => item.id !== itemId))
+    return
+  }
+  if (activeSection === 'announcements') {
+    setAnnouncements(prev => prev.filter(item => item.id !== itemId))
+    return
+  }
+  if (activeSection === 'versions') {
+    setVersions(prev => prev.filter(item => item.id !== itemId))
+  }
+}
 
   const handleSubmit = async () => {
     if (!canManageContent) {
@@ -642,35 +680,63 @@ const getCount = (key?: string): number => {
           upsertLocalItem(created)
           void notifyManagementChangeToAllUsers(userId, 'created', 'File', formData.title)
         }
-      } else if (activeSection === 'conversation' || activeSection === 'announcements') {
-        if (!stripHtml(formData.content || '').trim()) {           Alert.alert('Error', 'Please enter announcement content');           return         }
-        if (editingId) {
-          await updateAnnouncement(editingId, {
-            title: formData.title,
-            content: formData.content,
-            updatedAt: now,
-          })
-          upsertLocalItem({
-            id: editingId,
-            title: formData.title,
-            content: formData.content,
-            userId,
-            updatedAt: now,
-          })
-          void notifyManagementChangeToAllUsers(userId, 'updated', 'Important Message', formData.title)
-        } else {
-          const created = await createImportantAnnouncement({
-            title: formData.title,
-            content: formData.content,
-            userId,
-            createdAt: now,
-            updatedAt: now,
-            synced: false,
-          })
-          upsertLocalItem(created)
-          void notifyManagementChangeToAllUsers(userId, 'created', 'Important Message', formData.title)
-        }
-      } else if (activeSection === 'versions') {
+       } else if (activeSection === 'conversation') {
+  if (!stripHtml(formData.content || '').trim()) { Alert.alert('Error', 'Please enter message content'); return }
+  if (editingId) {
+    await updateImportantMessage(editingId, {
+      title: formData.title,
+      content: formData.content,
+      updatedAt: now,
+    })
+    upsertLocalItem({
+      id: editingId,
+      title: formData.title,
+      content: formData.content,
+      userId,
+      updatedAt: now,
+    })
+    void notifyManagementChangeToAllUsers(userId, 'updated', 'Important Message', formData.title)
+  } else {
+    const created = await createImportantMessage({
+      title: formData.title,
+      content: formData.content,
+      userId,
+      createdAt: now,
+      updatedAt: now,
+      synced: false,
+    })
+    upsertLocalItem(created)
+    void notifyManagementChangeToAllUsers(userId, 'created', 'Important Message', formData.title)
+  }
+} else if (activeSection === 'announcements') {
+  if (!stripHtml(formData.content || '').trim()) { Alert.alert('Error', 'Please enter announcement content'); return }
+  if (editingId) {
+    await updateAnnouncement(editingId, {
+      title: formData.title,
+      content: formData.content,
+      updatedAt: now,
+    })
+    upsertLocalItem({
+      id: editingId,
+      title: formData.title,
+      content: formData.content,
+      userId,
+      updatedAt: now,
+    })
+    void notifyManagementChangeToAllUsers(userId, 'updated', 'Announcement', formData.title)
+  } else {
+    const created = await createImportantAnnouncement({
+      title: formData.title,
+      content: formData.content,
+      userId,
+      createdAt: now,
+      updatedAt: now,
+      synced: false,
+    })
+    upsertLocalItem(created)
+    void notifyManagementChangeToAllUsers(userId, 'created', 'Announcement', formData.title)
+  }
+} else if (activeSection === 'versions') {
         if (!formData.youtubeUrl?.trim()) {           Alert.alert('Error', 'Please enter a YouTube URL');           return         }
         if (editingId) {
           await updateVersionDropper(editingId, {
@@ -724,7 +790,10 @@ const getCount = (key?: string): number => {
           setDeletingId(item.id)
           try {
             if (activeSection === 'files') await deleteFileDropper(item.id)
-            else if (activeSection === 'conversation' || activeSection === 'announcements') await deleteAnnouncement(item.id)
+            if (activeSection === 'files') await deleteFileDropper(item.id)
+            else if (activeSection === 'conversation') await deleteImportantMessage(item.id)
+            else if (activeSection === 'announcements') await deleteAnnouncement(item.id)
+            else if (activeSection === 'versions') await deleteVersionDropper(item.id)
             else if (activeSection === 'versions') await deleteVersionDropper(item.id)
             removeLocalItem(item.id)
             void notifyManagementChangeToAllUsers(userId, 'deleted', sectionTitle, item.title)

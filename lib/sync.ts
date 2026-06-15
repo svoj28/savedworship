@@ -14,6 +14,7 @@ const TABLES = [
   'messages',
   'file_droppers',
   'important_announcements',
+  'important_messages',
   'version_droppers',
   'team_calendar_events',
   'contacts',
@@ -26,6 +27,7 @@ const PUBLIC_MANAGEMENT_TABLES = new Set([
   'file_droppers',
   'important_announcements',
   'version_droppers',
+  'important_messages',
   'team_calendar_events',
 ])
 

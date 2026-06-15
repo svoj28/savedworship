@@ -13,16 +13,11 @@ import {
 } from 'react-native'
 import { ScrollView as HorizontalScroll } from 'react-native'
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { Picker } from '@react-native-picker/picker'
 import { getAllKeys, getTransposeDistance, transposeText, hasNashville, transposeTextToNashville } from '../lib/transpose'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const SCREEN_WIDTH = Dimensions.get('window').width
 
-/**
- * Chords-only: keep only lines that have [chord] tokens,
- * extract just the chord names (no lyric text, no brackets).
- */
 const SECTION_HEADER_LINE_PATTERN = /^(intro|verse|chorus|bridge|pre[-\s]?chorus|hook|outro|coda)(?:\s*[0-9]+)?$/i
 
 function isSectionHeaderLine(line: string): boolean {
@@ -52,13 +47,9 @@ function getChordRoot(chord: string): string {
 function getEffectiveSongKey(song: any): string {
   const explicitKey = typeof song?.key === 'string' ? song.key.trim() : ''
   if (explicitKey) return explicitKey
-
   const content = typeof song?.content === 'string' ? song.content : ''
   const chordMatch = content.match(/\[([^\]]+)\]/)
-  if (chordMatch) {
-    return getChordRoot(chordMatch[1])
-  }
-
+  if (chordMatch) return getChordRoot(chordMatch[1])
   return 'C'
 }
 
@@ -102,7 +93,7 @@ function parseSongSections(content: string): SongSection[] {
     : [{ id: 'full-song', label: 'Full Song', content: content.trim() }]
 }
 
-function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both') {
+function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both', fontSize: number) {
   const lines = content.split(/\r?\n/)
   const rendered: React.ReactNode[] = []
 
@@ -117,7 +108,11 @@ function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both') {
 
     if (isSectionHeaderLine(trimmed)) {
       rendered.push(
-        <Text key={`section-${index}`} style={s.sectionLine}>
+        <Text
+          key={`section-${index}`}
+          numberOfLines={1}
+          style={[s.sectionLine, { fontSize: fontSize + 1, lineHeight: (fontSize + 1) * 1.7 }]}
+        >
           {trimmed}
         </Text>
       )
@@ -128,22 +123,25 @@ function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both') {
     if (mode === 'lyrics') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '').trim()
     } else if (mode === 'chords') {
-  if (!/\[[^\]]+\]/.test(rawLine)) continue
-  // Extract chord tokens and preserve slash between adjacent [X]/[Y] patterns
-  lineToRender = rawLine
-    .replace(/\[([^\]]+)\]\s*\/\s*\[([^\]]+)\]/g, '$1/$2') // [D]/[F#] → D/F#
-    .replace(/\[([^\]]+)\]/g, '$1')                          // remaining [X] → X
-    .replace(/[^A-G#b/\d°ø+\s]/g, '')                       // strip lyric chars
-    .replace(/\s+/g, '  ')
-    .trim()
-  if (!lineToRender) continue
-} else if (mode === 'both') {
+      if (!/\[[^\]]+\]/.test(rawLine)) continue
+      lineToRender = rawLine
+        .replace(/\[([^\]]+)\]\s*\/\s*\[([^\]]+)\]/g, '$1/$2')
+        .replace(/\[([^\]]+)\]/g, '$1')
+        .replace(/[^A-G#b/\d°ø+\s]/g, '')
+        .replace(/\s+/g, '  ')
+        .trim()
+      if (!lineToRender) continue
+    } else if (mode === 'both') {
       lineToRender = rawLine.replace(/\[([^\]]+)\]/g, '$1').trim()
     }
 
     if (lineToRender.trim()) {
       rendered.push(
-        <Text key={`line-${index}`} style={s.contentLine}>
+        <Text
+          key={`line-${index}`}
+          numberOfLines={1}
+          style={[s.contentLine, { fontSize, lineHeight: fontSize * 1.7 }]}
+        >
           {lineToRender}
         </Text>
       )
@@ -153,13 +151,17 @@ function renderSongLines(content: string, mode: 'lyrics' | 'chords' | 'both') {
   return rendered
 }
 
+// Speed presets in px/s
 const SCROLL_SPEEDS = [
-  { label: 'Slow', value: 20 },
-  { label: 'Med', value: 45 },
-  { label: 'Fast', value: 80 },
+  { label: '0.5×', value: 10 },
+  { label: '1×',   value: 20 },
+  { label: '1.5×', value: 32 },
+  { label: '2×',   value: 45 },
+  { label: '3×',   value: 70 },
+  { label: '4×',   value: 100 },
 ]
 
-// ─── Per-song content viewer (handles sections, scroll, auto-scroll) ──────────
+// ─── Per-song content viewer ──────────────────────────────────────────────────
 
 interface SongPageProps {
   song: any
@@ -172,7 +174,7 @@ interface SongPageProps {
   scrollSpeedIndex: number
   isAutoScrolling: boolean
   onAutoScrollEnd: () => void
-  onAutoScrollStopped: () => void
+  // Removed: onAutoScrollStopped — manual scroll no longer stops auto-scroll
 }
 
 function SongPage({
@@ -186,7 +188,6 @@ function SongPage({
   scrollSpeedIndex,
   isAutoScrolling,
   onAutoScrollEnd,
-  onAutoScrollStopped,
 }: SongPageProps) {
   const contentScrollRef    = useRef<ScrollView | null>(null)
   const scrollYRef          = useRef(0)
@@ -194,7 +195,10 @@ function SongPage({
   const scrollViewHeightRef = useRef(0)
   const autoScrollRef       = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Build display content
+  // Track whether the user is currently touching the scroll view
+  // When they release, auto-scroll resumes from wherever they left off
+  const isTouchingRef = useRef(false)
+
   const displayContent = useMemo(() => {
     if (!song?.content) return ''
     const originalKey = getEffectiveSongKey(song)
@@ -227,9 +231,6 @@ function SongPage({
   const scrollToSection = (sectionId: string) => {
     setActiveSectionId(sectionId)
     setFocusedSectionId(sectionId)
-    const section = parsedSections.find(item => item.id === sectionId)
-    if (!section) return
-
     scrollYRef.current = 0
     contentScrollRef.current?.scrollTo({ y: 0, animated: true })
   }
@@ -247,17 +248,23 @@ function SongPage({
     scrollYRef.current = 0
   }, [displayContent])
 
-  // Auto-scroll: start/stop based on isActive + isAutoScrolling
+  // Auto-scroll engine
   useEffect(() => {
     if (!isActive || !isAutoScrolling) {
       if (autoScrollRef.current) { clearInterval(autoScrollRef.current); autoScrollRef.current = null }
       return
     }
     if (autoScrollRef.current) clearInterval(autoScrollRef.current)
+
     const speed = SCROLL_SPEEDS[scrollSpeedIndex].value
-    const interval = 16
-    const pixelsPerTick = (speed * interval) / 1000
+    const TICK = 16
+    const pixelsPerTick = (speed * TICK) / 1000
+
     autoScrollRef.current = setInterval(() => {
+      // Pause ticking while user is touching — but keep the interval alive
+      // so when they release, scrolling resumes naturally
+      if (isTouchingRef.current) return
+
       const maxScroll = contentHeightRef.current - scrollViewHeightRef.current
       if (scrollYRef.current >= maxScroll - 1) {
         clearInterval(autoScrollRef.current!)
@@ -267,15 +274,28 @@ function SongPage({
       }
       scrollYRef.current = Math.min(scrollYRef.current + pixelsPerTick, maxScroll)
       contentScrollRef.current?.scrollTo({ y: scrollYRef.current, animated: false })
-    }, interval)
-    return () => { if (autoScrollRef.current) { clearInterval(autoScrollRef.current); autoScrollRef.current = null } }
+    }, TICK)
+
+    return () => {
+      if (autoScrollRef.current) { clearInterval(autoScrollRef.current); autoScrollRef.current = null }
+    }
   }, [isActive, isAutoScrolling, scrollSpeedIndex])
 
+  // Track scroll position (keep scrollYRef updated regardless of auto-scroll state
+  // so auto-scroll resumes from where the user scrolled to)
   const handleContentScroll = useCallback((e: any) => {
     scrollYRef.current = e.nativeEvent.contentOffset.y
-    // If user scrolls manually during auto-scroll, stop it
-    if (isAutoScrolling) onAutoScrollStopped()
-  }, [isAutoScrolling, onAutoScrollStopped])
+  }, [])
+
+  // When the user's finger lifts, update scrollYRef to their final position
+  const handleScrollEndDrag = useCallback((e: any) => {
+    isTouchingRef.current = false
+    scrollYRef.current = e.nativeEvent.contentOffset.y
+  }, [])
+
+  const handleScrollBeginDrag = useCallback(() => {
+    isTouchingRef.current = true
+  }, [])
 
   return (
     <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
@@ -286,18 +306,12 @@ function SongPage({
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
         onScroll={handleContentScroll}
+        onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
+        onMomentumScrollEnd={handleScrollEndDrag}
         onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
         onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
       >
-        {/* <View style={s.songHeaderBlock}>
-          <Text style={[s.songHeaderTitle, { fontSize: fontSize + 4 }]} numberOfLines={2}>
-            {song?.title}
-          </Text>
-          <View style={s.keyBadgeInline}>
-            <Text style={s.keyBadgeInlineText}>Key of {transposeKey}</Text>
-          </View>
-        </View> */}
-
         {parsedSections.length > 1 && (
           <View style={s.sectionNavBar}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.sectionNavContent}>
@@ -314,18 +328,18 @@ function SongPage({
                 </Text>
               </TouchableOpacity>
               {parsedSections.map((section, idx) => {
-                const isActive = section.id === activeSectionId
+                const isActivePill = section.id === activeSectionId
                 return (
                   <TouchableOpacity
                     key={section.id}
-                    style={[s.sectionPill, isActive && s.sectionPillActive]}
+                    style={[s.sectionPill, isActivePill && s.sectionPillActive]}
                     onPress={() => scrollToSection(section.id)}
                     activeOpacity={0.7}
                   >
-                    <View style={[s.sectionPillIdx, isActive && s.sectionPillIdxActive]}>
-                      <Text style={[s.sectionPillIdxText, isActive && s.sectionPillIdxTextActive]}>{idx + 1}</Text>
+                    <View style={[s.sectionPillIdx, isActivePill && s.sectionPillIdxActive]}>
+                      <Text style={[s.sectionPillIdxText, isActivePill && s.sectionPillIdxTextActive]}>{idx + 1}</Text>
                     </View>
-                    <Text style={[s.sectionPillText, isActive && s.sectionPillTextActive]} numberOfLines={1}>
+                    <Text style={[s.sectionPillText, isActivePill && s.sectionPillTextActive]} numberOfLines={1}>
                       {section.label}
                     </Text>
                   </TouchableOpacity>
@@ -342,7 +356,15 @@ function SongPage({
                 <Text style={s.sectionBadgeText}>{section.label}</Text>
               </View>
               <View style={s.sectionContentBlock}>
-                {renderSongLines(section.content, viewMode)}
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator
+                  contentContainerStyle={s.hScrollContent}
+                >
+                  <View style={s.linesColumn}>
+                    {renderSongLines(section.content, viewMode, fontSize)}
+                  </View>
+                </ScrollView>
               </View>
             </View>
           ))}
@@ -365,52 +387,44 @@ interface SongViewerProps {
 
 export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }: SongViewerProps) {
   const scrollRef = useRef<any>(null)
-  const [currentIndex, setCurrentIndex]     = useState(0)
+  const [currentIndex, setCurrentIndex]   = useState(0)
   const [transposeKeys, setTransposeKeys] = useState<string[]>([])
-  const transposeStorageKey = `transpose_keys_${songs.map(s => s.id).join('_')}`
-  const [notationMode, setNotationMode]     = useState<'chords' | 'nashville'>('chords')
-  const [viewMode, setViewMode]             = useState<'lyrics' | 'chords' | 'both'>('both')
-  const [fontSize, setFontSize]             = useState(15)
+  const [notationMode, setNotationMode]   = useState<'chords' | 'nashville'>('chords')
+  const [viewMode, setViewMode]           = useState<'lyrics' | 'chords' | 'both'>('both')
+  const [fontSize, setFontSize]           = useState(15)
   const [showTransposePicker, setShowTransposePicker] = useState(false)
-  const [isAutoScrolling, setIsAutoScrolling] = useState(false)
-  const [scrollSpeedIndex, setScrollSpeedIndex] = useState(0)
+  const [isAutoScrolling, setIsAutoScrolling]         = useState(false)
+  const [scrollSpeedIndex, setScrollSpeedIndex]       = useState(1) // default 1× speed
   const scrollFadeAnim = useRef(new Animated.Value(0)).current
 
-  // Keep refs for use inside callbacks
   const currentIndexRef = useRef(0)
   currentIndexRef.current = currentIndex
 
   useEffect(() => {
-  if (!visible || songs.length === 0) return
-
-  const init = async () => {
-    // Load persisted keys first
-    try {
-      const stored = await AsyncStorage.getItem(`transpose_keys`)
-      if (stored) {
-        const parsed: Record<string, string> = JSON.parse(stored)
-        // Map each song to its stored key, fallback to song's original key
-        setTransposeKeys(songs.map(s => parsed[s.id] ?? getEffectiveSongKey(s)))
-      } else {
+    if (!visible || songs.length === 0) return
+    const init = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(`transpose_keys`)
+        if (stored) {
+          const parsed: Record<string, string> = JSON.parse(stored)
+          setTransposeKeys(songs.map(s => parsed[s.id] ?? getEffectiveSongKey(s)))
+        } else {
+          setTransposeKeys(songs.map(getEffectiveSongKey))
+        }
+      } catch {
         setTransposeKeys(songs.map(getEffectiveSongKey))
       }
-    } catch {
-      setTransposeKeys(songs.map(getEffectiveSongKey))
+      setCurrentIndex(startIndex)
+      setNotationMode('chords')
+      setViewMode('both')
+      setIsAutoScrolling(false)
+      setTimeout(() => {
+        scrollRef.current?.scrollTo({ x: startIndex * SCREEN_WIDTH, animated: false })
+      }, 50)
     }
+    void init()
+  }, [visible, songs, startIndex])
 
-    setCurrentIndex(startIndex)
-    setNotationMode('chords')
-    setViewMode('both')
-    setIsAutoScrolling(false)
-    setTimeout(() => {
-      scrollRef.current?.scrollTo({ x: startIndex * SCREEN_WIDTH, animated: false })
-    }, 50)
-  }
-
-  void init()
-}, [visible, songs, startIndex])
-
-  // Stop auto-scroll on song/mode change
   useEffect(() => { setIsAutoScrolling(false) }, [currentIndex, viewMode, notationMode])
 
   const handleScroll = (e: any) => {
@@ -422,25 +436,22 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   }
 
   const updateTransposeKey = async (index: number, key: string) => {
-  const song = songs[index]
-  if (!song) return
-
-  setTransposeKeys(prev => {
-    const next = [...prev]
-    next[index] = key
-    return next
-  })
-
-  // Persist: merge with existing stored keys
-  try {
-    const stored = await AsyncStorage.getItem(`transpose_keys`)
-    const parsed: Record<string, string> = stored ? JSON.parse(stored) : {}
-    parsed[song.id] = key
-    await AsyncStorage.setItem(`transpose_keys`, JSON.stringify(parsed))
-  } catch (err) {
-    console.error('Failed to persist transpose key', err)
+    const song = songs[index]
+    if (!song) return
+    setTransposeKeys(prev => {
+      const next = [...prev]
+      next[index] = key
+      return next
+    })
+    try {
+      const stored = await AsyncStorage.getItem(`transpose_keys`)
+      const parsed: Record<string, string> = stored ? JSON.parse(stored) : {}
+      parsed[song.id] = key
+      await AsyncStorage.setItem(`transpose_keys`, JSON.stringify(parsed))
+    } catch (err) {
+      console.error('Failed to persist transpose key', err)
+    }
   }
-}
 
   const toggleAutoScroll = () => {
     const next = !isAutoScrolling
@@ -451,7 +462,6 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   const handleAutoScrollEnd = useCallback(() => {
     const cur = currentIndexRef.current
     if (cur < songs.length - 1) {
-      // Advance to next song, restart auto-scroll after brief pause
       const next = cur + 1
       scrollRef.current?.scrollTo({ x: next * SCREEN_WIDTH, animated: true })
       setCurrentIndex(next)
@@ -464,11 +474,6 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
       Animated.timing(scrollFadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start()
     }
   }, [songs.length])
-
-  const handleAutoScrollStopped = useCallback(() => {
-    setIsAutoScrolling(false)
-    Animated.timing(scrollFadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start()
-  }, [])
 
   const currentSong  = songs[currentIndex]
   const originalKey  = getEffectiveSongKey(currentSong)
@@ -499,7 +504,6 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
             ) : null}
           </View>
 
-          {/* Font size + auto-scroll controls */}
           <View style={s.headerRight}>
             <TouchableOpacity style={s.fontBtn} onPress={() => setFontSize(f => Math.max(11, f - 1))}>
               <Text style={s.fontBtnText}>A−</Text>
@@ -507,24 +511,13 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
             <TouchableOpacity style={s.fontBtn} onPress={() => setFontSize(f => Math.min(24, f + 1))}>
               <Text style={s.fontBtnTextLg}>A+</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[s.autoScrollBtn, isAutoScrolling && s.autoScrollBtnActive]}
-              onPress={toggleAutoScroll}
-            >
-              <Ionicons
-                name={isAutoScrolling ? 'pause' : 'play'}
-                size={12}
-                color={isAutoScrolling ? '#0a0a0a' : 'rgba(255,255,255,0.6)'}
-              />
-            </TouchableOpacity>
           </View>
         </View>
 
         <View style={s.hairline} />
 
-        {/* ── CONTROLS ROW: mode + transpose + speed ── */}
+        {/* ── CONTROLS ROW ── */}
         <View style={s.controlsRow}>
-          {/* View mode pills */}
           <View style={s.modeBar}>
             {(['lyrics', 'chords', 'both'] as const).map(mode => (
               <TouchableOpacity
@@ -574,23 +567,55 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
           </View>
         </View>
 
-        {/* Speed pills — only shown when auto-scrolling or recently toggled */}
-        <Animated.View style={[s.speedRow, { opacity: scrollFadeAnim }]} pointerEvents={isAutoScrolling ? 'auto' : 'none'}>
-          <Ionicons name="refresh" size={10} color="rgba(255,255,255,0.4)" style={{ marginRight: 8 }} />
-          <Text style={s.speedLabel}>Speed:</Text>
-          {SCROLL_SPEEDS.map((sp, i) => (
-            <TouchableOpacity
-              key={sp.label}
-              style={[s.speedPill, scrollSpeedIndex === i && s.speedPillActive]}
-              onPress={() => setScrollSpeedIndex(i)}
-              activeOpacity={0.75}
-            >
-              <Text style={[s.speedPillText, scrollSpeedIndex === i && s.speedPillTextActive]}>
-                {sp.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </Animated.View>
+        {/* ── AUTO-SCROLL BAR — always visible ── */}
+        <View style={s.autoScrollBar}>
+          {/* Play/Pause button */}
+          <TouchableOpacity
+            style={[s.autoScrollToggle, isAutoScrolling && s.autoScrollToggleActive]}
+            onPress={toggleAutoScroll}
+            activeOpacity={0.75}
+          >
+            <Ionicons
+              name={isAutoScrolling ? 'pause' : 'play'}
+              size={13}
+              color={isAutoScrolling ? '#0a0a0a' : 'rgba(255,255,255,0.7)'}
+            />
+            <Text style={[s.autoScrollToggleText, isAutoScrolling && s.autoScrollToggleTextActive]}>
+              {isAutoScrolling ? 'Pause' : 'Scroll'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={s.autoScrollDivider} />
+
+          {/* Speed chips */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.speedList}
+          >
+            {SCROLL_SPEEDS.map((sp, i) => (
+              <TouchableOpacity
+                key={sp.label}
+                style={[s.speedChip, scrollSpeedIndex === i && s.speedChipActive]}
+                onPress={() => setScrollSpeedIndex(i)}
+                activeOpacity={0.7}
+              >
+                <Text style={[s.speedChipText, scrollSpeedIndex === i && s.speedChipTextActive]}>
+                  {sp.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* Auto-scroll hint — only while scrolling */}
+        {isAutoScrolling && (
+          <View style={s.scrollHintBar}>
+            <Ionicons name="hand-left-outline" size={10} color="rgba(255,255,255,0.35)" />
+            <Text style={s.scrollHintText}>Scroll freely — auto-scroll resumes when you release</Text>
+          </View>
+        )}
 
         {/* ── SWIPEABLE PAGES ── */}
         <HorizontalScroll
@@ -615,7 +640,6 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
               scrollSpeedIndex={scrollSpeedIndex}
               isAutoScrolling={isAutoScrolling && index === currentIndex}
               onAutoScrollEnd={handleAutoScrollEnd}
-              onAutoScrollStopped={handleAutoScrollStopped}
             />
           ))}
         </HorizontalScroll>
@@ -727,12 +751,6 @@ const s = StyleSheet.create({
   fontBtn: { padding: 4 },
   fontBtnText: { color: 'rgba(255,255,255,0.5)', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
   fontBtnTextLg: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: '700', letterSpacing: 0.5 },
-  autoScrollBtn: {
-    width: 26, height: 26, borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  autoScrollBtnActive: { backgroundColor: '#ffffff' },
 
   hairline: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.12)', marginHorizontal: 20 },
 
@@ -743,7 +761,7 @@ const s = StyleSheet.create({
   },
   notationRow: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, gap: 8, 
+    paddingHorizontal: 14, gap: 8,
   },
   notationLabel: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
   notationBar: {
@@ -771,20 +789,70 @@ const s = StyleSheet.create({
   },
   transposeChipText: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.7)', letterSpacing: 0.3 },
 
-  // Speed row
-  speedRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingBottom: 8, gap: 6,
+  // ── Auto-scroll bar ──────────────────────────────────────────────────────────
+  autoScrollBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    gap: 0,
   },
-  speedLabel: { fontSize: 10, color: 'rgba(255,255,255,0.3)', fontWeight: '600', letterSpacing: 1 },
-  speedPill: {
-    paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+  autoScrollToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  autoScrollToggleActive: {
+    backgroundColor: '#ffffff',
+  },
+  autoScrollToggleText: {
+    fontSize: 11, fontWeight: '700', letterSpacing: 0.5,
+    color: 'rgba(255,255,255,0.7)',
+  },
+  autoScrollToggleTextActive: {
+    color: '#0a0a0a',
+  },
+  autoScrollDivider: {
+    width: 1, height: 20, backgroundColor: 'rgba(255,255,255,0.1)', marginHorizontal: 10,
+  },
+  speedList: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 8,
+  },
+  speedChip: {
+    paddingHorizontal: 11, paddingVertical: 6, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.07)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
-  speedPillActive: { backgroundColor: '#ffffff', borderColor: '#ffffff' },
-  speedPillText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.4)' },
-  speedPillTextActive: { color: '#0a0a0a' },
+  speedChipActive: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  speedChipText: {
+    fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.35)',
+  },
+  speedChipTextActive: {
+    color: '#ffffff',
+  },
+
+  // Hint bar shown only while scrolling
+  scrollHintBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingBottom: 6,
+  },
+  scrollHintText: {
+    fontSize: 10, color: 'rgba(255,255,255,0.3)', fontStyle: 'italic',
+  },
 
   // Song header inside content
   songHeaderBlock: { marginBottom: 18, gap: 8 },
@@ -819,7 +887,6 @@ const s = StyleSheet.create({
   sectionPillText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.5)', maxWidth: 80 },
   sectionPillTextActive: { color: '#0a0a0a' },
 
-  // Content
   contentScroll: { flex: 1 },
   contentPad: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 48 },
   songBody: { paddingTop: 4 },
@@ -845,6 +912,8 @@ const s = StyleSheet.create({
   },
   sectionBadgeText: { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.6)', letterSpacing: 0.5 },
   sectionContentBlock: { gap: 0 },
+  hScrollContent: { flexGrow: 1 },
+  linesColumn: { alignItems: 'flex-start' },
 
   // Bottom bar
   bottomBar: {

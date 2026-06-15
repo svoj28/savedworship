@@ -12,6 +12,7 @@ type TableName =
   | 'messages'
   | 'file_droppers'
   | 'important_announcements'
+  | 'important_messages'
   | 'version_droppers'
   | 'team_calendar_events'
   | 'contacts'
@@ -21,7 +22,7 @@ type TableName =
 
 const ALL_TABLES: TableName[] = [
   'user_profiles', 'artists', 'chord_lists', 'songs', 'lineups',
-  'lineup_items', 'messages', 'file_droppers', 'important_announcements',
+  'lineup_items', 'messages', 'file_droppers', 'important_announcements', 'important_messages',
   'version_droppers', 'team_calendar_events', 'contacts', 'playlists', 'playlist_items'
 ]
 

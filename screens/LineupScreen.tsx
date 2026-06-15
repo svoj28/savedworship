@@ -327,6 +327,7 @@ export default function LineupScreen() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formData, setFormData] = useState<LineupFormData>({ title: '', description: '', items: [createDraftItem()] })
   const [lineupChangedAt, setLineupChangedAt] = useState(0)
+  
 
   const groupItems = useCallback((items: LineupItem[]) => {
     const grouped: Record<string, LineupItem[]> = {}

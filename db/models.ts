@@ -13,6 +13,16 @@ export interface Artist {
   synced: boolean
 }
 
+export interface ImportantMessage {
+  id: string
+  title: string
+  content: string
+  userId: string
+  createdAt: number
+  updatedAt: number
+  synced: boolean
+}
+
 export interface ChordList {
   id: string
   title: string

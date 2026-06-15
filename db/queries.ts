@@ -13,7 +13,7 @@ export async function getUserProfileByShortId(shortId: string): Promise<UserProf
 }
 // db/queries.ts
 import { execute, query, queryOne, transaction } from './index'
-import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, CalendarEvent, CalendarAssignment, Contact, UserProfile, Playlist, PlaylistItem } from './models'
+import { Artist, ChordList, Song, Lineup, LineupItem, Message, FileDropper, ImportantAnnouncement, VersionDropper, CalendarEvent, CalendarAssignment, Contact, UserProfile, Playlist, PlaylistItem, ImportantMessage } from './models'
 import { syncRowToSupabase, deleteRowFromSupabase } from '../lib/syncToSupabase'
 import { supabase } from '../lib/supabase'
 import { isOnline } from '../lib/networkStatus'
@@ -34,6 +34,16 @@ export async function createArtist(data: Omit<Artist, 'id'>): Promise<Artist> {
   )
   await syncRowToSupabase('artists', artist)
   return artist
+}
+
+export async function deleteVersionDropper(id: string): Promise<void> {
+  const { error } = await supabase.from('version_droppers').delete().eq('id', id)
+  if (error) {
+    console.warn('[deleteVersionDropper] remote delete failed:', error)
+    await execute(`UPDATE version_droppers SET deleted_at = ?, _synced = 0 WHERE id = ?`, [Date.now(), id])
+    return
+  }
+  await execute('DELETE FROM version_droppers WHERE id = ?', [id])
 }
 
 export async function getArtistById(id: string): Promise<Artist | null> {
@@ -495,8 +505,13 @@ export async function updateFileDropper(id: string, data: Partial<FileDropper>):
 }
 
 export async function deleteFileDropper(id: string): Promise<void> {
+  const { error } = await supabase.from('file_droppers').delete().eq('id', id)
+  if (error) {
+    console.warn('[deleteFileDropper] remote delete failed:', error)
+    await execute(`UPDATE file_droppers SET deleted_at = ?, _synced = 0 WHERE id = ?`, [Date.now(), id])
+    return
+  }
   await execute('DELETE FROM file_droppers WHERE id = ?', [id])
-  void deleteRowFromSupabase('file_droppers', id).catch(err => console.warn('Background delete sync failed for file_droppers:', err))
 }
 
 // ─── IMPORTANT ANNOUNCEMENTS ──────────────────────────────────────────────────
@@ -540,8 +555,13 @@ export async function updateAnnouncement(id: string, data: Partial<ImportantAnno
 }
 
 export async function deleteAnnouncement(id: string): Promise<void> {
+  const { error } = await supabase.from('important_announcements').delete().eq('id', id)
+  if (error) {
+    console.warn('[deleteAnnouncement] remote delete failed:', error)
+    await execute(`UPDATE important_announcements SET deleted_at = ?, _synced = 0 WHERE id = ?`, [Date.now(), id])
+    return
+  }
   await execute('DELETE FROM important_announcements WHERE id = ?', [id])
-  void deleteRowFromSupabase('important_announcements', id).catch(err => console.warn('Background delete sync failed for important_announcements:', err))
 }
 
 // ─── VERSION DROPPERS ─────────────────────────────────────────────────────────
@@ -582,11 +602,6 @@ export async function updateVersionDropper(id: string, data: Partial<VersionDrop
   await execute(`UPDATE version_droppers SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
   const updated = await getVersionDropperById(id)
   if (updated) void syncRowToSupabase('version_droppers', updated).catch(err => console.warn('Background sync failed for version_droppers:', err))
-}
-
-export async function deleteVersionDropper(id: string): Promise<void> {
-  await execute('DELETE FROM version_droppers WHERE id = ?', [id])
-  void deleteRowFromSupabase('version_droppers', id).catch(err => console.warn('Background delete sync failed for version_droppers:', err))
 }
 
 // ─── TEAM CALENDAR EVENTS ────────────────────────────────────────────────────
@@ -969,6 +984,18 @@ function mapImportantAnnouncement(row: any): ImportantAnnouncement {
   }
 }
 
+function mapImportantMessage(row: any): ImportantMessage {
+  return {
+    id: row.id,
+    title: row.title,
+    userId: row.user_id,
+    content: row.content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    synced: Boolean(row._synced),
+  }
+}
+
 function mapVersionDropper(row: any): VersionDropper {
   return {
     id: row.id,
@@ -1040,6 +1067,56 @@ function mapPlaylistItem(row: any): PlaylistItem {
 export async function getContactsByRecipientId(recipientId: string): Promise<Contact[]> {
   const results = await query('SELECT * FROM contacts WHERE contact_user_id = ? ORDER BY created_at DESC', [recipientId])
   return results.map(mapContact)
+}
+
+// ─── IMPORTANT MESSAGES ────────────────────────────────────────────────────
+export async function createImportantMessage(data: Omit<ImportantMessage, 'id'>): Promise<ImportantMessage> {
+  const id = uuid.v4() as string
+  const message = { id, ...data }
+  await execute(
+    'INSERT INTO important_messages (id, title, user_id, content, created_at, updated_at, _synced) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [message.id, message.title, message.userId, message.content, message.createdAt, message.updatedAt, 0]
+  )
+  void syncRowToSupabase('important_messages', message).catch(err => console.warn('Background sync failed for important_messages:', err))
+  return message
+}
+
+export async function getImportantMessageById(id: string): Promise<ImportantMessage | null> {
+  const result = await queryOne('SELECT * FROM important_messages WHERE id = ?', [id])
+  return result ? mapImportantMessage(result) : null
+}
+
+export async function getImportantMessagesByUserId(userId: string): Promise<ImportantMessage[]> {
+  const results = await query('SELECT * FROM important_messages WHERE user_id = ? ORDER BY created_at DESC', [userId])
+  return results.map(mapImportantMessage)
+}
+
+export async function getAllImportantMessages(): Promise<ImportantMessage[]> {
+  const { data } = await supabase.from('important_messages').select('*').order('created_at', { ascending: false })
+  if (data && data.length > 0) return data.map(mapImportantMessage)
+
+  const results = await query('SELECT * FROM important_messages ORDER BY created_at DESC')
+  return results.map(mapImportantMessage)
+}
+
+export async function updateImportantMessage(id: string, data: Partial<ImportantMessage>): Promise<void> {
+  const filtered = Object.entries(data).filter(([key]) => !['id', 'userId', 'createdAt'].includes(key))
+  const updates = filtered.map(([key]) => `${camelToSnake(key)} = ?`).join(', ')
+  const values = filtered.map(([, val]) => val)
+  if (!updates) return
+  await execute(`UPDATE important_messages SET ${updates}, updated_at = ?, _synced = 0 WHERE id = ?`, [...values, Date.now(), id])
+  const updated = await getImportantMessageById(id)
+  if (updated) void syncRowToSupabase('important_messages', updated).catch(err => console.warn('Background sync failed for important_messages:', err))
+}
+
+export async function deleteImportantMessage(id: string): Promise<void> {
+  const { error } = await supabase.from('important_messages').delete().eq('id', id)
+  if (error) {
+    console.warn('[deleteImportantMessage] remote delete failed:', error)
+    await execute(`UPDATE important_messages SET deleted_at = ?, _synced = 0 WHERE id = ?`, [Date.now(), id])
+    return
+  }
+  await execute('DELETE FROM important_messages WHERE id = ?', [id])
 }
 
 // ─── RE-EXPORTS ───────────────────────────────────────────────────────────────

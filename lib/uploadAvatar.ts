@@ -36,7 +36,7 @@ export async function uploadAvatar(userId: string, localUri: string): Promise<st
       .from('avatars')
       .getPublicUrl(fileName)
 
-    return urlData.publicUrl
+    return `${urlData.publicUrl}?t=${Date.now()}`
   } catch (err) {
     console.error('uploadAvatar error:', err)
     return null

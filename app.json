@@ -30,10 +30,12 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.CAMERA"
       ],
       "package": "com.svojworship.savedworship"
     },
@@ -66,6 +68,19 @@
           "color": "#007AFF"
         }
       ]
-    ]
+    ],
+    "updates": {
+      "url": "https://u.expo.dev/2154a015-e07b-48d6-9ba4-138c971da0bd",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2154a015-e07b-48d6-9ba4-138c971da0bd"
+      }
+    }
   }
 }

@@ -41,8 +41,6 @@ yarn-error.*
 /ios
 /android
 
-# Supabase
-lib/supabase.ts
 
 # Android local config
 android/local.properties

@@ -32,11 +32,12 @@ const SONG_SECTIONS = [
   'Intro',
   'Verse 1', 'Verse 2', 'Verse 3',
   'Pre-Chorus',
-  'Chorus', 'Chorus 2',
+  'Chorus', 'Chorus 2', 'Chorus 3',
   'Bridge',
-  'Hook',
+  'Instrumental',
   'Outro',
-  'Coda',
+  'Interlude',
+  'Tag',
 ]
 
 export default function AddSongScreen({ route, navigation }: Props) {

@@ -320,12 +320,12 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
             {/* Divider */}
             <View style={styles.divider}>
               <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>or</Text>
+              <Text style={styles.dividerText}></Text>
               <View style={styles.dividerLine} />
             </View>
 
             {/* Google */}
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={[styles.ghostBtn, loading && styles.disabledBtn]}
               onPress={handleGoogleSignIn}
               disabled={loading}
@@ -333,7 +333,7 @@ export default function SignInScreen({ onSignInSuccess, onNavigateToSignUp }: Pr
             >
               <Ionicons name="logo-google" size={16} color="#111" style={{ marginRight: 8 }} />
               <Text style={styles.ghostBtnText}>Continue with Google</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
 
             <TouchableOpacity onPress={onNavigateToSignUp} style={styles.bottomLink}>
               <Text style={styles.bottomLinkText}>

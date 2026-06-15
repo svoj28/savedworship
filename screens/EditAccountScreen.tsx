@@ -190,8 +190,9 @@ export default function EditAccountScreen() {
         setSaving(true)
         const publicUrl = await uploadAvatar(user.id, localUri)
         if (publicUrl) {
-          await updateUserProfile(user.id, { avatarUrl: publicUrl })
-          setFormData({ ...formData, avatarUrl: publicUrl })
+          const bustedUrl = `${publicUrl}?t=${Date.now()}`
+          await updateUserProfile(user.id, { avatarUrl: bustedUrl })
+          setFormData({ ...formData, avatarUrl: bustedUrl })
         } else {
           Alert.alert('Error', 'Failed to upload avatar')
         }

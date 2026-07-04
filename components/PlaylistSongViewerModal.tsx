@@ -161,6 +161,9 @@ const SCROLL_SPEEDS = [
   { label: '4×',   value: 100 },
 ]
 
+// How many pixels from the bottom counts as "reached end"
+const BOTTOM_THRESHOLD = 24
+
 // ─── Per-song content viewer ──────────────────────────────────────────────────
 
 interface SongPageProps {
@@ -174,7 +177,8 @@ interface SongPageProps {
   scrollSpeedIndex: number
   isAutoScrolling: boolean
   onAutoScrollEnd: () => void
-  // Removed: onAutoScrollStopped — manual scroll no longer stops auto-scroll
+  /** Called once when the user (or auto-scroll) reaches the bottom of this page */
+  onReachedBottom: () => void
 }
 
 function SongPage({
@@ -188,16 +192,15 @@ function SongPage({
   scrollSpeedIndex,
   isAutoScrolling,
   onAutoScrollEnd,
+  onReachedBottom,
 }: SongPageProps) {
   const contentScrollRef    = useRef<ScrollView | null>(null)
   const scrollYRef          = useRef(0)
   const contentHeightRef    = useRef(0)
   const scrollViewHeightRef = useRef(0)
   const autoScrollRef       = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // Track whether the user is currently touching the scroll view
-  // When they release, auto-scroll resumes from wherever they left off
-  const isTouchingRef = useRef(false)
+  const isTouchingRef       = useRef(false)
+  const reachedBottomRef    = useRef(false)
 
   const displayContent = useMemo(() => {
     if (!song?.content) return ''
@@ -232,6 +235,7 @@ function SongPage({
     setActiveSectionId(sectionId)
     setFocusedSectionId(sectionId)
     scrollYRef.current = 0
+    reachedBottomRef.current = false
     contentScrollRef.current?.scrollTo({ y: 0, animated: true })
   }
 
@@ -239,14 +243,43 @@ function SongPage({
     setFocusedSectionId(null)
     setActiveSectionId(parsedSections[0]?.id ?? null)
     scrollYRef.current = 0
+    reachedBottomRef.current = false
     contentScrollRef.current?.scrollTo({ y: 0, animated: true })
   }
 
-  // Reset scroll when content changes
+  // Reset scroll & bottom-reached state whenever content changes
   useEffect(() => {
     contentScrollRef.current?.scrollTo({ y: 0, animated: false })
     scrollYRef.current = 0
+    reachedBottomRef.current = false
   }, [displayContent])
+
+  /** Check whether we've hit the bottom and fire the callback once */
+  const checkBottom = useCallback((offsetY: number) => {
+    if (reachedBottomRef.current) return
+    const maxScroll = contentHeightRef.current - scrollViewHeightRef.current
+    if (maxScroll <= 0) {
+      // Content fits on screen — treat as already at bottom
+      reachedBottomRef.current = true
+      onReachedBottom()
+      return
+    }
+    if (offsetY >= maxScroll - BOTTOM_THRESHOLD) {
+      reachedBottomRef.current = true
+      onReachedBottom()
+    }
+  }, [onReachedBottom])
+
+  // Also check immediately after layout sizes are known (short songs fit on screen)
+  const handleContentSizeChange = useCallback((_: number, h: number) => {
+    contentHeightRef.current = h
+    if (scrollViewHeightRef.current > 0) checkBottom(scrollYRef.current)
+  }, [checkBottom])
+
+  const handleLayout = useCallback((e: any) => {
+    scrollViewHeightRef.current = e.nativeEvent.layout.height
+    if (contentHeightRef.current > 0) checkBottom(scrollYRef.current)
+  }, [checkBottom])
 
   // Auto-scroll engine
   useEffect(() => {
@@ -261,8 +294,6 @@ function SongPage({
     const pixelsPerTick = (speed * TICK) / 1000
 
     autoScrollRef.current = setInterval(() => {
-      // Pause ticking while user is touching — but keep the interval alive
-      // so when they release, scrolling resumes naturally
       if (isTouchingRef.current) return
 
       const maxScroll = contentHeightRef.current - scrollViewHeightRef.current
@@ -274,6 +305,7 @@ function SongPage({
       }
       scrollYRef.current = Math.min(scrollYRef.current + pixelsPerTick, maxScroll)
       contentScrollRef.current?.scrollTo({ y: scrollYRef.current, animated: false })
+      checkBottom(scrollYRef.current)
     }, TICK)
 
     return () => {
@@ -281,17 +313,18 @@ function SongPage({
     }
   }, [isActive, isAutoScrolling, scrollSpeedIndex])
 
-  // Track scroll position (keep scrollYRef updated regardless of auto-scroll state
-  // so auto-scroll resumes from where the user scrolled to)
   const handleContentScroll = useCallback((e: any) => {
-    scrollYRef.current = e.nativeEvent.contentOffset.y
-  }, [])
+    const y = e.nativeEvent.contentOffset.y
+    scrollYRef.current = y
+    checkBottom(y)
+  }, [checkBottom])
 
-  // When the user's finger lifts, update scrollYRef to their final position
   const handleScrollEndDrag = useCallback((e: any) => {
     isTouchingRef.current = false
-    scrollYRef.current = e.nativeEvent.contentOffset.y
-  }, [])
+    const y = e.nativeEvent.contentOffset.y
+    scrollYRef.current = y
+    checkBottom(y)
+  }, [checkBottom])
 
   const handleScrollBeginDrag = useCallback(() => {
     isTouchingRef.current = true
@@ -309,8 +342,8 @@ function SongPage({
         onScrollBeginDrag={handleScrollBeginDrag}
         onScrollEndDrag={handleScrollEndDrag}
         onMomentumScrollEnd={handleScrollEndDrag}
-        onContentSizeChange={(_, h) => { contentHeightRef.current = h }}
-        onLayout={e => { scrollViewHeightRef.current = e.nativeEvent.layout.height }}
+        onContentSizeChange={handleContentSizeChange}
+        onLayout={handleLayout}
       >
         {parsedSections.length > 1 && (
           <View style={s.sectionNavBar}>
@@ -358,7 +391,7 @@ function SongPage({
               <View style={s.sectionContentBlock}>
                 <ScrollView
                   horizontal
-                  showsHorizontalScrollIndicator
+                  showsHorizontalScrollIndicator={false}
                   contentContainerStyle={s.hScrollContent}
                 >
                   <View style={s.linesColumn}>
@@ -394,11 +427,21 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
   const [fontSize, setFontSize]           = useState(15)
   const [showTransposePicker, setShowTransposePicker] = useState(false)
   const [isAutoScrolling, setIsAutoScrolling]         = useState(false)
-  const [scrollSpeedIndex, setScrollSpeedIndex]       = useState(1) // default 1× speed
+  const [scrollSpeedIndex, setScrollSpeedIndex]       = useState(1)
   const scrollFadeAnim = useRef(new Animated.Value(0)).current
+
+  // Track which song pages have been scrolled to the bottom
+  const [unlockedPages, setUnlockedPages] = useState<Set<number>>(new Set())
 
   const currentIndexRef = useRef(0)
   currentIndexRef.current = currentIndex
+
+  // Whether the horizontal pager should be swipeable right now
+  // — only locked when there's a next song AND current page isn't unlocked yet
+  const canSwipe = useMemo(() => {
+    const isLastSong = currentIndex === songs.length - 1
+    return isLastSong || unlockedPages.has(currentIndex)
+  }, [currentIndex, unlockedPages, songs.length])
 
   useEffect(() => {
     if (!visible || songs.length === 0) return
@@ -415,6 +458,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
         setTransposeKeys(songs.map(getEffectiveSongKey))
       }
       setCurrentIndex(startIndex)
+      setUnlockedPages(new Set())
       setNotationMode('chords')
       setViewMode('both')
       setIsAutoScrolling(false)
@@ -425,7 +469,17 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
     void init()
   }, [visible, songs, startIndex])
 
-  useEffect(() => { setIsAutoScrolling(false) }, [currentIndex, viewMode, notationMode])
+  // Reset unlock state for the current page when content-affecting settings change
+  useEffect(() => {
+    setUnlockedPages(prev => {
+      const next = new Set(prev)
+      next.delete(currentIndex)
+      return next
+    })
+    setIsAutoScrolling(false)
+  }, [viewMode, notationMode])
+
+  useEffect(() => { setIsAutoScrolling(false) }, [currentIndex])
 
   const handleScroll = (e: any) => {
     const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH)
@@ -441,6 +495,12 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
     setTransposeKeys(prev => {
       const next = [...prev]
       next[index] = key
+      return next
+    })
+    // Changing key resets bottom-lock for this page
+    setUnlockedPages(prev => {
+      const next = new Set(prev)
+      next.delete(index)
       return next
     })
     try {
@@ -475,10 +535,23 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
     }
   }, [songs.length])
 
+  /** Called by SongPage when a page's content has been fully scrolled */
+  const handlePageReachedBottom = useCallback((pageIndex: number) => {
+    setUnlockedPages(prev => {
+      if (prev.has(pageIndex)) return prev
+      const next = new Set(prev)
+      next.add(pageIndex)
+      return next
+    })
+  }, [])
+
   const currentSong  = songs[currentIndex]
   const originalKey  = getEffectiveSongKey(currentSong)
   const targetKey    = transposeKeys[currentIndex] || originalKey
   const isTransposed = originalKey !== targetKey
+
+  // Whether there's a next song and it's still locked
+  const isSwipeLocked = !canSwipe
 
   if (!visible) return null
 
@@ -567,9 +640,8 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
           </View>
         </View>
 
-        {/* ── AUTO-SCROLL BAR — always visible ── */}
+        {/* ── AUTO-SCROLL BAR ── */}
         <View style={s.autoScrollBar}>
-          {/* Play/Pause button */}
           <TouchableOpacity
             style={[s.autoScrollToggle, isAutoScrolling && s.autoScrollToggleActive]}
             onPress={toggleAutoScroll}
@@ -585,10 +657,8 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
             </Text>
           </TouchableOpacity>
 
-          {/* Divider */}
           <View style={s.autoScrollDivider} />
 
-          {/* Speed chips */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -609,11 +679,18 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
           </ScrollView>
         </View>
 
-        {/* Auto-scroll hint — only while scrolling */}
         {isAutoScrolling && (
           <View style={s.scrollHintBar}>
             <Ionicons name="hand-left-outline" size={10} color="rgba(255,255,255,0.35)" />
             <Text style={s.scrollHintText}>Scroll freely — auto-scroll resumes when you release</Text>
+          </View>
+        )}
+
+        {/* Swipe-locked nudge — shown when the page isn't scrolled to the bottom yet */}
+        {isSwipeLocked && (
+          <View style={s.swipeLockBar}>
+            <Ionicons name="arrow-down" size={10} color="rgba(255,255,255,0.35)" />
+            <Text style={s.swipeLockText}>Scroll to the end to unlock the next song</Text>
           </View>
         )}
 
@@ -622,6 +699,8 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
           ref={scrollRef}
           horizontal
           pagingEnabled
+          // Disable swiping until current page is fully read
+          scrollEnabled={canSwipe}
           showsHorizontalScrollIndicator={false}
           onMomentumScrollEnd={handleScroll}
           style={{ flex: 1 }}
@@ -640,6 +719,7 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
               scrollSpeedIndex={scrollSpeedIndex}
               isAutoScrolling={isAutoScrolling && index === currentIndex}
               onAutoScrollEnd={handleAutoScrollEnd}
+              onReachedBottom={() => handlePageReachedBottom(index)}
             />
           ))}
         </HorizontalScroll>
@@ -672,19 +752,30 @@ export function PlaylistSongViewerModal({ visible, songs, startIndex, onClose }:
 
               <Text style={s.swipeHint}>swipe to navigate</Text>
 
+              {/* NEXT button also respects the lock */}
               <TouchableOpacity
-                style={[s.navBtn, currentIndex === songs.length - 1 && s.navBtnDisabled]}
+                style={[
+                  s.navBtn,
+                  (currentIndex === songs.length - 1 || isSwipeLocked) && s.navBtnDisabled,
+                ]}
                 onPress={() => {
-                  if (currentIndex < songs.length - 1) {
+                  if (currentIndex < songs.length - 1 && !isSwipeLocked) {
                     const next = currentIndex + 1
                     scrollRef.current?.scrollTo({ x: next * SCREEN_WIDTH, animated: true })
                     setCurrentIndex(next)
                   }
                 }}
-                disabled={currentIndex === songs.length - 1}
+                disabled={currentIndex === songs.length - 1 || isSwipeLocked}
               >
-                <Text style={[s.navBtnText, currentIndex === songs.length - 1 && s.navBtnTextDisabled]}>NEXT</Text>
-                <Ionicons name="chevron-forward" size={18} color={currentIndex === songs.length - 1 ? 'rgba(255,255,255,0.2)' : '#fff'} />
+                <Text style={[
+                  s.navBtnText,
+                  (currentIndex === songs.length - 1 || isSwipeLocked) && s.navBtnTextDisabled,
+                ]}>NEXT</Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={(currentIndex === songs.length - 1 || isSwipeLocked) ? 'rgba(255,255,255,0.2)' : '#fff'}
+                />
               </TouchableOpacity>
             </View>
           )}
@@ -762,6 +853,7 @@ const s = StyleSheet.create({
   notationRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, gap: 8,
+    paddingBottom: 8,
   },
   notationLabel: { fontSize: 10, color: 'rgba(255,255,255,0.35)', fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
   notationBar: {
@@ -789,7 +881,7 @@ const s = StyleSheet.create({
   },
   transposeChipText: { fontSize: 12, fontWeight: '700', color: 'rgba(255,255,255,0.7)', letterSpacing: 0.3 },
 
-  // ── Auto-scroll bar ──────────────────────────────────────────────────────────
+  // Auto-scroll bar
   autoScrollBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -810,48 +902,35 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.15)',
   },
-  autoScrollToggleActive: {
-    backgroundColor: '#ffffff',
-  },
-  autoScrollToggleText: {
-    fontSize: 11, fontWeight: '700', letterSpacing: 0.5,
-    color: 'rgba(255,255,255,0.7)',
-  },
-  autoScrollToggleTextActive: {
-    color: '#0a0a0a',
-  },
-  autoScrollDivider: {
-    width: 1, height: 20, backgroundColor: 'rgba(255,255,255,0.1)', marginHorizontal: 10,
-  },
-  speedList: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 8,
-  },
+  autoScrollToggleActive: { backgroundColor: '#ffffff' },
+  autoScrollToggleText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, color: 'rgba(255,255,255,0.7)' },
+  autoScrollToggleTextActive: { color: '#0a0a0a' },
+  autoScrollDivider: { width: 1, height: 20, backgroundColor: 'rgba(255,255,255,0.1)', marginHorizontal: 10 },
+  speedList: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 8 },
   speedChip: {
     paddingHorizontal: 11, paddingVertical: 6, borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.07)',
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
-  speedChipActive: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderColor: 'rgba(255,255,255,0.4)',
-  },
-  speedChipText: {
-    fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.35)',
-  },
-  speedChipTextActive: {
-    color: '#ffffff',
-  },
+  speedChipActive: { backgroundColor: 'rgba(255,255,255,0.2)', borderColor: 'rgba(255,255,255,0.4)' },
+  speedChipText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.35)' },
+  speedChipTextActive: { color: '#ffffff' },
 
-  // Hint bar shown only while scrolling
-  scrollHintBar: {
+  scrollHintBar: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingBottom: 6 },
+  scrollHintText: { fontSize: 10, color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' },
+
+  // Swipe lock nudge bar
+  swipeLockBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 14,
     paddingBottom: 6,
   },
-  scrollHintText: {
-    fontSize: 10, color: 'rgba(255,255,255,0.3)', fontStyle: 'italic',
+  swipeLockText: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.3)',
+    fontStyle: 'italic',
   },
 
   // Song header inside content
